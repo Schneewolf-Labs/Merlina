@@ -115,6 +115,17 @@ document.addEventListener('DOMContentLoaded', () => {
         wandbConfig.style.display = 'block';
     }
 
+    // HuggingFace Hub configuration toggle
+    const hfHubConfig = document.getElementById('hf-hub-config');
+    pushHub.addEventListener('change', (e) => {
+        hfHubConfig.style.display = e.target.checked ? 'block' : 'none';
+    });
+
+    // Initialize HF Hub config visibility based on checkbox state
+    if (pushHub.checked) {
+        hfHubConfig.style.display = 'block';
+    }
+
     // Clear all jobs button handler
     const clearAllJobsBtn = document.getElementById('clear-all-jobs-btn');
     if (clearAllJobsBtn) {
@@ -598,10 +609,11 @@ async function handleSubmit(e) {
         use_4bit: document.getElementById('use-4bit').checked,
         use_wandb: document.getElementById('use-wandb').checked,
         push_to_hub: document.getElementById('push-hub').checked,
+        hf_hub_private: document.getElementById('hf-hub-private').checked,
 
         // API Keys
         wandb_key: document.getElementById('wandb-key').value || null,
-        hf_token: document.getElementById('hf-token-preload').value || null,
+        hf_token: document.getElementById('hf-token').value || document.getElementById('hf-token-preload').value || null,
 
         // W&B settings
         wandb_project: document.getElementById('wandb-project').value || null,

@@ -30,6 +30,7 @@ from dataset_handlers import (
 )
 from src.job_manager import JobManager
 from src.websocket_manager import websocket_manager
+from src.preflight_checks import is_local_model_path
 
 logger = logging.getLogger(__name__)
 
@@ -322,11 +323,17 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
         # Load model and tokenizer
         job_manager.update_job(job_id, status="loading_model", progress=0.1)
 
+        # Determine if loading from local path or HuggingFace
+        is_local = is_local_model_path(config.base_model)
+        model_source = "local directory" if is_local else "HuggingFace Hub"
+        logger.info(f"Loading model from {model_source}: {config.base_model}")
+
         send_websocket_update(
             websocket_manager.send_status_update(
                 job_id=job_id,
                 status="loading_model",
-                progress=0.1
+                progress=0.1,
+                message=f"Loading model from {model_source}"
             ),
             event_loop
         )
@@ -525,8 +532,17 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
             model_merged = model_merged.merge_and_unload()
 
             # Push to hub
-            model_merged.push_to_hub(config.output_name, token=config.hf_token)
-            tokenizer.push_to_hub(config.output_name, token=config.hf_token)
+            logger.info(f"Pushing to HuggingFace Hub (private={config.hf_hub_private})")
+            model_merged.push_to_hub(
+                config.output_name,
+                token=config.hf_token,
+                private=config.hf_hub_private
+            )
+            tokenizer.push_to_hub(
+                config.output_name,
+                token=config.hf_token,
+                private=config.hf_hub_private
+            )
 
         # Cleanup
         del trainer, model

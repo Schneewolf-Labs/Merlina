@@ -11,6 +11,8 @@ Merlina is a magical LLM training system with ORPO (Odds Ratio Preference Optimi
 - Real-time WebSocket updates during training
 - Pre-flight validation to catch errors before training
 - Detailed metrics tracking and history
+- Support for both HuggingFace model IDs and local model directories
+- Private/public repository control for HuggingFace Hub uploads
 
 ## Development Commands
 
@@ -101,6 +103,34 @@ Formatters transform these into chat-formatted strings with proper special token
 
 **Reasoning Field**: When using the Qwen3 format, if a `reasoning` column is present, it will be wrapped in `<think>` tags and prepended to both the chosen and rejected responses. This allows training models with explicit reasoning steps.
 
+### Model Loading
+
+Merlina supports loading models from two sources:
+
+**1. HuggingFace Hub** (default)
+- Use standard HuggingFace model IDs: `"meta-llama/Meta-Llama-3-8B-Instruct"`
+- Format: `organization/model-name`
+- Automatically downloads models from huggingface.co
+- Gated models (like Llama) require `hf_token` in configuration
+
+**2. Local Directory Paths**
+- Use absolute paths: `"/home/user/models/my-llama-model"`
+- Use relative paths: `"./models/my-model"` or `"../models/my-model"`
+- Model directory must contain required files (config.json, model weights)
+- Useful for pre-downloaded models or custom fine-tuned models
+
+**Path Detection Logic** (see `src/preflight_checks.py:is_local_model_path()`)
+- Paths starting with `/`, `./`, or `../` are treated as local
+- Paths with multiple slashes (e.g., `models/sub/folder`) are treated as local
+- Paths with backslashes (Windows) are treated as local
+- Existing directories with model files (config.json, *.safetensors) are treated as local
+- Format `org/model` with single slash is treated as HuggingFace ID
+
+**Pre-flight Validation**:
+- Local paths: Validates directory exists and contains config.json
+- HuggingFace models: Checks for gated models and required tokens
+- Both: Automatically detected via `is_local_model_path()` function
+
 ### Training Flow
 
 1. User submits training config via POST /train
@@ -161,6 +191,21 @@ When `use_4bit=True`:
 ### Flash Attention
 
 Automatically enabled for GPUs with compute capability >= 8 (Ampere and newer). Falls back to "eager" attention for older GPUs.
+
+### HuggingFace Hub Privacy Control
+
+When pushing models to HuggingFace Hub (`push_to_hub=True`):
+- `hf_hub_private=True` (default): Creates **private repository** (only you can access)
+- `hf_hub_private=False`: Creates **public repository** (anyone can access)
+- Both model and tokenizer are pushed with the same privacy setting
+- Requires valid `hf_token` for authentication
+- Repository visibility can be changed later on HuggingFace.co
+
+**Best Practices:**
+- Use private repositories for proprietary or experimental models
+- Use public repositories for open-source contributions
+- Never commit HF tokens to version control
+- Use tokens with appropriate write permissions
 
 ## Testing Strategy
 

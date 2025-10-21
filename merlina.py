@@ -185,7 +185,10 @@ class DatasetConfig(BaseModel):
 # Pydantic models
 class TrainingConfig(BaseModel):
     # Model settings
-    base_model: str = Field("meta-llama/Meta-Llama-3-8B-Instruct", description="Base model to fine-tune")
+    base_model: str = Field(
+        "meta-llama/Meta-Llama-3-8B-Instruct",
+        description="Base model to fine-tune (HuggingFace model ID or local directory path)"
+    )
     output_name: str = Field(..., description="Name for the output model")
     
     # LoRA settings
@@ -223,6 +226,7 @@ class TrainingConfig(BaseModel):
     use_4bit: bool = Field(True, description="Use 4-bit quantization")
     use_wandb: bool = Field(True, description="Log to Weights & Biases")
     push_to_hub: bool = Field(False, description="Push to HuggingFace Hub")
+    hf_hub_private: bool = Field(True, description="Make HuggingFace Hub repository private")
     hf_token: Optional[str] = Field(None, description="HuggingFace token for pushing")
     wandb_key: Optional[str] = Field(None, description="Weights & Biases API key")
 
@@ -472,8 +476,17 @@ def _old_run_training_deprecated(job_id: str, config: TrainingConfig):
             model_merged = model_merged.merge_and_unload()
             
             # Push to hub
-            model_merged.push_to_hub(config.output_name, token=config.hf_token)
-            tokenizer.push_to_hub(config.output_name, token=config.hf_token)
+            logger.info(f"Pushing to HuggingFace Hub (private={config.hf_hub_private})")
+            model_merged.push_to_hub(
+                config.output_name,
+                token=config.hf_token,
+                private=config.hf_hub_private
+            )
+            tokenizer.push_to_hub(
+                config.output_name,
+                token=config.hf_token,
+                private=config.hf_hub_private
+            )
             
         # Cleanup
         del trainer, model
@@ -504,9 +517,13 @@ if FRONTEND_DIR.exists():
     async def serve_css():
         return FileResponse(FRONTEND_DIR / "styles.css", media_type="text/css")
     
-    @app.get("/script.js") 
+    @app.get("/script.js")
     async def serve_js():
         return FileResponse(FRONTEND_DIR / "script.js", media_type="application/javascript")
+
+    @app.get("/merlina.png")
+    async def serve_logo():
+        return FileResponse(FRONTEND_DIR / "merlina.png", media_type="image/png")
 else:
     @app.get("/")
     async def root():

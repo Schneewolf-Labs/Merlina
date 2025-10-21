@@ -60,7 +60,8 @@ class DatasetPipeline:
         column_mapping: Optional[dict] = None,
         test_size: float = 0.01,
         max_samples: Optional[int] = None,
-        seed: int = 42
+        seed: int = 42,
+        shuffle: bool = True
     ):
         """
         Initialize dataset pipeline.
@@ -73,6 +74,7 @@ class DatasetPipeline:
             test_size: Fraction of data to use for evaluation
             max_samples: Optional limit on number of samples (for testing)
             seed: Random seed for train/test split
+            shuffle: Whether to shuffle the dataset before splitting
         """
         self.loader = loader
         self.formatter = formatter
@@ -80,6 +82,7 @@ class DatasetPipeline:
         self.test_size = test_size
         self.max_samples = max_samples
         self.seed = seed
+        self.shuffle = shuffle
 
     def prepare(self) -> tuple[Dataset, Dataset]:
         """
@@ -116,8 +119,8 @@ class DatasetPipeline:
         )
 
         # Split dataset
-        logger.info(f"Splitting dataset (test_size={self.test_size})...")
-        split = dataset.train_test_split(test_size=self.test_size, seed=self.seed)
+        logger.info(f"Splitting dataset (test_size={self.test_size}, shuffle={self.shuffle})...")
+        split = dataset.train_test_split(test_size=self.test_size, seed=self.seed, shuffle=self.shuffle)
 
         train_dataset = split["train"]
         eval_dataset = split["test"]

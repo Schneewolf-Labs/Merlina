@@ -11,7 +11,7 @@
         <!-- Header -->
         <header>
             <div class="logo">
-                <span class="wizard-hat">🧙‍♀️</span>
+                <img src="merlina.png" alt="Merlina" class="wizard-hat" style="width: 48px; height: 48px;">
                 <h1>Merlina</h1>
                 <span class="tagline">Magical Model Training</span>
             </div>
@@ -517,12 +517,12 @@
                                 <span>Use 4-bit Quantization 🗜️</span>
                             </label>
                             <label class="magic-checkbox">
-                                <input type="checkbox" id="use-wandb" checked>
-                                <span>Report to Weights & Biases 📊</span>
-                            </label>
-                            <label class="magic-checkbox">
                                 <input type="checkbox" id="push-hub">
                                 <span>Push to HuggingFace Hub 🤗</span>
+                            </label>
+                            <label class="magic-checkbox">
+                                <input type="checkbox" id="use-wandb" checked>
+                                <span>Report to Weights & Biases 📊</span>
                             </label>
                         </div>
 
@@ -564,6 +564,29 @@
                                     <strong>💡 Auto-naming format:</strong> <code>[model]-[lr]-[batch]-[epochs]ep-[optimizer]-[attention]</code><br>
                                     <strong>Example:</strong> <code>llama3-8b-5e-6LR-256B-2ep-adamw8bit-flash2-4bit</code>
                                 </div>
+                            </div>
+                        </div>
+
+                        <!-- HuggingFace Hub Configuration (shown when Push to Hub is enabled) -->
+                        <div id="hf-hub-config" style="margin-top: 15px; display: none;">
+                            <div style="padding: 15px; background: #fff7ed; border-radius: 10px; border-left: 3px solid #f97316;">
+                                <h4 style="margin-top: 0; color: #f97316; font-size: 0.95em;">🤗 HuggingFace Hub Configuration</h4>
+
+                                <!-- HF Token -->
+                                <div class="form-group">
+                                    <label>HuggingFace Token</label>
+                                    <input type="password" id="hf-token" placeholder="Your HuggingFace token" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">Required to push models. Get your token from <a href="https://huggingface.co/settings/tokens" target="_blank" style="color: #f97316;">huggingface.co/settings/tokens</a></small>
+                                </div>
+
+                                <!-- Privacy Toggle -->
+                                <label class="magic-checkbox" style="margin-top: 10px;">
+                                    <input type="checkbox" id="hf-hub-private" checked>
+                                    <span>🔒 Make Repository Private</span>
+                                </label>
+                                <small style="color: #888; font-size: 0.85em; display: block; margin-left: 30px; margin-top: 5px;">
+                                    Private repositories are only visible to you. Uncheck to make your model public.
+                                </small>
                             </div>
                         </div>
 

@@ -13,6 +13,50 @@ import psutil
 logger = logging.getLogger(__name__)
 
 
+def is_local_model_path(model_path: str) -> bool:
+    """
+    Determine if model_path is a local directory or a HuggingFace model ID.
+
+    Args:
+        model_path: Model identifier (local path or HF repo ID)
+
+    Returns:
+        True if it's a local path, False if it's a HuggingFace model ID
+    """
+    # Check for path indicators
+    path = Path(model_path)
+
+    # If it starts with ./ or ../ or /, it's definitely a path
+    if model_path.startswith('./') or model_path.startswith('../') or model_path.startswith('/'):
+        return True
+
+    # If it contains backslashes (Windows paths)
+    if '\\' in model_path:
+        return True
+
+    # If it contains path separators beyond a single slash (org/model format)
+    # and has more than one slash, likely a path
+    if model_path.count('/') > 1:
+        return True
+
+    # If it exists as a directory AND contains model files, it's a local path
+    # This handles cases like "models" which could be either a directory or HF username
+    if path.exists() and path.is_dir():
+        # Check for typical model files
+        has_model_files = (
+            (path / "config.json").exists() or
+            (path / "pytorch_model.bin").exists() or
+            (path / "model.safetensors").exists() or
+            any(path.glob("*.safetensors")) or
+            any(path.glob("pytorch_model*.bin"))
+        )
+        if has_model_files:
+            return True
+
+    # Otherwise, assume it's a HuggingFace model ID (org/model or just model)
+    return False
+
+
 class ValidationError(Exception):
     """Raised when validation fails"""
     pass
@@ -214,29 +258,73 @@ class PreflightValidator:
         }
 
     def _check_model_access(self, config: Any) -> Dict[str, Any]:
-        """Check if model is accessible"""
-        model_name = config.base_model
+        """Check if model is accessible (local path or HuggingFace)"""
+        model_path = config.base_model
+        is_local = is_local_model_path(model_path)
 
-        # Check for common gated models
-        gated_models = [
-            "meta-llama/Llama-2",
-            "meta-llama/Meta-Llama-3",
-            "mistralai/Mixtral",
-        ]
+        if is_local:
+            # Validate local model path
+            model_dir = Path(model_path)
 
-        is_gated = any(gated in model_name for gated in gated_models)
+            if not model_dir.exists():
+                self.errors.append(
+                    f"Local model path '{model_path}' does not exist. "
+                    "Please provide a valid directory path."
+                )
+                return {
+                    "model": model_path,
+                    "is_local": True,
+                    "exists": False,
+                    "has_config": False
+                }
 
-        if is_gated and not config.hf_token:
-            self.errors.append(
-                f"Model '{model_name}' is gated and requires a HuggingFace token. "
-                "Please provide hf_token in the configuration or set HF_TOKEN environment variable."
-            )
+            if not model_dir.is_dir():
+                self.errors.append(
+                    f"Local model path '{model_path}' is not a directory."
+                )
+                return {
+                    "model": model_path,
+                    "is_local": True,
+                    "exists": True,
+                    "has_config": False
+                }
 
-        return {
-            "model": model_name,
-            "is_gated": is_gated,
-            "has_token": bool(config.hf_token or os.getenv("HF_TOKEN"))
-        }
+            # Check for required model files
+            config_file = model_dir / "config.json"
+            if not config_file.exists():
+                self.warnings.append(
+                    f"Local model path '{model_path}' does not contain config.json. "
+                    "This may cause loading issues."
+                )
+
+            return {
+                "model": model_path,
+                "is_local": True,
+                "exists": True,
+                "has_config": config_file.exists()
+            }
+        else:
+            # HuggingFace model - check for gated models
+            gated_models = [
+                "meta-llama/Llama-2",
+                "meta-llama/Meta-Llama-3",
+                "mistralai/Mixtral",
+            ]
+
+            is_gated = any(gated in model_path for gated in gated_models)
+
+            if is_gated and not config.hf_token:
+                self.errors.append(
+                    f"Model '{model_path}' is gated and requires a HuggingFace token. "
+                    "Please provide hf_token in the configuration or set HF_TOKEN environment variable."
+                )
+
+            return {
+                "model": model_path,
+                "is_local": False,
+                "is_gated": is_gated,
+                "has_token": bool(config.hf_token or os.getenv("HF_TOKEN"))
+            }
 
     def _check_dataset_config(self, config: Any) -> Dict[str, Any]:
         """Validate dataset configuration"""
