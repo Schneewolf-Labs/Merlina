@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Merlina - Magical Model Training ✨</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <div class="logo">
+                <span class="wizard-hat">🧙‍♀️</span>
+                <h1>Merlina</h1>
+                <span class="tagline">Magical Model Training</span>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main>
+            <!-- Dataset Configuration -->
+            <section id="dataset-section" class="card">
+                <h2>📚 Choose Your Dataset</h2>
+
+                <!-- Dataset Source Selection -->
+                <div class="spell-section">
+                    <h3>🔮 Dataset Source</h3>
+                    <div class="form-group">
+                        <label>Source Type</label>
+                        <select id="dataset-source-type" class="magic-select">
+                            <option value="huggingface">HuggingFace Dataset</option>
+                            <option value="upload">Upload File</option>
+                            <option value="local_file">Local File Path</option>
+                        </select>
+                    </div>
+
+                    <!-- HuggingFace Source -->
+                    <div id="hf-source-config" class="source-config">
+                        <div class="form-group">
+                            <label>HuggingFace Repository ID</label>
+                            <input type="text" id="hf-repo-id" value="schneewolflabs/Athanor-DPO" class="magic-input">
+                            <small style="color: #888; font-size: 0.85em;">Example: username/dataset-name</small>
+                        </div>
+                        <div class="form-group">
+                            <label>Split</label>
+                            <input type="text" id="hf-split" value="train" class="magic-input">
+                        </div>
+                    </div>
+
+                    <!-- Upload Source -->
+                    <div id="upload-source-config" class="source-config" style="display: none;">
+                        <div class="form-group">
+                            <label>Upload Dataset File</label>
+                            <input type="file" id="dataset-file" accept=".json,.jsonl,.csv,.parquet" class="magic-input">
+                            <small style="color: #888; font-size: 0.85em;">Supported: JSON, JSONL, CSV, Parquet</small>
+                        </div>
+                        <div id="upload-status"></div>
+                        <button type="button" id="upload-button" class="action-button" style="margin-top: 10px;">
+                            📤 Upload Dataset
+                        </button>
+                    </div>
+
+                    <!-- Local File Source -->
+                    <div id="local-source-config" class="source-config" style="display: none;">
+                        <div class="form-group">
+                            <label>File Path</label>
+                            <input type="text" id="local-file-path" placeholder="/path/to/dataset.json" class="magic-input">
+                        </div>
+                        <div class="form-group">
+                            <label>File Format</label>
+                            <select id="local-file-format" class="magic-select">
+                                <option value="">Auto-detect</option>
+                                <option value="json">JSON</option>
+                                <option value="csv">CSV</option>
+                                <option value="parquet">Parquet</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Dataset Format -->
+                <div class="spell-section">
+                    <h3>📝 Dataset Format</h3>
+                    <div class="form-group">
+                        <label>Format Type</label>
+                        <select id="dataset-format-type" class="magic-select">
+                            <option value="chatml">ChatML (Default)</option>
+                            <option value="llama3">Llama 3</option>
+                            <option value="mistral">Mistral Instruct</option>
+                            <option value="custom">Custom Template</option>
+                        </select>
+                        <small style="color: #888; font-size: 0.85em;">How to format conversations for the model</small>
+                    </div>
+
+                    <!-- Custom Template Config -->
+                    <div id="custom-format-config" style="display: none; margin-top: 15px;">
+                        <div class="form-group">
+                            <label>Prompt Template</label>
+                            <textarea id="custom-prompt-template" class="magic-input" rows="3" placeholder="{system}\n\n{prompt}">{system}\n\n{prompt}</textarea>
+                            <small style="color: #888; font-size: 0.85em;">Use {system} and {prompt} as placeholders</small>
+                        </div>
+                        <div class="form-group">
+                            <label>Chosen Template</label>
+                            <input type="text" id="custom-chosen-template" value="{chosen}" class="magic-input">
+                        </div>
+                        <div class="form-group">
+                            <label>Rejected Template</label>
+                            <input type="text" id="custom-rejected-template" value="{rejected}" class="magic-input">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Dataset Preview -->
+                <div class="spell-section">
+                    <h3>👁️ Dataset Preview</h3>
+                    <div style="display: flex; gap: 10px; margin-bottom: 15px;">
+                        <button type="button" id="preview-dataset-button" class="action-button" style="flex: 1;">
+                            🔍 Preview Raw Data
+                        </button>
+                        <button type="button" id="preview-formatted-button" class="action-button" style="flex: 1; background: var(--secondary-purple);">
+                            ✨ Preview Formatted
+                        </button>
+                    </div>
+
+                    <!-- Raw Preview -->
+                    <div id="dataset-preview" style="margin-top: 15px; display: none;">
+                        <h4 style="color: var(--secondary-purple); margin-bottom: 10px;">Raw Dataset (First 3 Samples)</h4>
+                        <div style="max-height: 400px; overflow-y: auto; background: white; padding: 15px; border-radius: 10px; border: 1px solid var(--light-purple);">
+                            <pre id="dataset-preview-content" style="margin: 0; font-size: 0.85em; white-space: pre-wrap;"></pre>
+                        </div>
+                    </div>
+
+                    <!-- Formatted Preview -->
+                    <div id="formatted-preview" style="margin-top: 15px; display: none;">
+                        <h4 style="color: var(--secondary-purple); margin-bottom: 10px;">Formatted for Training (Sample 1)</h4>
+                        <div style="background: white; padding: 15px; border-radius: 10px; border: 1px solid var(--light-purple);">
+                            <div style="margin-bottom: 20px;">
+                                <div style="font-weight: bold; color: var(--primary-purple); margin-bottom: 5px;">Prompt:</div>
+                                <div style="background: #f5f7fa; padding: 10px; border-radius: 5px; max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 0.85em; white-space: pre-wrap;" id="formatted-prompt"></div>
+                            </div>
+                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                                <div>
+                                    <div style="font-weight: bold; color: var(--success); margin-bottom: 5px;">✓ Chosen Response:</div>
+                                    <div style="background: #e8f5e9; padding: 10px; border-radius: 5px; max-height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.85em; white-space: pre-wrap;" id="formatted-chosen"></div>
+                                </div>
+                                <div>
+                                    <div style="font-weight: bold; color: var(--danger); margin-bottom: 5px;">✗ Rejected Response:</div>
+                                    <div style="background: #ffebee; padding: 10px; border-radius: 5px; max-height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.85em; white-space: pre-wrap;" id="formatted-rejected"></div>
+                                </div>
+                            </div>
+                            <div style="margin-top: 15px; padding: 10px; background: #e6d0ff; border-radius: 5px; font-size: 0.85em;">
+                                <strong>📝 Format Type:</strong> <span id="format-type-display"></span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Advanced Dataset Options -->
+                <div class="spell-section">
+                    <h3>⚙️ Advanced Options</h3>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Test Split Size</label>
+                            <input type="number" id="test-size" value="0.01" min="0.001" max="0.5" step="0.01" class="magic-input">
+                            <small style="color: #888; font-size: 0.85em;">Fraction of data for evaluation</small>
+                        </div>
+                        <div class="form-group">
+                            <label>Max Samples (Optional)</label>
+                            <input type="number" id="max-samples" placeholder="Use all" class="magic-input">
+                            <small style="color: #888; font-size: 0.85em;">Limit dataset size for testing</small>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Training Configuration -->
+            <section id="config-section" class="card">
+                <h2>✨ Cast Your Training Spell</h2>
+                <form id="training-form">
+                    <!-- Model Selection -->
+                    <div class="form-group">
+                        <label>📚 Base Model (HuggingFace Tag)</label>
+                        <input type="text" id="base-model" placeholder="meta-llama/Meta-Llama-3-8B-Instruct" class="magic-input" required>
+                        <small style="color: #888; font-size: 0.85em;">Examples: meta-llama/Llama-3.2-3B-Instruct, mistralai/Mistral-7B-Instruct-v0.3, Qwen/Qwen2.5-7B-Instruct</small>
+                    </div>
+
+                    <div class="form-group">
+                        <label>🏷️ Output Model Name</label>
+                        <input type="text" id="output-name" placeholder="My-Magical-Model" class="magic-input" required>
+                    </div>
+
+                    <!-- LoRA Configuration -->
+                    <div class="spell-section">
+                        <h3>🪄 LoRA Enchantments</h3>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Rank (r)</label>
+                                <input type="number" id="lora-r" value="64" min="8" max="256" class="magic-input">
+                            </div>
+                            <div class="form-group">
+                                <label>Alpha</label>
+                                <input type="number" id="lora-alpha" value="32" min="8" max="256" class="magic-input">
+                            </div>
+                            <div class="form-group">
+                                <label>Dropout</label>
+                                <input type="number" id="lora-dropout" value="0.05" min="0" max="0.5" step="0.01" class="magic-input">
+                            </div>
+                        </div>
+
+                        <!-- Advanced LoRA Settings -->
+                        <div class="advanced-section" style="display: none;">
+                            <div class="form-group">
+                                <label>Target Modules (comma-separated)</label>
+                                <input type="text" id="target-modules" value="up_proj,down_proj,gate_proj,k_proj,q_proj,v_proj,o_proj" class="magic-input">
+                                <small style="color: #888; font-size: 0.85em;">Which layers to apply LoRA to</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Training Parameters -->
+                    <div class="spell-section">
+                        <h3>⚗️ Training Potions</h3>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Learning Rate</label>
+                                <input type="number" id="learning-rate" value="0.000005" step="0.000001" class="magic-input">
+                            </div>
+                            <div class="form-group">
+                                <label>Epochs</label>
+                                <input type="number" id="epochs" value="2" min="1" max="10" class="magic-input">
+                            </div>
+                            <div class="form-group">
+                                <label>Batch Size</label>
+                                <input type="number" id="batch-size" value="1" min="1" max="8" class="magic-input">
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Gradient Accumulation</label>
+                                <input type="number" id="grad-accum" value="16" min="1" max="128" class="magic-input">
+                            </div>
+                            <div class="form-group">
+                                <label>Max Length</label>
+                                <input type="number" id="max-length" value="2048" min="512" max="8192" step="512" class="magic-input">
+                            </div>
+                            <div class="form-group">
+                                <label>ORPO Beta</label>
+                                <input type="number" id="beta" value="0.1" min="0.01" max="1" step="0.01" class="magic-input">
+                            </div>
+                        </div>
+
+                        <!-- Advanced Training Settings -->
+                        <div class="advanced-section" style="display: none;">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Max Prompt Length</label>
+                                    <input type="number" id="max-prompt-length" value="1024" min="256" max="4096" step="128" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">Maximum length for prompts</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>Warmup Ratio</label>
+                                    <input type="number" id="warmup-ratio" value="0.05" min="0" max="0.5" step="0.01" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">Learning rate warmup proportion</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>Eval Steps Ratio</label>
+                                    <input type="number" id="eval-steps" value="0.2" min="0.1" max="1" step="0.05" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">How often to evaluate (0-1)</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Options -->
+                    <div class="spell-section">
+                        <h3>🌟 Magical Options</h3>
+                        <div class="checkbox-group">
+                            <label class="magic-checkbox">
+                                <input type="checkbox" id="use-4bit" checked>
+                                <span>Use 4-bit Quantization 🗜️</span>
+                            </label>
+                            <label class="magic-checkbox">
+                                <input type="checkbox" id="use-wandb" checked>
+                                <span>Enable Weights & Biases 📊</span>
+                            </label>
+                            <label class="magic-checkbox">
+                                <input type="checkbox" id="push-hub">
+                                <span>Push to HuggingFace Hub 🤗</span>
+                            </label>
+                        </div>
+
+                        <!-- Advanced Toggle Button -->
+                        <button type="button" id="toggle-advanced" class="toggle-advanced-btn">
+                            <span>⚙️ Show Advanced Settings</span>
+                        </button>
+                    </div>
+
+                    <!-- API Keys -->
+                    <div class="spell-section" id="api-keys">
+                        <h3>🔑 Secret Ingredients</h3>
+                        <div class="form-group">
+                            <label>W&B API Key (optional)</label>
+                            <input type="password" id="wandb-key" placeholder="Your W&B key" class="magic-input">
+                        </div>
+                        <div class="form-group" id="hf-token-group" style="display: none;">
+                            <label>HuggingFace Token</label>
+                            <input type="password" id="hf-token" placeholder="Your HF token" class="magic-input">
+                        </div>
+                    </div>
+
+                    <button type="submit" class="cast-button">
+                        <span class="button-icon">🪄</span>
+                        Cast Training Spell
+                    </button>
+                </form>
+            </section>
+
+            <!-- Active Jobs -->
+            <section id="jobs-section" class="card" style="display: none;">
+                <h2>🔮 Active Spells</h2>
+                <div id="jobs-container"></div>
+            </section>
+        </main>
+
+        <!-- Job Monitoring Modal -->
+        <div id="job-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <span class="close">&times;</span>
+                <h2>📊 Spell Progress</h2>
+                <div id="job-details">
+                    <div class="job-header">
+                        <h3 id="job-name"></h3>
+                        <span id="job-id" class="job-id"></span>
+                    </div>
+                    
+                    <div class="progress-section">
+                        <div class="progress-bar">
+                            <div id="progress-fill" class="progress-fill"></div>
+                            <span id="progress-text" class="progress-text">0%</span>
+                        </div>
+                        <div id="status-text" class="status-text"></div>
+                    </div>
+
+                    <div class="metrics-grid">
+                        <div class="metric-card">
+                            <span class="metric-label">Current Step</span>
+                            <span id="current-step" class="metric-value">-</span>
+                        </div>
+                        <div class="metric-card">
+                            <span class="metric-label">Loss</span>
+                            <span id="loss-value" class="metric-value">-</span>
+                        </div>
+                        <div class="metric-card">
+                            <span class="metric-label">Status</span>
+                            <span id="job-status" class="metric-value">-</span>
+                        </div>
+                    </div>
+
+                    <div class="action-buttons">
+                        <a id="wandb-link" href="#" target="_blank" class="action-button" style="display: none;">
+                            📊 View in W&B
+                        </a>
+                        <button id="stop-button" class="action-button danger">
+                            🛑 Stop Training
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Notification Toast -->
+        <div id="toast" class="toast"></div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

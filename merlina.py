@@ -1,0 +1,683 @@
+# merlina.py
+"""
+Merlina - Magical Model Training Backend
+ORPO training for LLMs with a delightful interface
+"""
+
+import os
+import gc
+import torch
+import wandb
+import logging
+from datetime import datetime
+from typing import Optional, Dict, Any
+from pathlib import Path
+
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
+
+from datasets import load_dataset, Dataset
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+)
+from peft import LoraConfig, PeftModel, prepare_model_for_kbit_training
+from trl import ORPOConfig, ORPOTrainer
+from accelerate import Accelerator
+
+# Import our custom dataset handling module
+from dataset_handlers import (
+    DatasetPipeline,
+    HuggingFaceLoader,
+    LocalFileLoader,
+    UploadedDatasetLoader,
+    get_formatter
+)
+
+# Setup logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# FastAPI app
+app = FastAPI(
+    title="Merlina - Magical Model Training",
+    description="Train LLMs with ORPO, powered by magic ✨",
+    version="1.0.0",
+    docs_url="/api/docs",
+    redoc_url="/api/redoc"
+)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Global job storage (simple in-memory for now)
+jobs = {}
+
+# Global storage for uploaded datasets
+uploaded_datasets = {}  # dataset_id -> bytes content
+
+# Get the directory where this script is located
+SCRIPT_DIR = Path(__file__).parent.resolve()
+
+# Check if frontend files exist in 'frontend' directory
+FRONTEND_DIR = SCRIPT_DIR / "frontend"
+if not FRONTEND_DIR.exists():
+    # Also check current directory
+    if (SCRIPT_DIR / "index.html").exists():
+        FRONTEND_DIR = SCRIPT_DIR
+    else:
+        logger.warning(f"Frontend files not found. Please create a 'frontend' directory with index.html, styles.css, and script.js")
+
+# Pydantic models for dataset configuration
+class DatasetSource(BaseModel):
+    """Configuration for dataset source"""
+    source_type: str = Field(..., description="Type of dataset source: huggingface, local_file, upload")
+
+    # For HuggingFace datasets
+    repo_id: Optional[str] = Field(None, description="HuggingFace repository ID")
+    split: str = Field("train", description="Dataset split to use")
+
+    # For local file datasets
+    file_path: Optional[str] = Field(None, description="Path to local dataset file")
+    file_format: Optional[str] = Field(None, description="File format: json, jsonl, csv, parquet")
+
+    # For uploaded datasets (handled separately via upload endpoint)
+    dataset_id: Optional[str] = Field(None, description="ID of previously uploaded dataset")
+
+
+class DatasetFormat(BaseModel):
+    """Configuration for dataset formatting"""
+    format_type: str = Field("chatml", description="Format type: chatml, llama3, mistral, tokenizer, custom")
+
+    # For custom format
+    custom_templates: Optional[dict] = Field(
+        None,
+        description="Custom templates (required if format_type is 'custom')"
+    )
+
+
+class DatasetConfig(BaseModel):
+    """Complete dataset configuration"""
+    source: DatasetSource = Field(
+        default=DatasetSource(
+            source_type="huggingface",
+            repo_id="schneewolflabs/Athanor-DPO",
+            split="train"
+        ),
+        description="Dataset source configuration"
+    )
+
+    format: DatasetFormat = Field(
+        default=DatasetFormat(format_type="chatml"),
+        description="Dataset format configuration"
+    )
+
+    # Column mapping (if dataset uses different column names)
+    column_mapping: Optional[dict] = Field(
+        None,
+        description="Map dataset columns to expected names (system, prompt, chosen, rejected)"
+    )
+
+    # Additional options
+    test_size: float = Field(0.01, ge=0.001, le=0.5, description="Fraction of data for evaluation")
+    max_samples: Optional[int] = Field(None, description="Limit dataset size (for testing)")
+
+
+# Pydantic models
+class TrainingConfig(BaseModel):
+    # Model settings
+    base_model: str = Field("meta-llama/Meta-Llama-3-8B-Instruct", description="Base model to fine-tune")
+    output_name: str = Field(..., description="Name for the output model")
+    
+    # LoRA settings
+    lora_r: int = Field(64, ge=8, le=256)
+    lora_alpha: int = Field(32, ge=8, le=256)
+    lora_dropout: float = Field(0.05, ge=0.0, le=0.5)
+    target_modules: list[str] = Field(
+        default=['up_proj', 'down_proj', 'gate_proj', 'k_proj', 'q_proj', 'v_proj', 'o_proj']
+    )
+    
+    # Training hyperparameters
+    learning_rate: float = Field(5e-6, ge=1e-8, le=1e-3)
+    num_epochs: int = Field(2, ge=1, le=10)
+    batch_size: int = Field(1, ge=1, le=8)
+    gradient_accumulation_steps: int = Field(16, ge=1, le=128)
+    max_length: int = Field(2048, ge=512, le=8192)
+    max_prompt_length: int = Field(1024, ge=256, le=4096)
+    
+    # ORPO specific
+    beta: float = Field(0.1, ge=0.01, le=1.0)
+
+    # Dataset configuration
+    dataset: DatasetConfig = Field(
+        default_factory=lambda: DatasetConfig(),
+        description="Dataset configuration"
+    )
+
+    # Optional settings
+    warmup_ratio: float = Field(0.05, ge=0.0, le=0.5)
+    eval_steps: float = Field(0.2, ge=0.1, le=1.0)
+    use_4bit: bool = Field(True, description="Use 4-bit quantization")
+    use_wandb: bool = Field(True, description="Log to Weights & Biases")
+    push_to_hub: bool = Field(False, description="Push to HuggingFace Hub")
+    hf_token: Optional[str] = Field(None, description="HuggingFace token for pushing")
+    wandb_key: Optional[str] = Field(None, description="Weights & Biases API key")
+
+class JobResponse(BaseModel):
+    job_id: str
+    status: str
+    message: str
+
+class JobStatus(BaseModel):
+    job_id: str
+    status: str
+    progress: float
+    current_step: Optional[int] = None
+    total_steps: Optional[int] = None
+    loss: Optional[float] = None
+    error: Optional[str] = None
+
+# Training function
+def run_training(job_id: str, config: TrainingConfig):
+    """Run ORPO training job"""
+    try:
+        # Update job status
+        jobs[job_id] = {"status": "initializing", "progress": 0.0}
+        
+        # Setup accelerator
+        accelerator = Accelerator()
+        
+        # Login to wandb if configured
+        if config.use_wandb and config.wandb_key:
+            wandb.login(key=config.wandb_key)
+            
+        # Set HF token if provided
+        if config.hf_token:
+            os.environ['HF_TOKEN'] = config.hf_token
+            
+        # Determine dtype and attention
+        if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
+            torch_dtype = torch.bfloat16
+            attn_implementation = "flash_attention_2"
+        else:
+            torch_dtype = torch.float16
+            attn_implementation = "eager"
+            
+        logger.info(f"Using {torch_dtype} with {attn_implementation}")
+        
+        # Setup quantization
+        bnb_config = None
+        if config.use_4bit:
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch_dtype,
+                bnb_4bit_use_double_quant=True,
+            )
+            
+        # Load model and tokenizer
+        jobs[job_id]["status"] = "loading_model"
+        jobs[job_id]["progress"] = 0.1
+        
+        tokenizer = AutoTokenizer.from_pretrained(
+            config.base_model,
+            trust_remote_code=True
+        )
+        
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+            
+        model = AutoModelForCausalLM.from_pretrained(
+            config.base_model,
+            quantization_config=bnb_config,
+            attn_implementation=attn_implementation,
+            torch_dtype=torch_dtype if not bnb_config else None,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+        
+        if bnb_config:
+            model = prepare_model_for_kbit_training(model)
+            
+        # Setup LoRA
+        peft_config = LoraConfig(
+            r=config.lora_r,
+            lora_alpha=config.lora_alpha,
+            lora_dropout=config.lora_dropout,
+            bias="none",
+            task_type="CAUSAL_LM",
+            target_modules=config.target_modules
+        )
+        
+        # Load and prepare dataset using new modular system
+        jobs[job_id]["status"] = "loading_dataset"
+        jobs[job_id]["progress"] = 0.2
+
+        logger.info(f"Loading dataset with config: {config.dataset.source.source_type}")
+
+        # Create appropriate loader based on source type
+        if config.dataset.source.source_type == "huggingface":
+            loader = HuggingFaceLoader(
+                repo_id=config.dataset.source.repo_id,
+                split=config.dataset.source.split,
+                token=config.hf_token
+            )
+        elif config.dataset.source.source_type == "local_file":
+            loader = LocalFileLoader(
+                file_path=config.dataset.source.file_path,
+                file_format=config.dataset.source.file_format
+            )
+        elif config.dataset.source.source_type == "upload":
+            # Get uploaded dataset from storage
+            dataset_id = config.dataset.source.dataset_id
+            if dataset_id not in uploaded_datasets:
+                raise ValueError(f"Uploaded dataset '{dataset_id}' not found")
+
+            file_content, filename = uploaded_datasets[dataset_id]
+            loader = UploadedDatasetLoader(
+                file_content=file_content,
+                filename=filename,
+                file_format=config.dataset.source.file_format
+            )
+        else:
+            raise ValueError(f"Invalid source_type: {config.dataset.source.source_type}")
+
+        # Get formatter (pass tokenizer if using tokenizer format)
+        formatter = get_formatter(
+            format_type=config.dataset.format.format_type,
+            custom_templates=config.dataset.format.custom_templates,
+            tokenizer=tokenizer if config.dataset.format.format_type == 'tokenizer' else None
+        )
+
+        # Create pipeline and prepare dataset
+        pipeline = DatasetPipeline(
+            loader=loader,
+            formatter=formatter,
+            column_mapping=config.dataset.column_mapping,
+            test_size=config.dataset.test_size,
+            max_samples=config.dataset.max_samples,
+            seed=42
+        )
+
+        train_dataset, eval_dataset = pipeline.prepare()
+
+        # Create dict with train/test for compatibility
+        dataset = {"train": train_dataset, "test": eval_dataset}
+        
+        # Setup training arguments
+        jobs[job_id]["status"] = "training"
+        jobs[job_id]["progress"] = 0.3
+        
+        output_dir = f"./results/{job_id}"
+        
+        orpo_args = ORPOConfig(
+            run_name=config.output_name,
+            learning_rate=config.learning_rate,
+            lr_scheduler_type="cosine",
+            max_length=config.max_length,
+            max_prompt_length=config.max_prompt_length,
+            max_completion_length=config.max_length - config.max_prompt_length,
+            beta=config.beta,
+            per_device_train_batch_size=config.batch_size,
+            per_device_eval_batch_size=config.batch_size,
+            gradient_accumulation_steps=config.gradient_accumulation_steps,
+            optim="paged_adamw_8bit",
+            num_train_epochs=config.num_epochs,
+            evaluation_strategy="steps",
+            eval_steps=config.eval_steps,
+            logging_steps=1,
+            warmup_ratio=config.warmup_ratio,
+            max_grad_norm=0.3,
+            report_to=["wandb"] if config.use_wandb else [],
+            output_dir=output_dir,
+            bf16=torch_dtype == torch.bfloat16,
+            fp16=torch_dtype == torch.float16,
+            save_strategy="steps",
+            save_steps=config.eval_steps,
+            save_total_limit=2,
+        )
+        
+        # Create trainer
+        trainer = ORPOTrainer(
+            model=model,
+            args=orpo_args,
+            train_dataset=dataset["train"],
+            eval_dataset=dataset["test"],
+            peft_config=peft_config,
+            tokenizer=tokenizer,
+        )
+        
+        # Train
+        logger.info("Starting training")
+        train_result = trainer.train()
+        
+        # Save model
+        jobs[job_id]["status"] = "saving"
+        jobs[job_id]["progress"] = 0.9
+        
+        final_output_dir = f"./models/{config.output_name}"
+        trainer.save_model(final_output_dir)
+        tokenizer.save_pretrained(final_output_dir)
+        
+        # Optional: merge and upload
+        if config.push_to_hub and accelerator.is_main_process:
+            jobs[job_id]["status"] = "uploading"
+            
+            # Reload for merging
+            base_model_reload = AutoModelForCausalLM.from_pretrained(
+                config.base_model,
+                low_cpu_mem_usage=True,
+                torch_dtype=torch.bfloat16,
+                device_map="auto",
+            )
+            
+            model_merged = PeftModel.from_pretrained(base_model_reload, final_output_dir)
+            model_merged = model_merged.merge_and_unload()
+            
+            # Push to hub
+            model_merged.push_to_hub(config.output_name, token=config.hf_token)
+            tokenizer.push_to_hub(config.output_name, token=config.hf_token)
+            
+        # Cleanup
+        del trainer, model
+        gc.collect()
+        torch.cuda.empty_cache()
+        
+        jobs[job_id]["status"] = "completed"
+        jobs[job_id]["progress"] = 1.0
+        logger.info(f"Training completed for job {job_id}")
+        
+    except Exception as e:
+        logger.error(f"Training failed for job {job_id}: {str(e)}")
+        jobs[job_id]["status"] = "failed"
+        jobs[job_id]["error"] = str(e)
+
+# Mount static files for frontend
+if FRONTEND_DIR.exists():
+    @app.get("/")
+    async def serve_frontend():
+        """Serve the main HTML page"""
+        return FileResponse(FRONTEND_DIR / "index.html")
+    
+    # Mount the frontend directory to serve static files
+    app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+    
+    # Also serve CSS and JS from root for simplicity
+    @app.get("/styles.css")
+    async def serve_css():
+        return FileResponse(FRONTEND_DIR / "styles.css", media_type="text/css")
+    
+    @app.get("/script.js") 
+    async def serve_js():
+        return FileResponse(FRONTEND_DIR / "script.js", media_type="application/javascript")
+else:
+    @app.get("/")
+    async def root():
+        return {
+            "name": "Merlina",
+            "version": "1.0.0",
+            "description": "Magical Model Training Backend",
+            "message": "Frontend not found. Please add index.html, styles.css, and script.js to the 'frontend' directory"
+        }
+
+# API Endpoints
+@app.get("/api")
+async def api_info():
+    return {
+        "name": "Merlina",
+        "version": "1.0.0",
+        "description": "Magical Model Training Backend",
+        "endpoints": {
+            "POST /train": "Start a new training job",
+            "GET /status/{job_id}": "Get job status",
+            "GET /jobs": "List all jobs",
+            "GET /api/docs": "API documentation"
+        }
+    }
+
+@app.post("/train", response_model=JobResponse)
+async def create_training_job(config: TrainingConfig, background_tasks: BackgroundTasks):
+    """Create and start a training job"""
+    job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    
+    # Start training in background
+    background_tasks.add_task(run_training, job_id, config)
+    
+    return JobResponse(
+        job_id=job_id,
+        status="started",
+        message=f"Training spell cast! Job {job_id} is now running."
+    )
+
+@app.get("/status/{job_id}", response_model=JobStatus)
+async def get_job_status(job_id: str):
+    """Get status of a training job"""
+    if job_id not in jobs:
+        raise HTTPException(status_code=404, detail="Job not found")
+        
+    job = jobs[job_id]
+    return JobStatus(
+        job_id=job_id,
+        status=job["status"],
+        progress=job.get("progress", 0.0),
+        current_step=job.get("current_step"),
+        total_steps=job.get("total_steps"),
+        loss=job.get("loss"),
+        error=job.get("error")
+    )
+
+@app.get("/jobs")
+async def list_jobs():
+    """List all jobs"""
+    return {
+        job_id: {
+            "status": job["status"],
+            "progress": job.get("progress", 0.0)
+        }
+        for job_id, job in jobs.items()
+    }
+
+# Dataset management endpoints
+@app.post("/dataset/preview")
+async def preview_dataset(config: DatasetConfig):
+    """Preview dataset without formatting"""
+    try:
+        # Create loader
+        if config.source.source_type == "huggingface":
+            loader = HuggingFaceLoader(
+                repo_id=config.source.repo_id,
+                split=config.source.split
+            )
+        elif config.source.source_type == "local_file":
+            loader = LocalFileLoader(
+                file_path=config.source.file_path,
+                file_format=config.source.file_format
+            )
+        elif config.source.source_type == "upload":
+            dataset_id = config.source.dataset_id
+            if dataset_id not in uploaded_datasets:
+                raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
+
+            file_content, filename = uploaded_datasets[dataset_id]
+            loader = UploadedDatasetLoader(
+                file_content=file_content,
+                filename=filename,
+                file_format=config.source.file_format
+            )
+        else:
+            raise HTTPException(status_code=400, detail=f"Invalid source_type: {config.source.source_type}")
+
+        # Get formatter (just for pipeline, we'll preview raw)
+        # For tokenizer format, we can't preview without a model, so use chatml as default
+        formatter_type = config.format.format_type
+        if formatter_type == 'tokenizer':
+            logger.warning("Cannot preview with 'tokenizer' format without loading the model. Using 'chatml' for preview.")
+            formatter_type = 'chatml'
+
+        formatter = get_formatter(
+            format_type=formatter_type,
+            custom_templates=config.format.custom_templates
+        )
+
+        # Create pipeline
+        pipeline = DatasetPipeline(
+            loader=loader,
+            formatter=formatter,
+            column_mapping=config.column_mapping,
+            test_size=config.test_size,
+            max_samples=config.max_samples
+        )
+
+        # Preview raw data
+        preview = pipeline.preview(num_samples=10)
+
+        return {
+            "status": "success",
+            "samples": preview,
+            "num_samples": len(preview)
+        }
+
+    except Exception as e:
+        logger.error(f"Dataset preview failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/dataset/preview-formatted")
+async def preview_formatted_dataset(config: DatasetConfig):
+    """Preview dataset with formatting applied"""
+    try:
+        # Create loader
+        if config.source.source_type == "huggingface":
+            loader = HuggingFaceLoader(
+                repo_id=config.source.repo_id,
+                split=config.source.split
+            )
+        elif config.source.source_type == "local_file":
+            loader = LocalFileLoader(
+                file_path=config.source.file_path,
+                file_format=config.source.file_format
+            )
+        elif config.source.source_type == "upload":
+            dataset_id = config.source.dataset_id
+            if dataset_id not in uploaded_datasets:
+                raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
+
+            file_content, filename = uploaded_datasets[dataset_id]
+            loader = UploadedDatasetLoader(
+                file_content=file_content,
+                filename=filename,
+                file_format=config.source.file_format
+            )
+        else:
+            raise HTTPException(status_code=400, detail=f"Invalid source_type: {config.source.source_type}")
+
+        # Get formatter
+        # For tokenizer format, we can't preview without a model, so use chatml as default
+        formatter_type = config.format.format_type
+        if formatter_type == 'tokenizer':
+            logger.warning("Cannot preview with 'tokenizer' format without loading the model. Using 'chatml' for preview.")
+            formatter_type = 'chatml'
+
+        formatter = get_formatter(
+            format_type=formatter_type,
+            custom_templates=config.format.custom_templates
+        )
+
+        # Create pipeline
+        pipeline = DatasetPipeline(
+            loader=loader,
+            formatter=formatter,
+            column_mapping=config.column_mapping,
+            test_size=config.test_size,
+            max_samples=config.max_samples
+        )
+
+        # Preview formatted data
+        preview = pipeline.preview_formatted(num_samples=5)
+
+        return {
+            "status": "success",
+            "samples": preview,
+            "num_samples": len(preview)
+        }
+
+    except Exception as e:
+        logger.error(f"Dataset preview failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/dataset/upload")
+async def upload_dataset(file: bytes = None, filename: str = None):
+    """Upload a dataset file"""
+    from fastapi import File, Form, UploadFile
+
+    # This endpoint needs to be called with multipart/form-data
+    # We'll create a proper version
+    pass
+
+
+# Proper upload endpoint with FastAPI's UploadFile
+from fastapi import File, UploadFile as FastAPIUploadFile
+
+@app.post("/dataset/upload-file")
+async def upload_dataset_file(file: FastAPIUploadFile = File(...)):
+    """Upload a dataset file and return dataset ID"""
+    try:
+        # Read file content
+        content = await file.read()
+
+        # Generate dataset ID
+        import hashlib
+        from datetime import datetime
+
+        dataset_id = f"upload_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{hashlib.md5(content).hexdigest()[:8]}"
+
+        # Store in memory (in production, save to disk/S3)
+        uploaded_datasets[dataset_id] = (content, file.filename)
+
+        logger.info(f"Uploaded dataset: {file.filename} -> {dataset_id}")
+
+        return {
+            "status": "success",
+            "dataset_id": dataset_id,
+            "filename": file.filename,
+            "size": len(content)
+        }
+
+    except Exception as e:
+        logger.error(f"Dataset upload failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/dataset/uploads")
+async def list_uploaded_datasets():
+    """List all uploaded datasets"""
+    return {
+        "datasets": [
+            {
+                "dataset_id": dataset_id,
+                "filename": filename,
+                "size": len(content)
+            }
+            for dataset_id, (content, filename) in uploaded_datasets.items()
+        ]
+    }
+
+
+if __name__ == "__main__":
+    import uvicorn
+    print("\n✨ Starting Merlina - Magical Model Training ✨")
+    print("🧙‍♀️ Visit http://localhost:8000 to access the interface")
+    print("📚 API documentation: http://localhost:8000/api/docs")
+    print(f"📁 Frontend directory: {FRONTEND_DIR}")
+    print("=" * 50 + "\n")
+    uvicorn.run(app, host="0.0.0.0", port=8000)

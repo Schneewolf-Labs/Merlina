@@ -1,0 +1,22 @@
+{
+  "base_model": "meta-llama/Llama-3.2-1B-Instruct",
+  "output_name": "llama-local-data",
+
+  "dataset": {
+    "source": {
+      "source_type": "local_file",
+      "file_path": "/path/to/your/dataset.json",
+      "file_format": "json"
+    },
+    "format": {
+      "format_type": "tokenizer"
+    },
+    "test_size": 0.01
+  },
+
+  "lora_r": 64,
+  "lora_alpha": 32,
+  "learning_rate": 5e-6,
+  "num_epochs": 2,
+  "use_4bit": true
+}

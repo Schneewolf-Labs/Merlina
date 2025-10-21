@@ -1,0 +1,29 @@
+{
+  "base_model": "Qwen/Qwen2.5-1.5B-Instruct",
+  "output_name": "qwen-custom",
+
+  "dataset": {
+    "source": {
+      "source_type": "huggingface",
+      "repo_id": "schneewolflabs/Athanor-DPO",
+      "split": "train"
+    },
+    "format": {
+      "format_type": "tokenizer"
+    },
+    "column_mapping": null,
+    "test_size": 0.02,
+    "max_samples": 500
+  },
+
+  "lora_r": 64,
+  "lora_alpha": 32,
+  "lora_dropout": 0.05,
+  "learning_rate": 5e-6,
+  "num_epochs": 2,
+  "batch_size": 1,
+  "gradient_accumulation_steps": 16,
+  "use_4bit": true,
+  "use_wandb": true,
+  "push_to_hub": false
+}

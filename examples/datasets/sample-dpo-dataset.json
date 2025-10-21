@@ -1,0 +1,25 @@
+[
+  {
+    "system": "You are a helpful assistant.",
+    "prompt": "What is the capital of France?",
+    "chosen": "The capital of France is Paris.",
+    "rejected": "I don't know."
+  },
+  {
+    "system": "You are a helpful assistant.",
+    "prompt": "Explain quantum computing in simple terms.",
+    "chosen": "Quantum computing uses quantum bits (qubits) that can exist in multiple states simultaneously, unlike classical bits that are either 0 or 1. This allows quantum computers to process certain types of calculations much faster than traditional computers.",
+    "rejected": "Quantum computing is complicated stuff with atoms and particles."
+  },
+  {
+    "prompt": "Write a haiku about programming.",
+    "chosen": "Code flows like water\nBugs hide in silent shadows\nDebug brings the light",
+    "rejected": "Programming is hard\nI don't like doing it much\nComputers are weird"
+  },
+  {
+    "system": "You are a creative writing assistant.",
+    "prompt": "Give me a creative opening line for a story.",
+    "chosen": "The day the stars went out, nobody noticed—they were all too busy staring at their phones.",
+    "rejected": "Once upon a time there was a person who did a thing."
+  }
+]
