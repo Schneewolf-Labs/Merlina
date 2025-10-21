@@ -6,6 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Merlina is a magical LLM training system with ORPO (Odds Ratio Preference Optimization) support. It provides a delightful wizard-themed web interface for fine-tuning language models with LoRA adapters. The system supports flexible dataset loading from multiple sources and automatic chat template formatting.
 
+**New in v1.1:**
+- Persistent job storage with SQLite database
+- Real-time WebSocket updates during training
+- Pre-flight validation to catch errors before training
+- Detailed metrics tracking and history
+
 ## Development Commands
 
 ### Running the Application
@@ -38,10 +44,15 @@ pip install -r requirements.txt
 
 **Backend (merlina.py)**
 - FastAPI application serving REST API and static frontend
-- `run_training()` - Main training orchestrator that handles ORPO fine-tuning
-- Job management with in-memory storage (jobs dict)
-- Uploaded dataset storage (uploaded_datasets dict)
+- Main entry point for the application
+- Integrates all modules from `src/` and `dataset_handlers/`
 - Background task execution using FastAPI BackgroundTasks
+
+**Source Modules (src/)**
+- `job_manager.py` - SQLite persistence for jobs and metrics
+- `websocket_manager.py` - Real-time WebSocket connections
+- `preflight_checks.py` - Configuration validation
+- `training_runner.py` - Enhanced training with callbacks
 
 **Dataset Handling Module (dataset_handlers/)**
 
@@ -205,12 +216,111 @@ LoRA parameters are in `LoraConfig`:
 - `lora_alpha` - Scaling factor (typically 2x rank)
 - `target_modules` - Which layers to apply LoRA (q_proj, v_proj, etc.)
 
+## New Features (v1.1)
+
+### Persistent Job Storage (job_manager.py)
+
+Jobs are now stored in SQLite database (`./data/jobs.db`) and persist across server restarts.
+
+**Key classes:**
+- `JobManager` - Main interface for job CRUD operations
+- `JobRecord` - Dataclass representing a job with all fields
+
+**Important methods:**
+- `create_job(job_id, config)` - Create new job
+- `update_job(job_id, **kwargs)` - Update job fields
+- `get_job(job_id)` - Retrieve job
+- `list_jobs(status, limit, offset)` - Query jobs with filtering
+- `add_metric(job_id, step, loss, ...)` - Record training metrics
+- `get_metrics(job_id)` - Retrieve time-series metrics
+
+**Database schema:**
+- `jobs` table - Main job records
+- `training_metrics` table - Time-series training data
+
+### WebSocket Real-time Updates (websocket_manager.py)
+
+Live training updates via WebSocket connections.
+
+**Key class:**
+- `WebSocketManager` - Manages connections and broadcasts
+
+**Message types sent to clients:**
+- `status_update` - Training status, progress, loss, GPU memory
+- `metrics` - Detailed metrics at specific steps
+- `completed` - Training finished successfully
+- `error` - Training failed with error message
+
+**WebSocket endpoint:**
+- `GET /ws/{job_id}` - Connect to receive real-time updates
+
+### Pre-flight Validation (preflight_checks.py)
+
+Validates configuration before training to prevent wasted GPU time.
+
+**Key class:**
+- `PreflightValidator` - Runs all validation checks
+
+**Checks performed:**
+1. GPU availability and compute capability
+2. VRAM estimation vs available memory
+3. Disk space for checkpoints
+4. Model access and gating (HF token check)
+5. Dataset configuration validity
+6. Training hyperparameter sanity checks
+7. API token validation (W&B, HF)
+8. Optional dependency checks (Flash Attention, xformers)
+
+**Returns:**
+- List of errors (blocking issues)
+- List of warnings (recommendations)
+- Detailed check results per category
+
+### Enhanced Training Runner (training_runner.py)
+
+New modular training function with WebSocket integration.
+
+**Key features:**
+- `WebSocketCallback` - Custom TRL callback that broadcasts metrics
+- Async WebSocket updates during training
+- Better error handling and logging
+- GPU memory tracking
+- Metric persistence to database
+
+**Functions:**
+- `run_training_sync(job_id, config, job_manager, uploaded_datasets)` - Main training function
+- Called by FastAPI background tasks
+
+## Project Structure
+
+```
+merlina/
+├── merlina.py                    # Main FastAPI application
+├── src/                          # Source modules (v1.1)
+│   ├── job_manager.py           # Job persistence
+│   ├── websocket_manager.py     # WebSocket manager
+│   ├── preflight_checks.py      # Validation
+│   └── training_runner.py       # Training logic
+├── dataset_handlers/             # Dataset pipeline
+│   ├── base.py
+│   ├── loaders.py
+│   ├── formatters.py
+│   └── validators.py
+├── frontend/                     # Web UI
+├── examples/                     # Example scripts
+├── tests/                        # Test suite
+└── data/                         # Runtime data
+    └── jobs.db                   # SQLite database
+```
+
 ## File Locations
 
-- Models saved to: `./models/{output_name}/`
-- Training artifacts: `./results/{job_id}/`
-- Frontend files: `./frontend/` (or current directory as fallback)
-- Test fixtures: `./tests/fixtures/`
+- **Source code:** `src/` directory
+- **Models:** `./models/{output_name}/`
+- **Training artifacts:** `./results/{job_id}/`
+- **Job database:** `./data/jobs.db` (SQLite)
+- **Frontend:** `./frontend/`
+- **Test fixtures:** `./tests/fixtures/`
 
 ## Environment Variables
 
@@ -218,3 +328,30 @@ Optional configuration:
 - `WANDB_API_KEY` - Weights & Biases logging
 - `HF_TOKEN` - HuggingFace Hub authentication
 - `CUDA_VISIBLE_DEVICES` - GPU selection
+
+## New API Endpoints
+
+**Validation:**
+- `POST /validate` - Validate configuration before training
+
+**Job Management:**
+- `GET /jobs/history?status=&limit=&offset=` - Get paginated job history
+- `GET /jobs/{job_id}/metrics` - Get detailed training metrics
+- `GET /stats` - Database and system statistics
+
+**WebSocket:**
+- `WebSocket /ws/{job_id}` - Real-time training updates
+
+## Testing New Features
+
+```bash
+# Test validation
+python examples/validate_and_train.py
+
+# Monitor training via WebSocket
+python examples/websocket_monitor.py <job_id>
+
+# View job history and metrics
+python examples/job_history.py
+python examples/job_history.py <job_id>
+```

@@ -10,9 +10,11 @@ Train LLMs with ORPO using a delightful web interface powered by magic ✨
 - 🚀 **ORPO Training** - State-of-the-art preference optimization
 - 📚 **Flexible Datasets** - HuggingFace, upload files (JSON/CSV/Parquet), or local paths
 - 📝 **Multiple Formats** - ChatML, Llama 3, Mistral, custom templates, or **automatic tokenizer-based formatting**
-- 🤖 **Tokenizer Format** - NEW! Automatically uses the model's native chat template
+- 🤖 **Tokenizer Format** - Automatically uses the model's native chat template
 - 🗜️ **4-bit Quantization** - Train large models on consumer GPUs
-- 📊 **Real-time Monitoring** - Track progress, loss, and metrics
+- 📊 **Real-time Monitoring** - WebSocket updates with live metrics and GPU stats
+- 💾 **Persistent Job Storage** - SQLite database preserves jobs across restarts
+- ✅ **Pre-flight Validation** - Catch configuration errors before training starts
 - 🤗 **HuggingFace Integration** - Push models directly to the Hub
 - 📈 **W&B Logging** - Detailed experiment tracking
 
@@ -33,22 +35,15 @@ pip install -r requirements.txt
 
 ```
 merlina/
-├── merlina.py              # Backend server
+├── merlina.py              # Backend server (main entry point)
 ├── requirements.txt        # Python dependencies
 ├── README.md              # This file
 │
-├── docs/                  # Documentation
-│   ├── user/             # User guides
-│   └── dev/              # Developer docs
-│
-├── examples/              # Training configurations
-│   ├── basic-training.json
-│   ├── tokenizer-format.json
-│   └── datasets/         # Sample datasets
-│
-├── tests/                 # Test suite
-│   ├── test_*.py
-│   └── fixtures/         # Test data
+├── src/                   # Source modules (NEW in v1.1)
+│   ├── job_manager.py     # SQLite job persistence
+│   ├── websocket_manager.py  # Real-time updates
+│   ├── preflight_checks.py   # Configuration validation
+│   └── training_runner.py    # Enhanced training
 │
 ├── dataset_handlers/      # Dataset module
 │   ├── base.py
@@ -56,10 +51,27 @@ merlina/
 │   ├── formatters.py
 │   └── validators.py
 │
-└── frontend/             # Web interface
-    ├── index.html
-    ├── styles.css
-    └── script.js
+├── docs/                  # Documentation
+│   ├── user/             # User guides
+│   └── dev/              # Developer docs
+│
+├── examples/              # Example scripts
+│   ├── validate_and_train.py
+│   ├── websocket_monitor.py
+│   ├── job_history.py
+│   └── *.json            # Training configs
+│
+├── tests/                 # Test suite
+│   ├── test_*.py
+│   └── fixtures/         # Test data
+│
+├── frontend/             # Web interface
+│   ├── index.html
+│   ├── styles.css
+│   └── script.js
+│
+└── data/                 # Runtime data (created automatically)
+    └── jobs.db           # SQLite database
 ```
 
 ### 3. Run Merlina

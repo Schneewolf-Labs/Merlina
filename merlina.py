@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -38,6 +38,11 @@ from dataset_handlers import (
     get_formatter
 )
 
+# Import new modules for persistence, WebSockets, and validation
+from src.job_manager import JobManager
+from src.websocket_manager import websocket_manager
+from src.preflight_checks import validate_config
+
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -59,11 +64,44 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global job storage (simple in-memory for now)
-jobs = {}
+# Initialize job manager with persistent storage
+job_manager = JobManager(db_path="./data/jobs.db")
 
-# Global storage for uploaded datasets
+# Global storage for uploaded datasets (still in-memory, could be persisted later)
 uploaded_datasets = {}  # dataset_id -> bytes content
+
+# Keep backwards compatibility - jobs dict now proxies to job_manager
+class JobsProxy:
+    """Proxy dict-like access to job_manager for backwards compatibility"""
+    def __getitem__(self, job_id: str):
+        job = job_manager.get_job(job_id)
+        if not job:
+            raise KeyError(job_id)
+        return {
+            "status": job.status,
+            "progress": job.progress,
+            "current_step": job.current_step,
+            "total_steps": job.total_steps,
+            "loss": job.loss,
+            "error": job.error
+        }
+
+    def __setitem__(self, job_id: str, value: dict):
+        # Update job in database
+        job_manager.update_job(job_id, **value)
+
+    def __contains__(self, job_id: str):
+        return job_manager.get_job(job_id) is not None
+
+    def items(self):
+        jobs_list = job_manager.list_jobs()
+        for job in jobs_list:
+            yield job.job_id, {
+                "status": job.status,
+                "progress": job.progress
+            }
+
+jobs = JobsProxy()
 
 # Get the directory where this script is located
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -186,9 +224,14 @@ class JobStatus(BaseModel):
     loss: Optional[float] = None
     error: Optional[str] = None
 
-# Training function
-def run_training(job_id: str, config: TrainingConfig):
-    """Run ORPO training job"""
+# Old training function - kept for reference, now using training_runner.py
+# def run_training(job_id: str, config: TrainingConfig):
+#     """Run ORPO training job - DEPRECATED, see training_runner.py"""
+#     pass
+
+# Placeholder to keep line numbers similar (will be removed)
+def _old_run_training_deprecated(job_id: str, config: TrainingConfig):
+    """DEPRECATED: Old training function. Using training_runner.py instead"""
     try:
         # Update job status
         jobs[job_id] = {"status": "initializing", "progress": 0.0}
@@ -444,18 +487,61 @@ async def api_info():
         }
     }
 
+@app.post("/validate", response_model=dict)
+async def validate_training_config(config: TrainingConfig):
+    """
+    Validate training configuration before starting.
+    Checks GPU, VRAM, disk space, model access, etc.
+    """
+    try:
+        is_valid, results = validate_config(config)
+        return {
+            "valid": is_valid,
+            "results": results
+        }
+    except Exception as e:
+        logger.error(f"Validation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/train", response_model=JobResponse)
 async def create_training_job(config: TrainingConfig, background_tasks: BackgroundTasks):
-    """Create and start a training job"""
+    """
+    Create and start a training job.
+    Runs pre-flight validation before starting.
+    """
+    # Run pre-flight validation
+    is_valid, validation_results = validate_config(config)
+
+    if not is_valid:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Training configuration validation failed",
+                "errors": validation_results.get("errors", []),
+                "warnings": validation_results.get("warnings", [])
+            }
+        )
+
+    # Create job in database
     job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    
+    job_manager.create_job(job_id, config.dict())
+
+    # Import training runner
+    from src.training_runner import run_training_sync
+
     # Start training in background
-    background_tasks.add_task(run_training, job_id, config)
-    
+    background_tasks.add_task(run_training_sync, job_id, config, job_manager, uploaded_datasets)
+
+    # Return response with warnings if any
+    message = f"Training spell cast! Job {job_id} is now running."
+    if validation_results.get("warnings"):
+        message += f" Note: {len(validation_results['warnings'])} warning(s) detected."
+
     return JobResponse(
         job_id=job_id,
         status="started",
-        message=f"Training spell cast! Job {job_id} is now running."
+        message=message
     )
 
 @app.get("/status/{job_id}", response_model=JobStatus)
@@ -484,6 +570,93 @@ async def list_jobs():
             "progress": job.get("progress", 0.0)
         }
         for job_id, job in jobs.items()
+    }
+
+
+@app.get("/jobs/history")
+async def get_job_history(limit: int = 50, offset: int = 0, status: Optional[str] = None):
+    """
+    Get job history with pagination.
+    Now persisted across server restarts!
+    """
+    jobs_list = job_manager.list_jobs(status=status, limit=limit, offset=offset)
+    return {
+        "jobs": [
+            {
+                "job_id": job.job_id,
+                "status": job.status,
+                "progress": job.progress,
+                "created_at": job.created_at,
+                "updated_at": job.updated_at,
+                "output_dir": job.output_dir,
+                "error": job.error
+            }
+            for job in jobs_list
+        ],
+        "count": len(jobs_list)
+    }
+
+
+@app.get("/jobs/{job_id}/metrics")
+async def get_job_metrics(job_id: str):
+    """Get detailed metrics for a job"""
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    metrics = job_manager.get_metrics(job_id)
+    return {
+        "job_id": job_id,
+        "metrics": metrics,
+        "count": len(metrics)
+    }
+
+
+@app.websocket("/ws/{job_id}")
+async def websocket_endpoint(websocket: WebSocket, job_id: str):
+    """
+    WebSocket endpoint for real-time training updates.
+    Connect to receive live status updates, metrics, and progress.
+    """
+    await websocket_manager.connect(websocket, job_id)
+    try:
+        # Send initial status
+        job = job_manager.get_job(job_id)
+        if job:
+            await websocket.send_json({
+                "type": "status_update",
+                "job_id": job_id,
+                "status": job.status,
+                "progress": job.progress,
+                "current_step": job.current_step,
+                "total_steps": job.total_steps,
+                "loss": job.loss,
+                "eval_loss": job.eval_loss
+            })
+
+        # Keep connection alive and listen for messages
+        while True:
+            try:
+                # Wait for any messages from client (heartbeat, etc.)
+                data = await websocket.receive_text()
+                # Echo back as heartbeat acknowledgment
+                await websocket.send_json({"type": "heartbeat", "status": "ok"})
+            except WebSocketDisconnect:
+                break
+    except Exception as e:
+        logger.error(f"WebSocket error for job {job_id}: {e}")
+    finally:
+        websocket_manager.disconnect(websocket, job_id)
+
+
+@app.get("/stats")
+async def get_stats():
+    """Get database and system statistics"""
+    return {
+        "database": job_manager.get_stats(),
+        "websockets": {
+            "total_connections": websocket_manager.get_connection_count()
+        }
     }
 
 # Dataset management endpoints

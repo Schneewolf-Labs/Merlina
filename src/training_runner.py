@@ -1,0 +1,413 @@
+"""
+Enhanced Training Runner with WebSocket updates and better error handling
+"""
+
+import os
+import gc
+import torch
+import wandb
+import logging
+import asyncio
+from datetime import datetime
+from typing import Optional, Dict, Any
+
+from transformers import (
+    AutoModelForCausalLM,
+    AutoTokenizer,
+    BitsAndBytesConfig,
+    TrainerCallback
+)
+from peft import LoraConfig, PeftModel, prepare_model_for_kbit_training
+from trl import ORPOConfig, ORPOTrainer
+from accelerate import Accelerator
+
+from dataset_handlers import (
+    DatasetPipeline,
+    HuggingFaceLoader,
+    LocalFileLoader,
+    UploadedDatasetLoader,
+    get_formatter
+)
+from job_manager import JobManager
+from websocket_manager import websocket_manager
+
+logger = logging.getLogger(__name__)
+
+
+class WebSocketCallback(TrainerCallback):
+    """
+    Custom callback to send training metrics via WebSocket
+    """
+
+    def __init__(self, job_id: str, job_manager: JobManager):
+        self.job_id = job_id
+        self.job_manager = job_manager
+
+    def on_log(self, args, state, control, logs=None, **kwargs):
+        """Called when trainer logs metrics"""
+        if logs:
+            # Update job with latest metrics
+            update_data = {}
+
+            if "loss" in logs:
+                update_data["loss"] = float(logs["loss"])
+
+            if "eval_loss" in logs:
+                update_data["eval_loss"] = float(logs["eval_loss"])
+
+            if "learning_rate" in logs:
+                update_data["learning_rate"] = float(logs["learning_rate"])
+
+            if state.global_step:
+                update_data["current_step"] = state.global_step
+
+            if state.max_steps:
+                update_data["total_steps"] = state.max_steps
+                # Calculate progress based on steps
+                progress = 0.3 + (0.6 * (state.global_step / state.max_steps))
+                update_data["progress"] = min(progress, 0.9)
+
+            # Update database
+            if update_data:
+                self.job_manager.update_job(self.job_id, **update_data)
+
+                # Add to metrics table
+                if state.global_step and "loss" in logs:
+                    gpu_memory = None
+                    if torch.cuda.is_available():
+                        gpu_memory = torch.cuda.max_memory_allocated() / (1024**3)
+
+                    self.job_manager.add_metric(
+                        self.job_id,
+                        step=state.global_step,
+                        loss=update_data.get("loss"),
+                        eval_loss=update_data.get("eval_loss"),
+                        learning_rate=update_data.get("learning_rate"),
+                        gpu_memory_used=gpu_memory
+                    )
+
+                # Send WebSocket update (run in event loop)
+                try:
+                    loop = asyncio.get_event_loop()
+                    if loop.is_running():
+                        asyncio.create_task(
+                            websocket_manager.send_status_update(
+                                job_id=self.job_id,
+                                status="training",
+                                progress=update_data.get("progress", 0.5),
+                                current_step=update_data.get("current_step"),
+                                total_steps=update_data.get("total_steps"),
+                                loss=update_data.get("loss"),
+                                eval_loss=update_data.get("eval_loss"),
+                                learning_rate=update_data.get("learning_rate"),
+                                gpu_memory=gpu_memory
+                            )
+                        )
+                except Exception as e:
+                    logger.debug(f"Could not send WebSocket update: {e}")
+
+
+async def run_training_async(job_id: str, config: Any, job_manager: JobManager, uploaded_datasets: dict):
+    """Async wrapper for training to enable WebSocket updates"""
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, run_training_sync, job_id, config, job_manager, uploaded_datasets)
+
+
+def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploaded_datasets: dict):
+    """Run ORPO training job with enhanced monitoring"""
+    try:
+        # Update job status
+        job_manager.update_job(job_id, status="initializing", progress=0.0)
+
+        # Send WebSocket update
+        try:
+            asyncio.create_task(
+                websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="initializing",
+                    progress=0.0
+                )
+            )
+        except:
+            pass
+
+        # Setup accelerator
+        accelerator = Accelerator()
+
+        # Login to wandb if configured
+        if config.use_wandb and config.wandb_key:
+            wandb.login(key=config.wandb_key)
+
+        # Set HF token if provided
+        if config.hf_token:
+            os.environ['HF_TOKEN'] = config.hf_token
+
+        # Determine dtype and attention
+        if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
+            torch_dtype = torch.bfloat16
+            attn_implementation = "flash_attention_2"
+        else:
+            torch_dtype = torch.float16
+            attn_implementation = "eager"
+
+        logger.info(f"Using {torch_dtype} with {attn_implementation}")
+
+        # Setup quantization
+        bnb_config = None
+        if config.use_4bit:
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch_dtype,
+                bnb_4bit_use_double_quant=True,
+            )
+
+        # Load model and tokenizer
+        job_manager.update_job(job_id, status="loading_model", progress=0.1)
+
+        try:
+            asyncio.create_task(
+                websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="loading_model",
+                    progress=0.1
+                )
+            )
+        except:
+            pass
+
+        tokenizer = AutoTokenizer.from_pretrained(
+            config.base_model,
+            trust_remote_code=True
+        )
+
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        model = AutoModelForCausalLM.from_pretrained(
+            config.base_model,
+            quantization_config=bnb_config,
+            attn_implementation=attn_implementation,
+            torch_dtype=torch_dtype if not bnb_config else None,
+            device_map="auto",
+            trust_remote_code=True,
+        )
+
+        if bnb_config:
+            model = prepare_model_for_kbit_training(model)
+
+        # Setup LoRA
+        peft_config = LoraConfig(
+            r=config.lora_r,
+            lora_alpha=config.lora_alpha,
+            lora_dropout=config.lora_dropout,
+            bias="none",
+            task_type="CAUSAL_LM",
+            target_modules=config.target_modules
+        )
+
+        # Load and prepare dataset
+        job_manager.update_job(job_id, status="loading_dataset", progress=0.2)
+
+        try:
+            asyncio.create_task(
+                websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="loading_dataset",
+                    progress=0.2
+                )
+            )
+        except:
+            pass
+
+        logger.info(f"Loading dataset with config: {config.dataset.source.source_type}")
+
+        # Create appropriate loader based on source type
+        if config.dataset.source.source_type == "huggingface":
+            loader = HuggingFaceLoader(
+                repo_id=config.dataset.source.repo_id,
+                split=config.dataset.source.split,
+                token=config.hf_token
+            )
+        elif config.dataset.source.source_type == "local_file":
+            loader = LocalFileLoader(
+                file_path=config.dataset.source.file_path,
+                file_format=config.dataset.source.file_format
+            )
+        elif config.dataset.source.source_type == "upload":
+            dataset_id = config.dataset.source.dataset_id
+            if dataset_id not in uploaded_datasets:
+                raise ValueError(f"Uploaded dataset '{dataset_id}' not found")
+
+            file_content, filename = uploaded_datasets[dataset_id]
+            loader = UploadedDatasetLoader(
+                file_content=file_content,
+                filename=filename,
+                file_format=config.dataset.source.file_format
+            )
+        else:
+            raise ValueError(f"Invalid source_type: {config.dataset.source.source_type}")
+
+        # Get formatter
+        formatter = get_formatter(
+            format_type=config.dataset.format.format_type,
+            custom_templates=config.dataset.format.custom_templates,
+            tokenizer=tokenizer if config.dataset.format.format_type == 'tokenizer' else None
+        )
+
+        # Create pipeline and prepare dataset
+        pipeline = DatasetPipeline(
+            loader=loader,
+            formatter=formatter,
+            column_mapping=config.dataset.column_mapping,
+            test_size=config.dataset.test_size,
+            max_samples=config.dataset.max_samples,
+            seed=42
+        )
+
+        train_dataset, eval_dataset = pipeline.prepare()
+
+        # Setup training arguments
+        job_manager.update_job(job_id, status="training", progress=0.3)
+
+        try:
+            asyncio.create_task(
+                websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="training",
+                    progress=0.3
+                )
+            )
+        except:
+            pass
+
+        output_dir = f"./results/{job_id}"
+
+        orpo_args = ORPOConfig(
+            run_name=config.output_name,
+            learning_rate=config.learning_rate,
+            lr_scheduler_type="cosine",
+            max_length=config.max_length,
+            max_prompt_length=config.max_prompt_length,
+            max_completion_length=config.max_length - config.max_prompt_length,
+            beta=config.beta,
+            per_device_train_batch_size=config.batch_size,
+            per_device_eval_batch_size=config.batch_size,
+            gradient_accumulation_steps=config.gradient_accumulation_steps,
+            optim="paged_adamw_8bit",
+            num_train_epochs=config.num_epochs,
+            evaluation_strategy="steps",
+            eval_steps=config.eval_steps,
+            logging_steps=1,
+            warmup_ratio=config.warmup_ratio,
+            max_grad_norm=0.3,
+            report_to=["wandb"] if config.use_wandb else [],
+            output_dir=output_dir,
+            bf16=torch_dtype == torch.bfloat16,
+            fp16=torch_dtype == torch.float16,
+            save_strategy="steps",
+            save_steps=config.eval_steps,
+            save_total_limit=2,
+        )
+
+        # Create trainer with WebSocket callback
+        trainer = ORPOTrainer(
+            model=model,
+            args=orpo_args,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            peft_config=peft_config,
+            tokenizer=tokenizer,
+            callbacks=[WebSocketCallback(job_id, job_manager)]
+        )
+
+        # Train
+        logger.info("Starting training")
+        train_result = trainer.train()
+
+        # Save model
+        job_manager.update_job(job_id, status="saving", progress=0.9)
+
+        try:
+            asyncio.create_task(
+                websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="saving",
+                    progress=0.9
+                )
+            )
+        except:
+            pass
+
+        final_output_dir = f"./models/{config.output_name}"
+        trainer.save_model(final_output_dir)
+        tokenizer.save_pretrained(final_output_dir)
+
+        # Optional: merge and upload
+        if config.push_to_hub and accelerator.is_main_process:
+            job_manager.update_job(job_id, status="uploading")
+
+            try:
+                asyncio.create_task(
+                    websocket_manager.send_status_update(
+                        job_id=job_id,
+                        status="uploading",
+                        progress=0.95
+                    )
+                )
+            except:
+                pass
+
+            # Reload for merging
+            base_model_reload = AutoModelForCausalLM.from_pretrained(
+                config.base_model,
+                low_cpu_mem_usage=True,
+                torch_dtype=torch.bfloat16,
+                device_map="auto",
+            )
+
+            model_merged = PeftModel.from_pretrained(base_model_reload, final_output_dir)
+            model_merged = model_merged.merge_and_unload()
+
+            # Push to hub
+            model_merged.push_to_hub(config.output_name, token=config.hf_token)
+            tokenizer.push_to_hub(config.output_name, token=config.hf_token)
+
+        # Cleanup
+        del trainer, model
+        gc.collect()
+        torch.cuda.empty_cache()
+
+        # Mark as completed
+        job_manager.update_job(
+            job_id,
+            status="completed",
+            progress=1.0,
+            output_dir=final_output_dir
+        )
+
+        try:
+            asyncio.create_task(
+                websocket_manager.send_completion(
+                    job_id=job_id,
+                    output_dir=final_output_dir
+                )
+            )
+        except:
+            pass
+
+        logger.info(f"Training completed for job {job_id}")
+
+    except Exception as e:
+        logger.error(f"Training failed for job {job_id}: {str(e)}", exc_info=True)
+        job_manager.update_job(job_id, status="failed", error=str(e))
+
+        try:
+            asyncio.create_task(
+                websocket_manager.send_error(
+                    job_id=job_id,
+                    error=str(e)
+                )
+            )
+        except:
+            pass

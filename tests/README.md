@@ -15,6 +15,9 @@ python tests/test_tokenizer_formatter.py
 
 ### Run specific tests
 ```bash
+# Test v1.1 features (job persistence, WebSocket, validation)
+python tests/test_v1.1_features.py
+
 # Test dataset loaders
 python tests/test_dataset_loaders.py
 
@@ -32,15 +35,23 @@ python tests/test_api_endpoints.py
 
 ```
 tests/
-├── test_dataset_loaders.py       # Test HuggingFace, local, upload loaders
-├── test_tokenizer_formatter.py   # Test tokenizer-based formatting
-├── test_pipeline.py               # Test full dataset pipeline
-├── test_api_endpoints.py          # Test preview and upload endpoints
-└── fixtures/                      # Test data files
-    └── test_dataset.json          # Sample test dataset
+├── test_v1.1_features.py          # Test job persistence, WebSocket, validation (NEW)
+├── test_dataset_loaders.py        # Test HuggingFace, local, upload loaders
+├── test_tokenizer_formatter.py    # Test tokenizer-based formatting
+├── test_pipeline.py                # Test full dataset pipeline
+├── test_api_endpoints.py           # Test preview and upload endpoints
+└── fixtures/                       # Test data files
+    └── test_dataset.json           # Sample test dataset
 ```
 
 ## 🔍 Test Coverage
+
+### V1.1 Features (`test_v1.1_features.py`) NEW!
+- ✅ Job Manager (SQLite persistence, CRUD operations)
+- ✅ Metrics tracking (time-series storage)
+- ✅ WebSocket Manager (connection management, broadcasts)
+- ✅ Pre-flight Validation (8 validation checks)
+- ✅ Module imports (job_manager, websocket_manager, preflight_checks)
 
 ### Dataset Loaders (`test_dataset_loaders.py`)
 - ✅ Loading local JSON files
