@@ -34,17 +34,10 @@
 
                 <div class="spell-section">
                     <h3>🔑 API Tokens (Optional)</h3>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>HuggingFace Token</label>
-                            <input type="password" id="hf-token-preload" placeholder="For gated models (Llama, etc.)" class="magic-input">
-                            <small style="color: #888; font-size: 0.85em;">Required for gated models like Llama</small>
-                        </div>
-                        <div class="form-group">
-                            <label>W&B API Key</label>
-                            <input type="password" id="wandb-key" placeholder="For experiment tracking" class="magic-input">
-                            <small style="color: #888; font-size: 0.85em;">Optional - enables Weights & Biases logging</small>
-                        </div>
+                    <div class="form-group">
+                        <label>HuggingFace Token</label>
+                        <input type="password" id="hf-token-preload" placeholder="For gated models (Llama, etc.)" class="magic-input">
+                        <small style="color: #888; font-size: 0.85em;">Required for gated models like Llama</small>
                     </div>
                 </div>
 
@@ -374,6 +367,18 @@
                                 <input type="number" id="beta" value="0.1" min="0.01" max="1" step="0.01" class="magic-input">
                             </div>
                         </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Random Seed 🎲</label>
+                                <input type="number" id="seed" value="42" min="0" max="99999" class="magic-input">
+                                <small style="color: #888; font-size: 0.85em;">For reproducibility</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Max Gradient Norm ✂️</label>
+                                <input type="number" id="max-grad-norm" value="0.3" min="0.1" max="5.0" step="0.1" class="magic-input">
+                                <small style="color: #888; font-size: 0.85em;">Gradient clipping threshold</small>
+                            </div>
+                        </div>
 
                         <!-- Advanced Training Settings -->
                         <div class="advanced-section" style="display: none;">
@@ -394,6 +399,112 @@
                                     <small style="color: #888; font-size: 0.85em;">How often to evaluate (0-1)</small>
                                 </div>
                             </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Weight Decay</label>
+                                    <input type="number" id="weight-decay" value="0.01" min="0" max="0.5" step="0.001" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">L2 regularization strength</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>LR Scheduler Type</label>
+                                    <select id="lr-scheduler-type" class="magic-select">
+                                        <option value="cosine" selected>Cosine</option>
+                                        <option value="linear">Linear</option>
+                                        <option value="cosine_with_restarts">Cosine with Restarts</option>
+                                        <option value="polynomial">Polynomial</option>
+                                        <option value="constant">Constant</option>
+                                        <option value="constant_with_warmup">Constant with Warmup</option>
+                                    </select>
+                                    <small style="color: #888; font-size: 0.85em;">Learning rate schedule</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>Logging Steps</label>
+                                    <input type="number" id="logging-steps" value="1" min="1" max="100" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">Log metrics every N steps</small>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group" style="flex: 1;">
+                                    <label class="magic-checkbox">
+                                        <input type="checkbox" id="shuffle-dataset" checked>
+                                        <span>Shuffle Dataset 🔀</span>
+                                    </label>
+                                    <small style="color: #888; font-size: 0.85em; display: block; margin-top: 5px;">Randomize training data order</small>
+                                </div>
+                                <div class="form-group" style="flex: 1;">
+                                    <label class="magic-checkbox">
+                                        <input type="checkbox" id="gradient-checkpointing">
+                                        <span>Gradient Checkpointing 💾</span>
+                                    </label>
+                                    <small style="color: #888; font-size: 0.85em; display: block; margin-top: 5px;">Save VRAM (slower training)</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Optimizer Configuration -->
+                    <div class="spell-section">
+                        <h3>🔧 Optimizer Configuration</h3>
+                        <div class="form-group">
+                            <label>Optimizer Type</label>
+                            <select id="optimizer-type" class="magic-select">
+                                <option value="paged_adamw_8bit" selected>Paged AdamW 8-bit (Recommended - Memory Efficient)</option>
+                                <option value="paged_adamw_32bit">Paged AdamW 32-bit (More Precise, More Memory)</option>
+                                <option value="adamw_8bit">AdamW 8-bit (No Paging)</option>
+                                <option value="adamw_torch">AdamW PyTorch (Full Precision)</option>
+                                <option value="adamw_hf">AdamW HuggingFace</option>
+                                <option value="adafactor">Adafactor (Memory Efficient Alternative)</option>
+                                <option value="sgd">SGD (Stochastic Gradient Descent)</option>
+                            </select>
+                            <small style="color: #888; font-size: 0.85em;">
+                                Paged optimizers swap memory to CPU when GPU is full. 8-bit uses less memory but may be slightly less precise.
+                            </small>
+                        </div>
+
+                        <!-- Advanced Optimizer Settings -->
+                        <div class="advanced-section" style="display: none;">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Adam Beta1</label>
+                                    <input type="number" id="adam-beta1" value="0.9" min="0.8" max="0.99" step="0.01" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">First moment decay (momentum)</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>Adam Beta2</label>
+                                    <input type="number" id="adam-beta2" value="0.999" min="0.9" max="0.9999" step="0.001" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">Second moment decay (variance)</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>Adam Epsilon</label>
+                                    <input type="number" id="adam-epsilon" value="0.00000001" min="0.000000001" max="0.000001" step="0.000000001" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">Numerical stability (1e-8)</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Attention Configuration -->
+                    <div class="spell-section">
+                        <h3>⚡ Attention Implementation</h3>
+                        <div class="form-group">
+                            <label>Attention Type</label>
+                            <select id="attn-implementation" class="magic-select">
+                                <option value="auto" selected>Auto (Recommended - Smart Selection)</option>
+                                <option value="flash_attention_2">Flash Attention 2 (Fastest - Requires Ampere+ GPU)</option>
+                                <option value="sdpa">SDPA (PyTorch Scaled Dot Product)</option>
+                                <option value="eager">Eager (Standard - Most Compatible)</option>
+                            </select>
+                            <small style="color: #888; font-size: 0.85em;">
+                                <strong>Auto mode:</strong> Uses Flash Attention 2 on Ampere+ GPUs (RTX 30/40 series, A100, H100), falls back to SDPA or Eager for older GPUs.
+                            </small>
+                        </div>
+                        <div style="margin-top: 10px; padding: 10px; background: #e3f2fd; border-radius: 5px; border-left: 3px solid #2196f3;">
+                            <div style="font-size: 0.85em; color: #1565c0;">
+                                <strong>💡 Performance Guide:</strong><br>
+                                • <strong>Flash Attention 2:</strong> Up to 2-3x faster, lowest memory usage<br>
+                                • <strong>SDPA:</strong> Good balance, works on most modern GPUs<br>
+                                • <strong>Eager:</strong> Slower but most compatible, use for debugging
+                            </div>
                         </div>
                     </div>
 
@@ -407,12 +518,53 @@
                             </label>
                             <label class="magic-checkbox">
                                 <input type="checkbox" id="use-wandb" checked>
-                                <span>Enable Weights & Biases 📊</span>
+                                <span>Report to Weights & Biases 📊</span>
                             </label>
                             <label class="magic-checkbox">
                                 <input type="checkbox" id="push-hub">
                                 <span>Push to HuggingFace Hub 🤗</span>
                             </label>
+                        </div>
+
+                        <!-- W&B Configuration (shown when W&B is enabled) -->
+                        <div id="wandb-config" style="margin-top: 15px; display: none;">
+                            <div style="padding: 15px; background: #f5f3ff; border-radius: 10px; border-left: 3px solid #7c3aed;">
+                                <h4 style="margin-top: 0; color: #7c3aed; font-size: 0.95em;">📊 Weights & Biases Configuration</h4>
+
+                                <!-- W&B API Key -->
+                                <div class="form-group">
+                                    <label>W&B API Key</label>
+                                    <input type="password" id="wandb-key" placeholder="Your Weights & Biases API key" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">Get your API key from <a href="https://wandb.ai/authorize" target="_blank" style="color: #7c3aed;">wandb.ai/authorize</a></small>
+                                </div>
+
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Project Name</label>
+                                        <input type="text" id="wandb-project" placeholder="merlina-training (default)" class="magic-input">
+                                        <small style="color: #888; font-size: 0.85em;">W&B project to organize runs</small>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Run Name (Optional)</label>
+                                        <input type="text" id="wandb-run-name" placeholder="Auto-generated from settings" class="magic-input">
+                                        <small style="color: #888; font-size: 0.85em;">Leave empty for auto-naming</small>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label>Tags (comma-separated)</label>
+                                    <input type="text" id="wandb-tags" placeholder="e.g., experiment, llama3, production" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">Organize runs with tags</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>Notes</label>
+                                    <textarea id="wandb-notes" class="magic-input" rows="2" placeholder="Optional notes about this training run..."></textarea>
+                                    <small style="color: #888; font-size: 0.85em;">Describe the purpose of this run</small>
+                                </div>
+                                <div style="margin-top: 10px; padding: 10px; background: white; border-radius: 5px; font-size: 0.85em; color: #555;">
+                                    <strong>💡 Auto-naming format:</strong> <code>[model]-[lr]-[batch]-[epochs]ep-[optimizer]-[attention]</code><br>
+                                    <strong>Example:</strong> <code>llama3-8b-5e-6LR-256B-2ep-adamw8bit-flash2-4bit</code>
+                                </div>
+                            </div>
                         </div>
 
                         <!-- Advanced Toggle Button -->
@@ -430,7 +582,12 @@
 
             <!-- Active Jobs -->
             <section id="jobs-section" class="card" style="display: none;">
-                <h2>🔮 Active Spells</h2>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h2 style="margin: 0;">🔮 Active Spells</h2>
+                    <button id="clear-all-jobs-btn" class="action-button" style="background: #dc2626; color: white; padding: 8px 16px; font-size: 0.9em;">
+                        🗑️ Clear All Jobs
+                    </button>
+                </div>
                 <div id="jobs-container"></div>
             </section>
         </main>

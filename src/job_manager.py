@@ -403,6 +403,30 @@ class JobManager:
 
         return success
 
+    def clear_all_jobs(self) -> int:
+        """
+        Delete all jobs and metrics from the database.
+
+        Returns:
+            Number of jobs deleted
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # Count jobs before deletion
+            cursor.execute("SELECT COUNT(*) FROM jobs")
+            count = cursor.fetchone()[0]
+
+            # Delete all metrics
+            cursor.execute("DELETE FROM training_metrics")
+
+            # Delete all jobs
+            cursor.execute("DELETE FROM jobs")
+
+        logger.info(f"Cleared all jobs ({count} jobs deleted)")
+
+        return count
+
     def get_stats(self) -> Dict[str, Any]:
         """
         Get database statistics.

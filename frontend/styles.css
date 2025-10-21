@@ -549,3 +549,25 @@ small {
         padding: 20px;
     }
 }
+/* Delete job button */
+.delete-job-btn {
+    background: #ef4444;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-size: 1.2em;
+    transition: all 0.2s ease;
+    margin-left: 10px;
+}
+
+.delete-job-btn:hover {
+    background: #dc2626;
+    transform: scale(1.1);
+}
+
+.delete-job-btn:active {
+    transform: scale(0.95);
+}
+

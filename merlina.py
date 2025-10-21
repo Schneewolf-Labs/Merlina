@@ -203,7 +203,7 @@ class TrainingConfig(BaseModel):
     gradient_accumulation_steps: int = Field(16, ge=1, le=128)
     max_length: int = Field(2048, ge=512, le=8192)
     max_prompt_length: int = Field(1024, ge=256, le=4096)
-    
+
     # ORPO specific
     beta: float = Field(0.1, ge=0.01, le=1.0)
 
@@ -213,6 +213,10 @@ class TrainingConfig(BaseModel):
         description="Dataset configuration"
     )
 
+    # Priority 1 settings (main UI)
+    seed: int = Field(42, ge=0, le=99999, description="Random seed for reproducibility")
+    max_grad_norm: float = Field(0.3, ge=0.1, le=5.0, description="Gradient clipping threshold")
+
     # Optional settings
     warmup_ratio: float = Field(0.05, ge=0.0, le=0.5)
     eval_steps: float = Field(0.2, ge=0.1, le=1.0)
@@ -221,6 +225,34 @@ class TrainingConfig(BaseModel):
     push_to_hub: bool = Field(False, description="Push to HuggingFace Hub")
     hf_token: Optional[str] = Field(None, description="HuggingFace token for pushing")
     wandb_key: Optional[str] = Field(None, description="Weights & Biases API key")
+
+    # Priority 2 settings (advanced)
+    shuffle_dataset: bool = Field(True, description="Shuffle training data")
+    weight_decay: float = Field(0.01, ge=0.0, le=0.5, description="L2 regularization strength")
+    lr_scheduler_type: str = Field("cosine", description="Learning rate scheduler type")
+    gradient_checkpointing: bool = Field(False, description="Enable gradient checkpointing to save VRAM")
+    logging_steps: int = Field(1, ge=1, le=100, description="Log metrics every N steps")
+
+    # Optimizer settings
+    optimizer_type: str = Field(
+        "paged_adamw_8bit",
+        description="Optimizer type (paged_adamw_8bit, paged_adamw_32bit, adamw_8bit, adamw_torch, adamw_hf, adafactor, sgd)"
+    )
+    adam_beta1: float = Field(0.9, ge=0.8, le=0.99, description="Adam beta1 parameter (first moment decay)")
+    adam_beta2: float = Field(0.999, ge=0.9, le=0.9999, description="Adam beta2 parameter (second moment decay)")
+    adam_epsilon: float = Field(1e-8, ge=1e-9, le=1e-6, description="Adam epsilon for numerical stability")
+
+    # Attention settings
+    attn_implementation: str = Field(
+        "auto",
+        description="Attention implementation (auto, flash_attention_2, sdpa, eager)"
+    )
+
+    # Weights & Biases settings
+    wandb_project: Optional[str] = Field(None, description="W&B project name (default: 'merlina-training')")
+    wandb_run_name: Optional[str] = Field(None, description="W&B run name (auto-generated if not provided)")
+    wandb_tags: Optional[list[str]] = Field(None, description="W&B tags for organizing runs")
+    wandb_notes: Optional[str] = Field(None, description="Notes about this training run")
 
 class JobResponse(BaseModel):
     job_id: str
@@ -629,6 +661,31 @@ async def get_job_metrics(job_id: str):
         "job_id": job_id,
         "metrics": metrics,
         "count": len(metrics)
+    }
+
+
+@app.delete("/jobs/{job_id}")
+async def delete_job(job_id: str):
+    """Delete a specific job and its metrics"""
+    success = job_manager.delete_job(job_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return {
+        "status": "success",
+        "message": f"Job {job_id} deleted successfully",
+        "job_id": job_id
+    }
+
+
+@app.delete("/jobs")
+async def clear_all_jobs():
+    """Delete all jobs and metrics"""
+    count = job_manager.clear_all_jobs()
+    return {
+        "status": "success",
+        "message": f"Cleared all jobs ({count} jobs deleted)",
+        "deleted_count": count
     }
 
 

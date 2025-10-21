@@ -104,6 +104,23 @@ document.addEventListener('DOMContentLoaded', () => {
             advancedVisible ? '⚙️ Hide Advanced Settings' : '⚙️ Show Advanced Settings';
     });
 
+    // W&B configuration toggle
+    const wandbConfig = document.getElementById('wandb-config');
+    useWandb.addEventListener('change', (e) => {
+        wandbConfig.style.display = e.target.checked ? 'block' : 'none';
+    });
+
+    // Initialize W&B config visibility based on checkbox state
+    if (useWandb.checked) {
+        wandbConfig.style.display = 'block';
+    }
+
+    // Clear all jobs button handler
+    const clearAllJobsBtn = document.getElementById('clear-all-jobs-btn');
+    if (clearAllJobsBtn) {
+        clearAllJobsBtn.addEventListener('click', clearAllJobs);
+    }
+
     // Close modal when clicking outside
     window.addEventListener('click', (e) => {
         if (e.target === modal) closeJobModal();
@@ -553,9 +570,29 @@ async function handleSubmit(e) {
         max_prompt_length: parseInt(document.getElementById('max-prompt-length').value),
         beta: parseFloat(document.getElementById('beta').value),
 
+        // Priority 1 settings
+        seed: parseInt(document.getElementById('seed').value),
+        max_grad_norm: parseFloat(document.getElementById('max-grad-norm').value),
+
         // Advanced training settings
         warmup_ratio: parseFloat(document.getElementById('warmup-ratio').value),
         eval_steps: parseFloat(document.getElementById('eval-steps').value),
+
+        // Priority 2 advanced settings
+        shuffle_dataset: document.getElementById('shuffle-dataset').checked,
+        weight_decay: parseFloat(document.getElementById('weight-decay').value),
+        lr_scheduler_type: document.getElementById('lr-scheduler-type').value,
+        gradient_checkpointing: document.getElementById('gradient-checkpointing').checked,
+        logging_steps: parseInt(document.getElementById('logging-steps').value),
+
+        // Optimizer settings
+        optimizer_type: document.getElementById('optimizer-type').value,
+        adam_beta1: parseFloat(document.getElementById('adam-beta1').value),
+        adam_beta2: parseFloat(document.getElementById('adam-beta2').value),
+        adam_epsilon: parseFloat(document.getElementById('adam-epsilon').value),
+
+        // Attention settings
+        attn_implementation: document.getElementById('attn-implementation').value,
 
         // Options
         use_4bit: document.getElementById('use-4bit').checked,
@@ -564,7 +601,15 @@ async function handleSubmit(e) {
 
         // API Keys
         wandb_key: document.getElementById('wandb-key').value || null,
-        hf_token: document.getElementById('hf-token-preload').value || null
+        hf_token: document.getElementById('hf-token-preload').value || null,
+
+        // W&B settings
+        wandb_project: document.getElementById('wandb-project').value || null,
+        wandb_run_name: document.getElementById('wandb-run-name').value || null,
+        wandb_tags: document.getElementById('wandb-tags').value ?
+            document.getElementById('wandb-tags').value.split(',').map(tag => tag.trim()).filter(tag => tag) :
+            null,
+        wandb_notes: document.getElementById('wandb-notes').value || null
     };
     
     // Disable form
@@ -640,22 +685,26 @@ async function loadJobs() {
 function createJobCard(jobId, job) {
     const card = document.createElement('div');
     card.className = 'job-card';
-    card.onclick = () => showJobDetails(jobId);
-    
+
     const statusClass = `status-${job.status}`;
     const progressPercent = Math.round((job.progress || 0) * 100);
-    
+
     card.innerHTML = `
         <div class="job-card-header">
-            <h4>${activeJobs[jobId]?.name || jobId}</h4>
-            <span class="job-status-badge ${statusClass}">${job.status}</span>
+            <div style="flex: 1; cursor: pointer;" onclick="event.stopPropagation(); showJobDetails('${jobId}')">
+                <h4>${activeJobs[jobId]?.name || jobId}</h4>
+                <span class="job-status-badge ${statusClass}">${job.status}</span>
+            </div>
+            <button class="delete-job-btn" onclick="event.stopPropagation(); deleteJob('${jobId}')" title="Delete job">
+                🗑️
+            </button>
         </div>
-        <div class="progress-bar">
+        <div class="progress-bar" style="cursor: pointer;" onclick="showJobDetails('${jobId}')">
             <div class="progress-fill" style="width: ${progressPercent}%"></div>
             <span class="progress-text">${progressPercent}%</span>
         </div>
     `;
-    
+
     return card;
 }
 
@@ -735,7 +784,7 @@ function closeJobModal() {
 // Stop training (placeholder - backend doesn't implement this yet)
 async function stopTraining() {
     if (!currentJobId) return;
-    
+
     if (confirm('Are you sure you want to stop this training?')) {
         try {
             // In a real implementation, you'd call an endpoint to stop the job
@@ -743,6 +792,70 @@ async function stopTraining() {
         } catch (error) {
             showToast(`❌ Failed to stop training: ${error.message}`, 'error');
         }
+    }
+}
+
+// Delete a specific job
+async function deleteJob(jobId) {
+    if (!confirm(`Are you sure you want to delete job ${jobId}?`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_URL}/jobs/${jobId}`, {
+            method: 'DELETE'
+        });
+
+        if (!response.ok) throw new Error('Failed to delete job');
+
+        const data = await response.json();
+        showToast(`✅ ${data.message}`, 'success');
+
+        // Remove from active jobs
+        delete activeJobs[jobId];
+
+        // Close modal if this job was open
+        if (currentJobId === jobId) {
+            closeJobModal();
+        }
+
+        // Reload jobs list
+        loadJobs();
+
+    } catch (error) {
+        console.error('Failed to delete job:', error);
+        showToast(`❌ Failed to delete job: ${error.message}`, 'error');
+    }
+}
+
+// Clear all jobs
+async function clearAllJobs() {
+    if (!confirm('⚠️ Are you sure you want to delete ALL jobs? This action cannot be undone!')) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_URL}/jobs`, {
+            method: 'DELETE'
+        });
+
+        if (!response.ok) throw new Error('Failed to clear jobs');
+
+        const data = await response.json();
+        showToast(`✅ ${data.message}`, 'success');
+
+        // Clear active jobs
+        Object.keys(activeJobs).forEach(key => delete activeJobs[key]);
+
+        // Close modal
+        closeJobModal();
+
+        // Reload jobs list (will hide section since no jobs)
+        loadJobs();
+
+    } catch (error) {
+        console.error('Failed to clear jobs:', error);
+        showToast(`❌ Failed to clear jobs: ${error.message}`, 'error');
     }
 }
 

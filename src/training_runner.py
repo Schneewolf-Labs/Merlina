@@ -34,6 +34,73 @@ from src.websocket_manager import websocket_manager
 logger = logging.getLogger(__name__)
 
 
+def generate_wandb_run_name(config: Any) -> str:
+    """
+    Generate a descriptive W&B run name from training configuration.
+
+    Format: [model_name]-[lr]-[batch]-[epochs]ep-[optimizer]-[attention]
+    Example: llama3-8b-5e-6LR-256B-2ep-adamw8bit-flash2
+
+    Args:
+        config: Training configuration object
+
+    Returns:
+        Generated run name string
+    """
+    # Extract model name from path (e.g., "meta-llama/Llama-3-8B" -> "llama3-8b")
+    model_name = config.base_model.split('/')[-1].lower()
+    # Simplify common model names
+    model_name = model_name.replace('-instruct', '').replace('-base', '').replace('meta-', '')
+
+    # Format learning rate (e.g., 0.000005 -> "5e-6")
+    lr = config.learning_rate
+    if lr >= 1e-3:
+        lr_str = f"{lr:.0e}".replace('e-0', 'e-')
+    else:
+        lr_str = f"{lr:.0e}".replace('e-0', 'e-')
+
+    # Calculate effective batch size
+    effective_batch = config.batch_size * config.gradient_accumulation_steps
+
+    # Simplify optimizer name
+    opt = config.optimizer_type.replace('paged_', '').replace('_', '')
+
+    # Simplify attention
+    attn_map = {
+        'flash_attention_2': 'flash2',
+        'sdpa': 'sdpa',
+        'eager': 'eager',
+        'auto': 'auto'
+    }
+    attn = attn_map.get(config.attn_implementation, config.attn_implementation)
+
+    # Build run name
+    parts = [
+        model_name,
+        f"{lr_str}LR",
+        f"{effective_batch}B",
+        f"{config.num_epochs}ep",
+        opt,
+        attn
+    ]
+
+    run_name = "-".join(parts)
+
+    # Add optional suffix for special settings
+    suffixes = []
+    if config.use_4bit:
+        suffixes.append("4bit")
+    if config.gradient_checkpointing:
+        suffixes.append("gc")
+    if config.beta != 0.1:  # Non-default ORPO beta
+        suffixes.append(f"beta{config.beta}")
+
+    if suffixes:
+        run_name += f"-{'-'.join(suffixes)}"
+
+    return run_name
+
+
 def send_websocket_update(coro, loop=None):
     """
     Helper to properly schedule WebSocket updates from sync context.
@@ -159,21 +226,86 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
         # Setup accelerator
         accelerator = Accelerator()
 
-        # Login to wandb if configured
-        if config.use_wandb and config.wandb_key:
-            wandb.login(key=config.wandb_key)
+        # Configure Weights & Biases
+        wandb_run_name = None
+        wandb_project = None
+
+        if config.use_wandb:
+            # Login to wandb if key provided
+            if config.wandb_key:
+                wandb.login(key=config.wandb_key)
+
+            # Generate W&B run name if not provided
+            wandb_run_name = config.wandb_run_name
+            if not wandb_run_name:
+                wandb_run_name = generate_wandb_run_name(config)
+                logger.info(f"Auto-generated W&B run name: {wandb_run_name}")
+
+            # Set W&B project name (default if not specified)
+            wandb_project = config.wandb_project or "merlina-training"
+            logger.info(f"W&B Project: {wandb_project}, Run: {wandb_run_name}")
+
+            # Initialize wandb with project, name, and tags
+            wandb_config = {
+                "model": config.base_model,
+                "learning_rate": config.learning_rate,
+                "batch_size": config.batch_size,
+                "effective_batch_size": config.batch_size * config.gradient_accumulation_steps,
+                "epochs": config.num_epochs,
+                "optimizer": config.optimizer_type,
+                "attention": config.attn_implementation,
+                "lora_r": config.lora_r,
+                "lora_alpha": config.lora_alpha,
+                "beta": config.beta,
+                "seed": config.seed
+            }
+
+            wandb.init(
+                project=wandb_project,
+                name=wandb_run_name,
+                tags=config.wandb_tags or [],
+                notes=config.wandb_notes,
+                config=wandb_config
+            )
 
         # Set HF token if provided
         if config.hf_token:
             os.environ['HF_TOKEN'] = config.hf_token
 
-        # Determine dtype and attention
+        # Determine dtype based on GPU capability
         if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
             torch_dtype = torch.bfloat16
-            attn_implementation = "flash_attention_2"
         else:
             torch_dtype = torch.float16
-            attn_implementation = "eager"
+
+        # Determine attention implementation with smart fallback
+        attn_implementation = config.attn_implementation
+
+        if attn_implementation == "auto":
+            # Auto-select best available implementation
+            if torch.cuda.is_available():
+                compute_cap = torch.cuda.get_device_capability()[0]
+
+                # Try flash_attention_2 for Ampere+ GPUs (compute capability >= 8)
+                if compute_cap >= 8:
+                    try:
+                        import flash_attn
+                        attn_implementation = "flash_attention_2"
+                        logger.info("Auto-selected flash_attention_2 (Ampere+ GPU detected)")
+                    except ImportError:
+                        logger.warning("flash_attn not available, trying sdpa")
+                        attn_implementation = "sdpa"
+                else:
+                    # For older GPUs, use sdpa or eager
+                    attn_implementation = "sdpa"
+                    logger.info(f"Auto-selected sdpa (GPU compute capability {compute_cap} < 8)")
+            else:
+                # CPU fallback
+                attn_implementation = "eager"
+                logger.info("Auto-selected eager (CPU mode)")
+        else:
+            # User explicitly selected an implementation
+            logger.info(f"Using user-selected attention: {attn_implementation}")
 
         logger.info(f"Using {torch_dtype} with {attn_implementation}")
 
@@ -283,7 +415,8 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
             column_mapping=config.dataset.column_mapping,
             test_size=config.dataset.test_size,
             max_samples=config.dataset.max_samples,
-            seed=42
+            seed=config.seed,  # Use config seed instead of hardcoded 42
+            shuffle=config.shuffle_dataset  # Use config shuffle setting
         )
 
         train_dataset, eval_dataset = pipeline.prepare()
@@ -303,9 +436,9 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
         output_dir = f"./results/{job_id}"
 
         orpo_args = ORPOConfig(
-            run_name=config.output_name,
+            run_name=wandb_run_name if config.use_wandb else config.output_name,
             learning_rate=config.learning_rate,
-            lr_scheduler_type="cosine",
+            lr_scheduler_type=config.lr_scheduler_type,  # Use config scheduler type
             max_length=config.max_length,
             max_prompt_length=config.max_prompt_length,
             max_completion_length=config.max_length - config.max_prompt_length,
@@ -313,13 +446,17 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
             per_device_train_batch_size=config.batch_size,
             per_device_eval_batch_size=config.batch_size,
             gradient_accumulation_steps=config.gradient_accumulation_steps,
-            optim="paged_adamw_8bit",
+            optim=config.optimizer_type,  # Use config optimizer type
             num_train_epochs=config.num_epochs,
             eval_strategy="steps",
             eval_steps=config.eval_steps,
-            logging_steps=1,
+            logging_steps=config.logging_steps,  # Use config logging steps
             warmup_ratio=config.warmup_ratio,
-            max_grad_norm=0.3,
+            max_grad_norm=config.max_grad_norm,  # Use config max grad norm
+            weight_decay=config.weight_decay,  # Use config weight decay
+            adam_beta1=config.adam_beta1,  # Use config adam beta1
+            adam_beta2=config.adam_beta2,  # Use config adam beta2
+            adam_epsilon=config.adam_epsilon,  # Use config adam epsilon
             report_to=["wandb"] if config.use_wandb else [],
             output_dir=output_dir,
             bf16=torch_dtype == torch.bfloat16,
@@ -327,6 +464,8 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
             save_strategy="steps",
             save_steps=config.eval_steps,
             save_total_limit=2,
+            seed=config.seed,  # Set seed for training
+            gradient_checkpointing=config.gradient_checkpointing,  # Enable gradient checkpointing if requested
         )
 
         # Create trainer with WebSocket callback
