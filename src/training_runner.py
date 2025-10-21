@@ -70,6 +70,11 @@ class WebSocketCallback(TrainerCallback):
             # Update job with latest metrics
             update_data = {}
 
+            # Initialize gpu_memory at the start to avoid UnboundLocalError
+            gpu_memory = None
+            if torch.cuda.is_available():
+                gpu_memory = torch.cuda.max_memory_allocated() / (1024**3)
+
             if "loss" in logs:
                 update_data["loss"] = float(logs["loss"])
 
@@ -94,10 +99,6 @@ class WebSocketCallback(TrainerCallback):
 
                 # Add to metrics table
                 if state.global_step and "loss" in logs:
-                    gpu_memory = None
-                    if torch.cuda.is_available():
-                        gpu_memory = torch.cuda.max_memory_allocated() / (1024**3)
-
                     self.job_manager.add_metric(
                         self.job_id,
                         step=state.global_step,
