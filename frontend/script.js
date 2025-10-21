@@ -16,7 +16,6 @@ const toast = document.getElementById('toast');
 
 // Form Elements
 const pushHub = document.getElementById('push-hub');
-const hfTokenGroup = document.getElementById('hf-token-group');
 const useWandb = document.getElementById('use-wandb');
 
 // Dataset Elements
@@ -39,11 +38,6 @@ document.addEventListener('DOMContentLoaded', () => {
     form.addEventListener('submit', handleSubmit);
     closeModal.addEventListener('click', () => closeJobModal());
     document.getElementById('stop-button').addEventListener('click', stopTraining);
-
-    // Show/hide HF token field based on push to hub
-    pushHub.addEventListener('change', (e) => {
-        hfTokenGroup.style.display = e.target.checked ? 'block' : 'none';
-    });
 
     // Dataset source type change
     datasetSourceType.addEventListener('change', (e) => {
@@ -74,6 +68,16 @@ document.addEventListener('DOMContentLoaded', () => {
     // Preview dataset buttons
     previewButton.addEventListener('click', handleDatasetPreview);
     previewFormattedButton.addEventListener('click', handleFormattedPreview);
+
+    // Model preload button
+    const preloadModelButton = document.getElementById('preload-model-button');
+    console.log('Preload button element:', preloadModelButton);
+    if (preloadModelButton) {
+        preloadModelButton.addEventListener('click', handleModelPreload);
+        console.log('Preload button event listener attached');
+    } else {
+        console.error('Preload button not found!');
+    }
 
     // Advanced settings toggle
     const toggleAdvanced = document.getElementById('toggle-advanced');
@@ -140,6 +144,70 @@ async function handleDatasetUpload() {
     } finally {
         uploadButton.disabled = false;
         uploadButton.textContent = '📤 Upload Dataset';
+    }
+}
+
+// Handle model preload
+async function handleModelPreload() {
+    console.log('handleModelPreload called');
+    const baseModel = document.getElementById('base-model').value.trim();
+    const hfToken = document.getElementById('hf-token-preload').value.trim();
+    const preloadButton = document.getElementById('preload-model-button');
+    const modelStatus = document.getElementById('model-status');
+    const modelInfo = document.getElementById('model-info');
+
+    console.log('Base model:', baseModel);
+    console.log('HF token:', hfToken ? '[PRESENT]' : '[EMPTY]');
+
+    if (!baseModel) {
+        showToast('⚠️ Please enter a base model name', 'error');
+        return;
+    }
+
+    try {
+        preloadButton.disabled = true;
+        preloadButton.textContent = '⏳ Loading model tokenizer...';
+        modelStatus.style.display = 'none';
+
+        const response = await fetch(`${API_URL}/model/preload`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                model_name: baseModel,
+                hf_token: hfToken || null
+            })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to preload model');
+        }
+
+        const data = await response.json();
+
+        // Display model info
+        modelInfo.innerHTML = `
+            <strong>${data.model_name}</strong><br/>
+            Vocab Size: ${data.vocab_size.toLocaleString()}<br/>
+            Max Length: ${data.model_max_length.toLocaleString()}<br/>
+            Chat Template: ${data.has_chat_template ? '✓ Detected' : '✗ Not found'}<br/>
+            ${data.has_chat_template ? '<span style="color: var(--primary-purple);">💡 You can now use "Tokenizer" format for accurate preview!</span>' : ''}
+        `;
+        modelStatus.style.display = 'block';
+
+        showToast(`✅ Model tokenizer loaded successfully!`, 'success');
+
+    } catch (error) {
+        showToast(`❌ Failed to load model: ${error.message}`, 'error');
+        modelInfo.innerHTML = `<span style="color: var(--danger);">${error.message}</span>`;
+        modelStatus.querySelector('div').style.background = '#ffebee';
+        modelStatus.querySelector('div').style.borderColor = 'var(--danger)';
+        modelStatus.querySelector('div div:first-child').textContent = '✗ Error';
+        modelStatus.querySelector('div div:first-child').style.color = 'var(--danger)';
+        modelStatus.style.display = 'block';
+    } finally {
+        preloadButton.disabled = false;
+        preloadButton.textContent = '🔮 Validate & Preload Model';
     }
 }
 
@@ -216,6 +284,7 @@ async function handleFormattedPreview() {
         // Display format type
         const formatType = datasetConfig.format.format_type;
         const formatNames = {
+            'tokenizer': 'Tokenizer (Model Native)',
             'chatml': 'ChatML',
             'llama3': 'Llama 3',
             'mistral': 'Mistral Instruct',
@@ -281,6 +350,12 @@ function getDatasetConfig() {
         config.max_samples = parseInt(maxSamples);
     }
 
+    // Add model name for tokenizer format preview
+    const baseModel = document.getElementById('base-model').value.trim();
+    if (baseModel) {
+        config.model_name = baseModel;
+    }
+
     return config;
 }
 
@@ -335,7 +410,7 @@ async function handleSubmit(e) {
 
         // API Keys
         wandb_key: document.getElementById('wandb-key').value || null,
-        hf_token: document.getElementById('hf-token').value || null
+        hf_token: document.getElementById('hf-token-preload').value || null
     };
     
     // Disable form

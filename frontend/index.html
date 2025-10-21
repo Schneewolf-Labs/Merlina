@@ -19,9 +19,52 @@
 
         <!-- Main Content -->
         <main>
-            <!-- Dataset Configuration -->
+            <!-- Model Selection (STEP 1) -->
+            <section id="model-section" class="card">
+                <h2>🎯 Step 1: Select Your Base Model</h2>
+
+                <div class="spell-section">
+                    <h3>🤖 Model Configuration</h3>
+                    <div class="form-group">
+                        <label>📚 Base Model (HuggingFace Tag)</label>
+                        <input type="text" id="base-model" placeholder="meta-llama/Meta-Llama-3-8B-Instruct" class="magic-input" required>
+                        <small style="color: #888; font-size: 0.85em;">Examples: meta-llama/Llama-3.2-3B-Instruct, mistralai/Mistral-7B-Instruct-v0.3, Qwen/Qwen2.5-7B-Instruct</small>
+                    </div>
+                </div>
+
+                <div class="spell-section">
+                    <h3>🔑 API Tokens (Optional)</h3>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>HuggingFace Token</label>
+                            <input type="password" id="hf-token-preload" placeholder="For gated models (Llama, etc.)" class="magic-input">
+                            <small style="color: #888; font-size: 0.85em;">Required for gated models like Llama</small>
+                        </div>
+                        <div class="form-group">
+                            <label>W&B API Key</label>
+                            <input type="password" id="wandb-key" placeholder="For experiment tracking" class="magic-input">
+                            <small style="color: #888; font-size: 0.85em;">Optional - enables Weights & Biases logging</small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Preload Button and Status -->
+                <div class="spell-section">
+                    <button type="button" id="preload-model-button" class="action-button" style="width: 100%; background: var(--primary-purple); color: white; font-weight: bold; padding: 15px;">
+                        🔮 Validate & Preload Model
+                    </button>
+                    <div id="model-status" style="margin-top: 15px; display: none;">
+                        <div style="padding: 15px; background: #e8f5e9; border-radius: 10px; border: 1px solid #4caf50;">
+                            <div style="font-weight: bold; color: #2e7d32; margin-bottom: 5px;">✓ Model Ready</div>
+                            <div id="model-info" style="font-size: 0.9em; color: #555;"></div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Dataset Configuration (STEP 2) -->
             <section id="dataset-section" class="card">
-                <h2>📚 Choose Your Dataset</h2>
+                <h2>📚 Step 2: Configure Your Dataset</h2>
 
                 <!-- Dataset Source Selection -->
                 <div class="spell-section">
@@ -85,7 +128,8 @@
                     <div class="form-group">
                         <label>Format Type</label>
                         <select id="dataset-format-type" class="magic-select">
-                            <option value="chatml">ChatML (Default)</option>
+                            <option value="tokenizer">Tokenizer (Recommended) - Uses model's native chat template</option>
+                            <option value="chatml">ChatML</option>
                             <option value="llama3">Llama 3</option>
                             <option value="mistral">Mistral Instruct</option>
                             <option value="custom">Custom Template</option>
@@ -174,20 +218,15 @@
                 </div>
             </section>
 
-            <!-- Training Configuration -->
+            <!-- Training Configuration (STEP 3) -->
             <section id="config-section" class="card">
-                <h2>✨ Cast Your Training Spell</h2>
+                <h2>✨ Step 3: Configure Training Parameters</h2>
                 <form id="training-form">
-                    <!-- Model Selection -->
-                    <div class="form-group">
-                        <label>📚 Base Model (HuggingFace Tag)</label>
-                        <input type="text" id="base-model" placeholder="meta-llama/Meta-Llama-3-8B-Instruct" class="magic-input" required>
-                        <small style="color: #888; font-size: 0.85em;">Examples: meta-llama/Llama-3.2-3B-Instruct, mistralai/Mistral-7B-Instruct-v0.3, Qwen/Qwen2.5-7B-Instruct</small>
-                    </div>
-
+                    <!-- Output Name -->
                     <div class="form-group">
                         <label>🏷️ Output Model Name</label>
                         <input type="text" id="output-name" placeholder="My-Magical-Model" class="magic-input" required>
+                        <small style="color: #888; font-size: 0.85em;">Name for your fine-tuned model</small>
                     </div>
 
                     <!-- LoRA Configuration -->
@@ -294,19 +333,6 @@
                         <button type="button" id="toggle-advanced" class="toggle-advanced-btn">
                             <span>⚙️ Show Advanced Settings</span>
                         </button>
-                    </div>
-
-                    <!-- API Keys -->
-                    <div class="spell-section" id="api-keys">
-                        <h3>🔑 Secret Ingredients</h3>
-                        <div class="form-group">
-                            <label>W&B API Key (optional)</label>
-                            <input type="password" id="wandb-key" placeholder="Your W&B key" class="magic-input">
-                        </div>
-                        <div class="form-group" id="hf-token-group" style="display: none;">
-                            <label>HuggingFace Token</label>
-                            <input type="password" id="hf-token" placeholder="Your HF token" class="magic-input">
-                        </div>
                     </div>
 
                     <button type="submit" class="cast-button">

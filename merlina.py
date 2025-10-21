@@ -70,6 +70,9 @@ job_manager = JobManager(db_path="./data/jobs.db")
 # Global storage for uploaded datasets (still in-memory, could be persisted later)
 uploaded_datasets = {}  # dataset_id -> bytes content
 
+# Global cache for preloaded tokenizers (for preview functionality)
+tokenizer_cache = {}  # model_name -> tokenizer instance
+
 # Keep backwards compatibility - jobs dict now proxies to job_manager
 class JobsProxy:
     """Proxy dict-like access to job_manager for backwards compatibility"""
@@ -158,6 +161,9 @@ class DatasetConfig(BaseModel):
         default=DatasetFormat(format_type="chatml"),
         description="Dataset format configuration"
     )
+
+    # Optional: model name for tokenizer-based formatting in preview
+    model_name: Optional[str] = Field(None, description="Model name (required for tokenizer format preview)")
 
     # Column mapping (if dataset uses different column names)
     column_mapping: Optional[dict] = Field(
@@ -761,16 +767,31 @@ async def preview_formatted_dataset(config: DatasetConfig):
             raise HTTPException(status_code=400, detail=f"Invalid source_type: {config.source.source_type}")
 
         # Get formatter
-        # For tokenizer format, we can't preview without a model, so use chatml as default
         formatter_type = config.format.format_type
-        if formatter_type == 'tokenizer':
-            logger.warning("Cannot preview with 'tokenizer' format without loading the model. Using 'chatml' for preview.")
-            formatter_type = 'chatml'
 
-        formatter = get_formatter(
-            format_type=formatter_type,
-            custom_templates=config.format.custom_templates
-        )
+        # For tokenizer format, check if we have a cached tokenizer
+        if formatter_type == 'tokenizer':
+            if config.model_name and config.model_name in tokenizer_cache:
+                # Use the cached tokenizer
+                logger.info(f"Using cached tokenizer for preview: {config.model_name}")
+                formatter = get_formatter(
+                    format_type='tokenizer',
+                    tokenizer=tokenizer_cache[config.model_name]
+                )
+            else:
+                # Fall back to chatml
+                logger.warning("Cannot preview with 'tokenizer' format without preloading the model. Using 'chatml' for preview.")
+                logger.info("Tip: Use the 'Validate & Preload Model' button to enable tokenizer format preview.")
+                formatter_type = 'chatml'
+                formatter = get_formatter(
+                    format_type=formatter_type,
+                    custom_templates=config.format.custom_templates
+                )
+        else:
+            formatter = get_formatter(
+                format_type=formatter_type,
+                custom_templates=config.format.custom_templates
+            )
 
         # Create pipeline
         pipeline = DatasetPipeline(
@@ -850,6 +871,74 @@ async def list_uploaded_datasets():
             }
             for dataset_id, (content, filename) in uploaded_datasets.items()
         ]
+    }
+
+
+# ===== Model Preload Endpoints =====
+
+class ModelPreloadRequest(BaseModel):
+    """Request to preload a model's tokenizer"""
+    model_name: str = Field(..., description="HuggingFace model ID")
+    hf_token: Optional[str] = Field(None, description="HuggingFace API token (for gated models)")
+
+
+@app.post("/model/preload")
+async def preload_model_tokenizer(request: ModelPreloadRequest):
+    """
+    Preload a model's tokenizer for dataset preview.
+    This downloads the model files and caches the tokenizer for fast preview.
+    """
+    try:
+        model_name = request.model_name
+
+        # Check if already cached
+        if model_name in tokenizer_cache:
+            tokenizer = tokenizer_cache[model_name]
+            logger.info(f"Using cached tokenizer for {model_name}")
+        else:
+            logger.info(f"Loading tokenizer for {model_name}...")
+
+            # Set HF token if provided
+            if request.hf_token:
+                os.environ["HF_TOKEN"] = request.hf_token
+
+            # Load tokenizer (this will download model files if needed)
+            tokenizer = AutoTokenizer.from_pretrained(
+                model_name,
+                trust_remote_code=True,
+                token=request.hf_token
+            )
+
+            # Cache the tokenizer
+            tokenizer_cache[model_name] = tokenizer
+            logger.info(f"Tokenizer loaded and cached for {model_name}")
+
+        # Extract useful info about the tokenizer
+        has_chat_template = hasattr(tokenizer, 'chat_template') and tokenizer.chat_template is not None
+
+        return {
+            "status": "success",
+            "model_name": model_name,
+            "vocab_size": tokenizer.vocab_size,
+            "model_max_length": tokenizer.model_max_length,
+            "has_chat_template": has_chat_template,
+            "chat_template_preview": str(tokenizer.chat_template)[:200] + "..." if has_chat_template else None,
+            "pad_token": tokenizer.pad_token,
+            "eos_token": tokenizer.eos_token,
+            "bos_token": tokenizer.bos_token,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to preload model tokenizer: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to load tokenizer: {str(e)}")
+
+
+@app.get("/model/cached")
+async def list_cached_models():
+    """List currently cached model tokenizers"""
+    return {
+        "cached_models": list(tokenizer_cache.keys()),
+        "count": len(tokenizer_cache)
     }
 
 
