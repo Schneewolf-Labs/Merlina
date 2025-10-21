@@ -137,12 +137,18 @@ class DatasetSource(BaseModel):
 
 class DatasetFormat(BaseModel):
     """Configuration for dataset formatting"""
-    format_type: str = Field("chatml", description="Format type: chatml, llama3, mistral, tokenizer, custom")
+    format_type: str = Field("chatml", description="Format type: chatml, llama3, mistral, qwen3, tokenizer, custom")
 
     # For custom format
     custom_templates: Optional[dict] = Field(
         None,
         description="Custom templates (required if format_type is 'custom')"
+    )
+
+    # For qwen3 format
+    enable_thinking: Optional[bool] = Field(
+        True,
+        description="Enable thinking mode for Qwen3 format (default: True)"
     )
 
 
@@ -344,7 +350,8 @@ def _old_run_training_deprecated(job_id: str, config: TrainingConfig):
         formatter = get_formatter(
             format_type=config.dataset.format.format_type,
             custom_templates=config.dataset.format.custom_templates,
-            tokenizer=tokenizer if config.dataset.format.format_type == 'tokenizer' else None
+            tokenizer=tokenizer if config.dataset.format.format_type == 'tokenizer' else None,
+            enable_thinking=config.dataset.format.enable_thinking
         )
 
         # Create pipeline and prepare dataset
@@ -711,7 +718,8 @@ async def preview_dataset(config: DatasetConfig):
 
         formatter = get_formatter(
             format_type=formatter_type,
-            custom_templates=config.format.custom_templates
+            custom_templates=config.format.custom_templates,
+            enable_thinking=config.format.enable_thinking
         )
 
         # Create pipeline
@@ -785,12 +793,14 @@ async def preview_formatted_dataset(config: DatasetConfig):
                 formatter_type = 'chatml'
                 formatter = get_formatter(
                     format_type=formatter_type,
-                    custom_templates=config.format.custom_templates
+                    custom_templates=config.format.custom_templates,
+                    enable_thinking=config.format.enable_thinking
                 )
         else:
             formatter = get_formatter(
                 format_type=formatter_type,
-                custom_templates=config.format.custom_templates
+                custom_templates=config.format.custom_templates,
+                enable_thinking=config.format.enable_thinking
             )
 
         # Create pipeline
@@ -813,6 +823,61 @@ async def preview_formatted_dataset(config: DatasetConfig):
 
     except Exception as e:
         logger.error(f"Dataset preview failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/dataset/columns")
+async def get_dataset_columns(config: DatasetConfig):
+    """
+    Get column names and sample data from dataset for mapping.
+    Returns available columns and a few sample rows.
+    """
+    try:
+        # Create loader
+        if config.source.source_type == "huggingface":
+            loader = HuggingFaceLoader(
+                repo_id=config.source.repo_id,
+                split=config.source.split
+            )
+        elif config.source.source_type == "local_file":
+            loader = LocalFileLoader(
+                file_path=config.source.file_path,
+                file_format=config.source.file_format
+            )
+        elif config.source.source_type == "upload":
+            dataset_id = config.source.dataset_id
+            if dataset_id not in uploaded_datasets:
+                raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
+
+            file_content, filename = uploaded_datasets[dataset_id]
+            loader = UploadedDatasetLoader(
+                file_content=file_content,
+                filename=filename,
+                file_format=config.source.file_format
+            )
+        else:
+            raise HTTPException(status_code=400, detail=f"Invalid source_type: {config.source.source_type}")
+
+        # Load dataset
+        logger.info("Loading dataset to inspect columns...")
+        dataset = loader.load()
+
+        # Get column names
+        columns = dataset.column_names
+
+        # Get a few sample rows
+        num_samples = min(3, len(dataset))
+        samples = [dict(row) for row in dataset.select(range(num_samples))]
+
+        return {
+            "status": "success",
+            "columns": columns,
+            "samples": samples,
+            "total_rows": len(dataset)
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get dataset columns: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 

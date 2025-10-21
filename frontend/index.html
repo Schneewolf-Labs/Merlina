@@ -122,6 +122,77 @@
                     </div>
                 </div>
 
+                <!-- Column Mapping -->
+                <div class="spell-section">
+                    <h3>🔗 Column Mapping</h3>
+                    <button type="button" id="inspect-columns-button" class="action-button" style="width: 100%; margin-bottom: 15px;">
+                        🔍 Inspect Dataset Columns
+                    </button>
+
+                    <div id="column-mapping-config" style="display: none;">
+                        <div style="background: #f5f7fa; padding: 15px; border-radius: 10px; margin-bottom: 15px;">
+                            <div style="font-weight: bold; color: var(--primary-purple); margin-bottom: 10px;">
+                                Available Columns: <span id="available-columns"></span>
+                            </div>
+                            <div style="font-size: 0.85em; color: #666;">
+                                Map your dataset columns to the standard format
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Prompt Column</label>
+                                <select id="map-prompt" class="magic-select">
+                                    <option value="">-- Select Column --</option>
+                                </select>
+                                <small style="color: #888; font-size: 0.85em;">Required: User input/question</small>
+                            </div>
+                            <div class="form-group">
+                                <label>Chosen Column</label>
+                                <select id="map-chosen" class="magic-select">
+                                    <option value="">-- Select Column --</option>
+                                </select>
+                                <small style="color: #888; font-size: 0.85em;">Required: Preferred response</small>
+                            </div>
+                        </div>
+
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Rejected Column</label>
+                                <select id="map-rejected" class="magic-select">
+                                    <option value="">-- Select Column --</option>
+                                </select>
+                                <small style="color: #888; font-size: 0.85em;">Required: Non-preferred response</small>
+                            </div>
+                            <div class="form-group">
+                                <label>System Column (Optional)</label>
+                                <select id="map-system" class="magic-select">
+                                    <option value="">-- None --</option>
+                                </select>
+                                <small style="color: #888; font-size: 0.85em;">Optional: System message</small>
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Reasoning Column (Optional)</label>
+                            <select id="map-reasoning" class="magic-select">
+                                <option value="">-- None --</option>
+                            </select>
+                            <small style="color: #888; font-size: 0.85em;">Optional: Reasoning/thinking process (for Qwen3)</small>
+                        </div>
+
+                        <!-- Sample Preview -->
+                        <div id="column-sample-preview" style="margin-top: 15px; display: none;">
+                            <div style="font-weight: bold; color: var(--primary-purple); margin-bottom: 10px;">
+                                Sample Data (First Row):
+                            </div>
+                            <div style="background: white; padding: 15px; border-radius: 10px; border: 1px solid var(--light-purple); max-height: 300px; overflow-y: auto;">
+                                <pre id="column-sample-content" style="margin: 0; font-size: 0.85em; white-space: pre-wrap;"></pre>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Dataset Format -->
                 <div class="spell-section">
                     <h3>📝 Dataset Format</h3>
@@ -132,9 +203,24 @@
                             <option value="chatml">ChatML</option>
                             <option value="llama3">Llama 3</option>
                             <option value="mistral">Mistral Instruct</option>
+                            <option value="qwen3">Qwen 3 (with thinking support)</option>
                             <option value="custom">Custom Template</option>
                         </select>
                         <small style="color: #888; font-size: 0.85em;">How to format conversations for the model</small>
+                    </div>
+
+                    <!-- Qwen3 Config -->
+                    <div id="qwen3-format-config" style="display: none; margin-top: 15px;">
+                        <div class="form-group">
+                            <label class="magic-checkbox">
+                                <input type="checkbox" id="enable-thinking" checked>
+                                <span>Enable Thinking Mode 🧠</span>
+                            </label>
+                            <small style="color: #888; font-size: 0.85em; display: block; margin-top: 5px;">
+                                When enabled, the model can use &lt;think&gt; tags to show its reasoning process before responding.
+                                When disabled, adds empty &lt;think&gt;&lt;/think&gt; tags to prevent thinking output.
+                            </small>
+                        </div>
                     </div>
 
                     <!-- Custom Template Config -->

@@ -95,8 +95,11 @@ All datasets must have these columns after loading and column mapping:
 - `chosen` (required) - Preferred response
 - `rejected` (required) - Non-preferred response
 - `system` (optional) - System message
+- `reasoning` (optional) - Reasoning/thinking process (used by Qwen3 format)
 
 Formatters transform these into chat-formatted strings with proper special tokens.
+
+**Reasoning Field**: When using the Qwen3 format, if a `reasoning` column is present, it will be wrapped in `<think>` tags and prepended to both the chosen and rejected responses. This allows training models with explicit reasoning steps.
 
 ### Training Flow
 

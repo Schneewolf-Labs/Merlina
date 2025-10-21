@@ -37,7 +37,7 @@ def validate_dataset_schema(
         required_columns = {'prompt', 'chosen', 'rejected'}
 
     if optional_columns is None:
-        optional_columns = {'system'}
+        optional_columns = {'system', 'reasoning'}
 
     available_columns = set(dataset.column_names)
     missing_required = required_columns - available_columns

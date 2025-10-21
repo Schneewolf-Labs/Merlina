@@ -184,7 +184,7 @@ class DatasetPipeline:
     def _validate_schema(self, dataset: Dataset):
         """Validate that dataset has required columns"""
         required_columns = {'prompt', 'chosen', 'rejected'}
-        optional_columns = {'system'}
+        optional_columns = {'system', 'reasoning'}
 
         available_columns = set(dataset.column_names)
         missing_required = required_columns - available_columns

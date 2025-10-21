@@ -19,13 +19,14 @@ class ChatMLFormatter(DatasetFormatter):
         """
         Format row using ChatML template.
 
-        Expected input columns: system (optional), prompt, chosen, rejected
+        Expected input columns: system (optional), prompt, chosen, rejected, reasoning (optional - ignored)
         Output columns: prompt, chosen, rejected
         """
         system = str(row.get('system', ''))
         prompt = str(row.get('prompt', ''))
         chosen = str(row.get('chosen', ''))
         rejected = str(row.get('rejected', ''))
+        # Note: reasoning column is ignored in ChatML format
 
         # ChatML format
         system_prefix = f"<|im_start|>system\n{system}<|im_end|>\n" if system.strip() else ""
@@ -55,7 +56,7 @@ class Llama3Formatter(DatasetFormatter):
         """
         Format row using Llama 3 template.
 
-        Expected input columns: system (optional), prompt, chosen, rejected
+        Expected input columns: system (optional), prompt, chosen, rejected, reasoning (optional - ignored)
         Output columns: prompt, chosen, rejected
         """
         system = str(row.get('system', ''))
@@ -99,7 +100,7 @@ class MistralFormatter(DatasetFormatter):
         """
         Format row using Mistral template.
 
-        Expected input columns: system (optional), prompt, chosen, rejected
+        Expected input columns: system (optional), prompt, chosen, rejected, reasoning (optional - ignored)
         Output columns: prompt, chosen, rejected
         """
         system = str(row.get('system', ''))
@@ -125,6 +126,80 @@ class MistralFormatter(DatasetFormatter):
             "format_type": "mistral",
             "description": "Mistral Instruct format with [INST] tags",
             "example_prompt": "[INST] Hello, how are you? [/INST] "
+        }
+
+
+class Qwen3Formatter(DatasetFormatter):
+    """
+    Format dataset using Qwen 3 template.
+    Uses ChatML-style tags (<|im_start|>, <|im_end|>) with optional <think> tags for reasoning.
+
+    Qwen3 models support a thinking mode where the model can show its reasoning process
+    inside <think></think> tags before the actual response.
+    """
+
+    def __init__(self, enable_thinking: bool = True):
+        """
+        Initialize Qwen3 formatter.
+
+        Args:
+            enable_thinking: If True, adds empty <think> tags to prompt to enable thinking mode.
+                           If False, adds <think></think> tags to disable thinking mode.
+        """
+        self.enable_thinking = enable_thinking
+
+    def format(self, row: dict) -> dict:
+        """
+        Format row using Qwen3 template.
+
+        Expected input columns: system (optional), prompt, chosen, rejected, reasoning (optional)
+        Output columns: prompt, chosen, rejected
+
+        If reasoning is provided, it will be wrapped in <think> tags in the responses.
+        """
+        system = str(row.get('system', ''))
+        prompt = str(row.get('prompt', ''))
+        chosen = str(row.get('chosen', ''))
+        rejected = str(row.get('rejected', ''))
+        reasoning = str(row.get('reasoning', ''))
+
+        # Qwen3 format (based on ChatML)
+        system_prefix = f"<|im_start|>system\n{system}<|im_end|>\n" if system.strip() else ""
+
+        # Build the prompt with thinking mode control
+        formatted_prompt = f"{system_prefix}<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
+
+        # Add thinking control based on enable_thinking flag
+        if self.enable_thinking:
+            # Leave thinking tags open for the model to fill in
+            formatted_prompt += ""  # Model will generate thinking if it wants
+        else:
+            # Add empty thinking tags to disable thinking mode
+            formatted_prompt += "<think>\n\n</think>\n\n"
+
+        # Build chosen and rejected responses
+        # If reasoning is provided, wrap it in <think> tags
+        if reasoning.strip():
+            reasoning_block = f"<think>\n{reasoning}\n</think>\n\n"
+            formatted_chosen = f"{reasoning_block}{chosen}<|im_end|>\n"
+            formatted_rejected = f"{reasoning_block}{rejected}<|im_end|>\n"
+        else:
+            formatted_chosen = f"{chosen}<|im_end|>\n"
+            formatted_rejected = f"{rejected}<|im_end|>\n"
+
+        return {
+            "prompt": formatted_prompt,
+            "chosen": formatted_chosen,
+            "rejected": formatted_rejected
+        }
+
+    def get_format_info(self) -> dict:
+        """Get information about the format type"""
+        return {
+            "format_type": "qwen3",
+            "description": f"Qwen3 format with ChatML tags (thinking {'enabled' if self.enable_thinking else 'disabled'})",
+            "example_prompt": "<|im_start|>system\\nYou are a helpful assistant<|im_end|>\\n<|im_start|>user\\nHello<|im_end|>\\n<|im_start|>assistant\\n",
+            "enable_thinking": self.enable_thinking
         }
 
 
@@ -305,17 +380,19 @@ class TokenizerFormatter(DatasetFormatter):
 def get_formatter(
     format_type: str,
     custom_templates: Optional[dict] = None,
-    tokenizer: Optional[Any] = None
+    tokenizer: Optional[Any] = None,
+    enable_thinking: Optional[bool] = None
 ) -> DatasetFormatter:
     """
     Factory function to get the appropriate formatter.
 
     Args:
-        format_type: One of 'chatml', 'llama3', 'mistral', 'tokenizer', 'custom'
+        format_type: One of 'chatml', 'llama3', 'mistral', 'qwen3', 'tokenizer', 'custom'
         custom_templates: Required if format_type is 'custom'
                          Dict with keys: prompt_template, chosen_template, rejected_template
         tokenizer: Required if format_type is 'tokenizer'
                   HuggingFace tokenizer with chat_template support
+        enable_thinking: Optional for 'qwen3' format - controls thinking mode (default: True)
 
     Returns:
         DatasetFormatter instance
@@ -333,6 +410,11 @@ def get_formatter(
 
     elif format_type == 'mistral':
         return MistralFormatter()
+
+    elif format_type == 'qwen3':
+        # Default thinking to True if not specified
+        thinking_enabled = enable_thinking if enable_thinking is not None else True
+        return Qwen3Formatter(enable_thinking=thinking_enabled)
 
     elif format_type == 'tokenizer':
         if tokenizer is None:
@@ -353,5 +435,5 @@ def get_formatter(
     else:
         raise ValueError(
             f"Invalid format_type: {format_type}. "
-            f"Must be one of: chatml, llama3, mistral, tokenizer, custom"
+            f"Must be one of: chatml, llama3, mistral, qwen3, tokenizer, custom"
         )

@@ -5,6 +5,8 @@ let activeJobs = {};
 let currentJobId = null;
 let pollInterval = null;
 let uploadedDatasetId = null; // Store uploaded dataset ID
+let datasetColumns = null; // Store dataset columns for mapping
+let datasetSamples = null; // Store sample data
 
 // DOM Elements
 const form = document.getElementById('training-form');
@@ -58,8 +60,11 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Dataset format type change
+    const qwen3FormatConfig = document.getElementById('qwen3-format-config');
     datasetFormatType.addEventListener('change', (e) => {
-        customFormatConfig.style.display = e.target.value === 'custom' ? 'block' : 'none';
+        const formatType = e.target.value;
+        customFormatConfig.style.display = formatType === 'custom' ? 'block' : 'none';
+        qwen3FormatConfig.style.display = formatType === 'qwen3' ? 'block' : 'none';
     });
 
     // Upload dataset button
@@ -77,6 +82,12 @@ document.addEventListener('DOMContentLoaded', () => {
         console.log('Preload button event listener attached');
     } else {
         console.error('Preload button not found!');
+    }
+
+    // Column inspection button
+    const inspectColumnsButton = document.getElementById('inspect-columns-button');
+    if (inspectColumnsButton) {
+        inspectColumnsButton.addEventListener('click', handleInspectColumns);
     }
 
     // Advanced settings toggle
@@ -211,6 +222,119 @@ async function handleModelPreload() {
     }
 }
 
+// Handle column inspection
+async function handleInspectColumns() {
+    const inspectButton = document.getElementById('inspect-columns-button');
+    const columnMappingConfig = document.getElementById('column-mapping-config');
+
+    try {
+        inspectButton.disabled = true;
+        inspectButton.textContent = '⏳ Loading columns...';
+
+        const datasetConfig = getDatasetSourceConfig();
+
+        const response = await fetch(`${API_URL}/dataset/columns`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(datasetConfig)
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to fetch columns');
+        }
+
+        const data = await response.json();
+        datasetColumns = data.columns;
+        datasetSamples = data.samples;
+
+        // Populate column mapping dropdowns
+        populateColumnMappings(data.columns);
+
+        // Show available columns
+        document.getElementById('available-columns').textContent = data.columns.join(', ');
+
+        // Show sample data
+        if (data.samples && data.samples.length > 0) {
+            const samplePreview = document.getElementById('column-sample-preview');
+            const sampleContent = document.getElementById('column-sample-content');
+            sampleContent.textContent = JSON.stringify(data.samples[0], null, 2);
+            samplePreview.style.display = 'block';
+        }
+
+        // Show column mapping UI
+        columnMappingConfig.style.display = 'block';
+
+        showToast(`✅ Found ${data.columns.length} columns in dataset`, 'success');
+
+    } catch (error) {
+        showToast(`❌ Failed to inspect columns: ${error.message}`, 'error');
+    } finally {
+        inspectButton.disabled = false;
+        inspectButton.textContent = '🔍 Inspect Dataset Columns';
+    }
+}
+
+// Helper to get dataset source config (without format)
+function getDatasetSourceConfig() {
+    const sourceType = datasetSourceType.value;
+
+    let source = { source_type: sourceType };
+
+    if (sourceType === 'huggingface') {
+        source.repo_id = document.getElementById('hf-repo-id').value;
+        source.split = document.getElementById('hf-split').value;
+    } else if (sourceType === 'upload') {
+        if (!uploadedDatasetId) {
+            throw new Error('Please upload a dataset first');
+        }
+        source.dataset_id = uploadedDatasetId;
+    } else if (sourceType === 'local_file') {
+        source.file_path = document.getElementById('local-file-path').value;
+        const format = document.getElementById('local-file-format').value;
+        if (format) source.file_format = format;
+    }
+
+    return {
+        source: source,
+        format: { format_type: 'chatml' },  // Dummy format, not used for column inspection
+        test_size: 0.1
+    };
+}
+
+// Populate column mapping dropdowns
+function populateColumnMappings(columns) {
+    const selects = [
+        'map-prompt',
+        'map-chosen',
+        'map-rejected',
+        'map-system',
+        'map-reasoning'
+    ];
+
+    selects.forEach(selectId => {
+        const select = document.getElementById(selectId);
+        // Clear existing options except first
+        while (select.options.length > 1) {
+            select.remove(1);
+        }
+
+        // Add column options
+        columns.forEach(col => {
+            const option = document.createElement('option');
+            option.value = col;
+            option.textContent = col;
+            select.appendChild(option);
+        });
+
+        // Auto-select if column name matches
+        const targetColumn = selectId.replace('map-', '');
+        if (columns.includes(targetColumn)) {
+            select.value = targetColumn;
+        }
+    });
+}
+
 // Handle dataset preview
 async function handleDatasetPreview() {
     try {
@@ -288,6 +412,7 @@ async function handleFormattedPreview() {
             'chatml': 'ChatML',
             'llama3': 'Llama 3',
             'mistral': 'Mistral Instruct',
+            'qwen3': `Qwen 3 (thinking ${datasetConfig.format.enable_thinking ? 'enabled' : 'disabled'})`,
             'custom': 'Custom Template'
         };
         document.getElementById('format-type-display').textContent = formatNames[formatType] || formatType;
@@ -338,6 +463,10 @@ function getDatasetConfig() {
         };
     }
 
+    if (formatType === 'qwen3') {
+        format.enable_thinking = document.getElementById('enable-thinking').checked;
+    }
+
     // Build full config
     const config = {
         source: source,
@@ -356,7 +485,32 @@ function getDatasetConfig() {
         config.model_name = baseModel;
     }
 
+    // Add column mapping if configured
+    const columnMapping = getColumnMapping();
+    if (columnMapping && Object.keys(columnMapping).length > 0) {
+        config.column_mapping = columnMapping;
+    }
+
     return config;
+}
+
+// Get column mapping from UI
+function getColumnMapping() {
+    const mapping = {};
+
+    const promptCol = document.getElementById('map-prompt').value;
+    const chosenCol = document.getElementById('map-chosen').value;
+    const rejectedCol = document.getElementById('map-rejected').value;
+    const systemCol = document.getElementById('map-system').value;
+    const reasoningCol = document.getElementById('map-reasoning').value;
+
+    if (promptCol) mapping[promptCol] = 'prompt';
+    if (chosenCol) mapping[chosenCol] = 'chosen';
+    if (rejectedCol) mapping[rejectedCol] = 'rejected';
+    if (systemCol) mapping[systemCol] = 'system';
+    if (reasoningCol) mapping[reasoningCol] = 'reasoning';
+
+    return mapping;
 }
 
 // Handle form submission

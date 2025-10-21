@@ -9,6 +9,7 @@ from .formatters import (
     ChatMLFormatter,
     Llama3Formatter,
     MistralFormatter,
+    Qwen3Formatter,
     CustomFormatter,
     TokenizerFormatter,
     get_formatter
@@ -25,6 +26,7 @@ __all__ = [
     'ChatMLFormatter',
     'Llama3Formatter',
     'MistralFormatter',
+    'Qwen3Formatter',
     'CustomFormatter',
     'TokenizerFormatter',
     'get_formatter',
