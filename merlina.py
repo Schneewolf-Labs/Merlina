@@ -525,13 +525,20 @@ async def create_training_job(config: TrainingConfig, background_tasks: Backgrou
 
     # Create job in database
     job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    job_manager.create_job(job_id, config.dict())
+    job_manager.create_job(job_id, config.model_dump())
 
     # Import training runner
     from src.training_runner import run_training_sync
+    import asyncio
+
+    # Get the current event loop for WebSocket updates
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
 
     # Start training in background
-    background_tasks.add_task(run_training_sync, job_id, config, job_manager, uploaded_datasets)
+    background_tasks.add_task(run_training_sync, job_id, config, job_manager, uploaded_datasets, loop)
 
     # Return response with warnings if any
     message = f"Training spell cast! Job {job_id} is now running."

@@ -28,10 +28,30 @@ from dataset_handlers import (
     UploadedDatasetLoader,
     get_formatter
 )
-from job_manager import JobManager
-from websocket_manager import websocket_manager
+from src.job_manager import JobManager
+from src.websocket_manager import websocket_manager
 
 logger = logging.getLogger(__name__)
+
+
+def send_websocket_update(coro, loop=None):
+    """
+    Helper to properly schedule WebSocket updates from sync context.
+
+    Args:
+        coro: Coroutine to execute
+        loop: Event loop to schedule in (optional, uses global if not provided)
+    """
+    try:
+        if loop is None:
+            # No loop provided, just close the coroutine to avoid warnings
+            coro.close()
+            return
+
+        # Schedule coroutine in the provided event loop
+        asyncio.run_coroutine_threadsafe(coro, loop)
+    except Exception as e:
+        logger.debug(f"Could not send WebSocket update: {e}")
 
 
 class WebSocketCallback(TrainerCallback):
@@ -39,9 +59,10 @@ class WebSocketCallback(TrainerCallback):
     Custom callback to send training metrics via WebSocket
     """
 
-    def __init__(self, job_id: str, job_manager: JobManager):
+    def __init__(self, job_id: str, job_manager: JobManager, event_loop=None):
         self.job_id = job_id
         self.job_manager = job_manager
+        self.event_loop = event_loop
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         """Called when trainer logs metrics"""
@@ -87,24 +108,20 @@ class WebSocketCallback(TrainerCallback):
                     )
 
                 # Send WebSocket update (run in event loop)
-                try:
-                    loop = asyncio.get_event_loop()
-                    if loop.is_running():
-                        asyncio.create_task(
-                            websocket_manager.send_status_update(
-                                job_id=self.job_id,
-                                status="training",
-                                progress=update_data.get("progress", 0.5),
-                                current_step=update_data.get("current_step"),
-                                total_steps=update_data.get("total_steps"),
-                                loss=update_data.get("loss"),
-                                eval_loss=update_data.get("eval_loss"),
-                                learning_rate=update_data.get("learning_rate"),
-                                gpu_memory=gpu_memory
-                            )
-                        )
-                except Exception as e:
-                    logger.debug(f"Could not send WebSocket update: {e}")
+                send_websocket_update(
+                    websocket_manager.send_status_update(
+                        job_id=self.job_id,
+                        status="training",
+                        progress=update_data.get("progress", 0.5),
+                        current_step=update_data.get("current_step"),
+                        total_steps=update_data.get("total_steps"),
+                        loss=update_data.get("loss"),
+                        eval_loss=update_data.get("eval_loss"),
+                        learning_rate=update_data.get("learning_rate"),
+                        gpu_memory=gpu_memory
+                    ),
+                    self.event_loop
+                )
 
 
 async def run_training_async(job_id: str, config: Any, job_manager: JobManager, uploaded_datasets: dict):
@@ -113,23 +130,30 @@ async def run_training_async(job_id: str, config: Any, job_manager: JobManager, 
     await loop.run_in_executor(None, run_training_sync, job_id, config, job_manager, uploaded_datasets)
 
 
-def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploaded_datasets: dict):
-    """Run ORPO training job with enhanced monitoring"""
+def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploaded_datasets: dict, event_loop=None):
+    """
+    Run ORPO training job with enhanced monitoring.
+
+    Args:
+        job_id: Unique job identifier
+        config: Training configuration
+        job_manager: Job manager instance
+        uploaded_datasets: Dictionary of uploaded datasets
+        event_loop: Event loop for WebSocket updates (optional)
+    """
     try:
         # Update job status
         job_manager.update_job(job_id, status="initializing", progress=0.0)
 
         # Send WebSocket update
-        try:
-            asyncio.create_task(
-                websocket_manager.send_status_update(
-                    job_id=job_id,
-                    status="initializing",
-                    progress=0.0
-                )
-            )
-        except:
-            pass
+        send_websocket_update(
+            websocket_manager.send_status_update(
+                job_id=job_id,
+                status="initializing",
+                progress=0.0
+            ),
+            event_loop
+        )
 
         # Setup accelerator
         accelerator = Accelerator()
@@ -165,16 +189,14 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
         # Load model and tokenizer
         job_manager.update_job(job_id, status="loading_model", progress=0.1)
 
-        try:
-            asyncio.create_task(
-                websocket_manager.send_status_update(
-                    job_id=job_id,
-                    status="loading_model",
-                    progress=0.1
-                )
-            )
-        except:
-            pass
+        send_websocket_update(
+            websocket_manager.send_status_update(
+                job_id=job_id,
+                status="loading_model",
+                progress=0.1
+            ),
+            event_loop
+        )
 
         tokenizer = AutoTokenizer.from_pretrained(
             config.base_model,
@@ -209,16 +231,14 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
         # Load and prepare dataset
         job_manager.update_job(job_id, status="loading_dataset", progress=0.2)
 
-        try:
-            asyncio.create_task(
-                websocket_manager.send_status_update(
-                    job_id=job_id,
-                    status="loading_dataset",
-                    progress=0.2
-                )
-            )
-        except:
-            pass
+        send_websocket_update(
+            websocket_manager.send_status_update(
+                job_id=job_id,
+                status="loading_dataset",
+                progress=0.2
+            ),
+            event_loop
+        )
 
         logger.info(f"Loading dataset with config: {config.dataset.source.source_type}")
 
@@ -270,16 +290,14 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
         # Setup training arguments
         job_manager.update_job(job_id, status="training", progress=0.3)
 
-        try:
-            asyncio.create_task(
-                websocket_manager.send_status_update(
-                    job_id=job_id,
-                    status="training",
-                    progress=0.3
-                )
-            )
-        except:
-            pass
+        send_websocket_update(
+            websocket_manager.send_status_update(
+                job_id=job_id,
+                status="training",
+                progress=0.3
+            ),
+            event_loop
+        )
 
         output_dir = f"./results/{job_id}"
 
@@ -296,7 +314,7 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
             gradient_accumulation_steps=config.gradient_accumulation_steps,
             optim="paged_adamw_8bit",
             num_train_epochs=config.num_epochs,
-            evaluation_strategy="steps",
+            eval_strategy="steps",
             eval_steps=config.eval_steps,
             logging_steps=1,
             warmup_ratio=config.warmup_ratio,
@@ -311,14 +329,15 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
         )
 
         # Create trainer with WebSocket callback
+        # Note: ORPOTrainer in newer TRL versions requires processing_class (tokenizer)
         trainer = ORPOTrainer(
             model=model,
             args=orpo_args,
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             peft_config=peft_config,
-            tokenizer=tokenizer,
-            callbacks=[WebSocketCallback(job_id, job_manager)]
+            processing_class=tokenizer,
+            callbacks=[WebSocketCallback(job_id, job_manager, event_loop)]
         )
 
         # Train
@@ -328,16 +347,14 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
         # Save model
         job_manager.update_job(job_id, status="saving", progress=0.9)
 
-        try:
-            asyncio.create_task(
-                websocket_manager.send_status_update(
-                    job_id=job_id,
-                    status="saving",
-                    progress=0.9
-                )
-            )
-        except:
-            pass
+        send_websocket_update(
+            websocket_manager.send_status_update(
+                job_id=job_id,
+                status="saving",
+                progress=0.9
+            ),
+            event_loop
+        )
 
         final_output_dir = f"./models/{config.output_name}"
         trainer.save_model(final_output_dir)
@@ -347,16 +364,14 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
         if config.push_to_hub and accelerator.is_main_process:
             job_manager.update_job(job_id, status="uploading")
 
-            try:
-                asyncio.create_task(
-                    websocket_manager.send_status_update(
-                        job_id=job_id,
-                        status="uploading",
-                        progress=0.95
-                    )
-                )
-            except:
-                pass
+            send_websocket_update(
+                websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="uploading",
+                    progress=0.95
+                ),
+                event_loop
+            )
 
             # Reload for merging
             base_model_reload = AutoModelForCausalLM.from_pretrained(
@@ -386,15 +401,13 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
             output_dir=final_output_dir
         )
 
-        try:
-            asyncio.create_task(
-                websocket_manager.send_completion(
-                    job_id=job_id,
-                    output_dir=final_output_dir
-                )
-            )
-        except:
-            pass
+        send_websocket_update(
+            websocket_manager.send_completion(
+                job_id=job_id,
+                output_dir=final_output_dir
+            ),
+            event_loop
+        )
 
         logger.info(f"Training completed for job {job_id}")
 
@@ -402,12 +415,10 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
         logger.error(f"Training failed for job {job_id}: {str(e)}", exc_info=True)
         job_manager.update_job(job_id, status="failed", error=str(e))
 
-        try:
-            asyncio.create_task(
-                websocket_manager.send_error(
-                    job_id=job_id,
-                    error=str(e)
-                )
-            )
-        except:
-            pass
+        send_websocket_update(
+            websocket_manager.send_error(
+                job_id=job_id,
+                error=str(e)
+            ),
+            event_loop
+        )
