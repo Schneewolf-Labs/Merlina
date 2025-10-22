@@ -1,6 +1,14 @@
 # ML stuff
 wandb/
 
+# Merlina app outputs
+models/              # Trained models and LoRA adapters
+results/             # Training artifacts and checkpoints
+data/                # SQLite database and user data
+uploads/             # Uploaded dataset files
+*.safetensors        # Model weight files
+*.bin                # Model weight files (older format)
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]
