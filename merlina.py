@@ -43,29 +43,32 @@ from src.job_manager import JobManager
 from src.websocket_manager import websocket_manager
 from src.preflight_checks import validate_config
 
+# Import configuration
+from config import settings
+
 # Setup logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=getattr(logging, settings.log_level.upper()))
 logger = logging.getLogger(__name__)
 
 # FastAPI app
 app = FastAPI(
-    title="Merlina - Magical Model Training",
+    title=settings.app_name,
     description="Train LLMs with ORPO, powered by magic ✨",
-    version="1.0.0",
+    version="1.1.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc"
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Initialize job manager with persistent storage
-job_manager = JobManager(db_path="./data/jobs.db")
+job_manager = JobManager(db_path=settings.database_path)
 
 # Global storage for uploaded datasets (still in-memory, could be persisted later)
 uploaded_datasets = {}  # dataset_id -> bytes content
@@ -86,7 +89,8 @@ class JobsProxy:
             "current_step": job.current_step,
             "total_steps": job.total_steps,
             "loss": job.loss,
-            "error": job.error
+            "error": job.error,
+            "wandb_url": job.wandb_url
         }
 
     def __setitem__(self, job_id: str, value: dict):
@@ -109,8 +113,8 @@ jobs = JobsProxy()
 # Get the directory where this script is located
 SCRIPT_DIR = Path(__file__).parent.resolve()
 
-# Check if frontend files exist in 'frontend' directory
-FRONTEND_DIR = SCRIPT_DIR / "frontend"
+# Check if frontend files exist in configured directory
+FRONTEND_DIR = settings.frontend_dir if settings.frontend_dir.is_absolute() else SCRIPT_DIR / settings.frontend_dir
 if not FRONTEND_DIR.exists():
     # Also check current directory
     if (SCRIPT_DIR / "index.html").exists():
@@ -271,6 +275,7 @@ class JobStatus(BaseModel):
     total_steps: Optional[int] = None
     loss: Optional[float] = None
     error: Optional[str] = None
+    wandb_url: Optional[str] = None
 
 # Old training function - kept for reference, now using training_runner.py
 # def run_training(job_id: str, config: TrainingConfig):
@@ -618,7 +623,7 @@ async def get_job_status(job_id: str):
     """Get status of a training job"""
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
-        
+
     job = jobs[job_id]
     return JobStatus(
         job_id=job_id,
@@ -627,7 +632,8 @@ async def get_job_status(job_id: str):
         current_step=job.get("current_step"),
         total_steps=job.get("total_steps"),
         loss=job.get("loss"),
-        error=job.get("error")
+        error=job.get("error"),
+        wandb_url=job.get("wandb_url")
     )
 
 @app.get("/jobs")
@@ -1083,9 +1089,18 @@ async def list_cached_models():
 
 if __name__ == "__main__":
     import uvicorn
+
+    # Determine the URL for display
+    display_url = settings.domain or f"http://localhost:{settings.port}"
+
     print("\n✨ Starting Merlina - Magical Model Training ✨")
-    print("🧙‍♀️ Visit http://localhost:8000 to access the interface")
-    print("📚 API documentation: http://localhost:8000/api/docs")
+    print(f"🧙‍♀️ Visit {display_url} to access the interface")
+    print(f"📚 API documentation: {display_url}/api/docs")
     print(f"📁 Frontend directory: {FRONTEND_DIR}")
+    print(f"💾 Database: {settings.database_path}")
+    print(f"📊 Log level: {settings.log_level}")
+    if settings.cuda_visible_devices:
+        print(f"🎮 GPUs: {settings.cuda_visible_devices}")
     print("=" * 50 + "\n")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    uvicorn.run(app, host=settings.host, port=settings.port)

@@ -344,6 +344,9 @@ New modular training function with WebSocket integration.
 ```
 merlina/
 ├── merlina.py                    # Main FastAPI application
+├── config.py                     # Configuration management
+├── .env                          # User configuration (gitignored)
+├── .env.example                  # Configuration template
 ├── src/                          # Source modules (v1.1)
 │   ├── job_manager.py           # Job persistence
 │   ├── websocket_manager.py     # WebSocket manager
@@ -370,12 +373,37 @@ merlina/
 - **Frontend:** `./frontend/`
 - **Test fixtures:** `./tests/fixtures/`
 
-## Environment Variables
+## Configuration System
 
-Optional configuration:
-- `WANDB_API_KEY` - Weights & Biases logging
-- `HF_TOKEN` - HuggingFace Hub authentication
-- `CUDA_VISIBLE_DEVICES` - GPU selection
+Merlina uses a centralized configuration system (`config.py`) with support for environment variables and `.env` files.
+
+### Configuration Files
+
+**`.env` file** (create from `.env.example`):
+```bash
+# Copy the example file to get started
+cp .env.example .env
+
+# Edit .env with your settings
+nano .env
+```
+
+**Key Settings:**
+- **Server:** `HOST`, `PORT`, `DOMAIN` - Server binding and public URL
+- **Paths:** `DATA_DIR`, `MODELS_DIR`, `DATABASE_PATH` - Storage locations
+- **External Services:** `WANDB_API_KEY`, `HF_TOKEN` - API keys for W&B and HuggingFace
+- **System:** `CUDA_VISIBLE_DEVICES`, `LOG_LEVEL` - GPU selection and logging
+- **Security:** `CORS_ORIGINS`, `MAX_UPLOAD_SIZE_MB` - Access control and limits
+
+### Frontend URL Detection
+
+The frontend automatically detects the API URL from the browser's current location using `window.location`. This means:
+- Works on `localhost` during development
+- Works on any production domain (e.g., `https://merlina.example.com`)
+- Works behind reverse proxies
+- Automatically handles HTTP/HTTPS and WebSocket protocols
+
+No frontend configuration needed!
 
 ## New API Endpoints
 

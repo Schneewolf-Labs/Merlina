@@ -269,6 +269,12 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
                 config=wandb_config
             )
 
+            # Capture W&B run URL and save to job
+            if wandb.run is not None:
+                wandb_url = wandb.run.get_url()
+                logger.info(f"W&B run URL: {wandb_url}")
+                job_manager.update_job(job_id, wandb_url=wandb_url)
+
         # Set HF token if provided
         if config.hf_token:
             os.environ['HF_TOKEN'] = config.hf_token

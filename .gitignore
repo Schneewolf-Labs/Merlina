@@ -146,7 +146,9 @@ celerybeat.pid
 *.sage.py
 
 # Environments
-.env
+.env               # Merlina configuration (API keys, secrets)
+.env.*             # Environment-specific configs (.env.production, etc.)
+!.env.example      # Keep example config template
 .envrc
 .venv
 env/

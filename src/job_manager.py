@@ -32,6 +32,7 @@ class JobRecord:
     error: Optional[str] = None
     output_dir: Optional[str] = None
     metrics: Optional[Dict[str, Any]] = None
+    wandb_url: Optional[str] = None
 
 
 class JobManager:
@@ -86,9 +87,17 @@ class JobManager:
                     learning_rate REAL,
                     error TEXT,
                     output_dir TEXT,
-                    metrics TEXT
+                    metrics TEXT,
+                    wandb_url TEXT
                 )
             """)
+
+            # Migration: Add wandb_url column if it doesn't exist
+            cursor.execute("PRAGMA table_info(jobs)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if 'wandb_url' not in columns:
+                cursor.execute("ALTER TABLE jobs ADD COLUMN wandb_url TEXT")
+                logger.info("Added wandb_url column to jobs table")
 
             # Training metrics table (for time-series data)
             cursor.execute("""
@@ -152,8 +161,8 @@ class JobManager:
                 INSERT INTO jobs (
                     job_id, status, progress, created_at, updated_at, config,
                     current_step, total_steps, loss, eval_loss, learning_rate,
-                    error, output_dir, metrics
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    error, output_dir, metrics, wandb_url
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 job.job_id,
                 job.status,
@@ -168,7 +177,8 @@ class JobManager:
                 job.learning_rate,
                 job.error,
                 job.output_dir,
-                json.dumps(job.metrics) if job.metrics else None
+                json.dumps(job.metrics) if job.metrics else None,
+                job.wandb_url
             ))
 
         logger.info(f"Created job {job_id}")
@@ -186,7 +196,8 @@ class JobManager:
         learning_rate: Optional[float] = None,
         error: Optional[str] = None,
         output_dir: Optional[str] = None,
-        metrics: Optional[Dict[str, Any]] = None
+        metrics: Optional[Dict[str, Any]] = None,
+        wandb_url: Optional[str] = None
     ) -> bool:
         """
         Update job fields.
@@ -240,6 +251,10 @@ class JobManager:
         if metrics is not None:
             updates.append("metrics = ?")
             params.append(json.dumps(metrics))
+
+        if wandb_url is not None:
+            updates.append("wandb_url = ?")
+            params.append(wandb_url)
 
         if not updates:
             return False
@@ -475,5 +490,6 @@ class JobManager:
             learning_rate=row["learning_rate"],
             error=row["error"],
             output_dir=row["output_dir"],
-            metrics=json.loads(row["metrics"]) if row["metrics"] else None
+            metrics=json.loads(row["metrics"]) if row["metrics"] else None,
+            wandb_url=row["wandb_url"] if "wandb_url" in row.keys() else None
         )

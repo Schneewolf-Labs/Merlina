@@ -1,12 +1,21 @@
 // Merlina Frontend JavaScript
 
-const API_URL = 'http://localhost:8000';
+// Dynamically detect API URL from current page location
+// This allows the app to work on any domain (localhost, production, reverse proxy)
+const API_URL = '';  // Empty string = relative URLs (same origin)
+const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
+
 let activeJobs = {};
 let currentJobId = null;
 let pollInterval = null;
 let uploadedDatasetId = null; // Store uploaded dataset ID
 let datasetColumns = null; // Store dataset columns for mapping
 let datasetSamples = null; // Store sample data
+
+// Log configuration for debugging
+console.log('🔧 Merlina Configuration:');
+console.log(`  API URL: ${API_URL || window.location.origin} (relative)`);
+console.log(`  WebSocket URL: ${WS_URL}`);
 
 // DOM Elements
 const form = document.getElementById('training-form');
@@ -755,12 +764,13 @@ async function updateJobStatus() {
         document.getElementById('current-step').textContent = status.current_step || '-';
         document.getElementById('loss-value').textContent = status.loss ? status.loss.toFixed(4) : '-';
         
-        // Show W&B link if using wandb
+        // Show W&B link if using wandb and URL is available
         const wandbLink = document.getElementById('wandb-link');
-        if (activeJobs[currentJobId]?.config?.use_wandb && status.status === 'training') {
+        if (activeJobs[currentJobId]?.config?.use_wandb && status.wandb_url) {
             wandbLink.style.display = 'block';
-            // In a real app, you'd get the actual W&B run URL from the backend
-            wandbLink.href = `https://wandb.ai/your-team/merlin-training/runs/${currentJobId}`;
+            wandbLink.href = status.wandb_url;
+        } else {
+            wandbLink.style.display = 'none';
         }
         
         // Handle completion
