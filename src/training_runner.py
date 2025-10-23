@@ -514,41 +514,80 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
         tokenizer.save_pretrained(final_output_dir)
 
         # Optional: merge and upload
-        if config.push_to_hub and accelerator.is_main_process:
-            job_manager.update_job(job_id, status="uploading")
+        if config.push_to_hub:
+            # Check if we should upload (main process in distributed, or always in single GPU)
+            should_upload = accelerator.is_main_process if accelerator.num_processes > 1 else True
 
-            send_websocket_update(
-                websocket_manager.send_status_update(
-                    job_id=job_id,
-                    status="uploading",
-                    progress=0.95
-                ),
-                event_loop
-            )
+            if should_upload:
+                try:
+                    # Validate HF token is provided
+                    if not config.hf_token:
+                        logger.warning("⚠️ push_to_hub enabled but no HF token provided - skipping upload")
+                        logger.info("💡 Provide HF_TOKEN in .env or via hf_token parameter to enable uploads")
+                    else:
+                        job_manager.update_job(job_id, status="uploading")
 
-            # Reload for merging
-            base_model_reload = AutoModelForCausalLM.from_pretrained(
-                config.base_model,
-                low_cpu_mem_usage=True,
-                torch_dtype=torch.bfloat16,
-                device_map="auto",
-            )
+                        send_websocket_update(
+                            websocket_manager.send_status_update(
+                                job_id=job_id,
+                                status="uploading",
+                                progress=0.95
+                            ),
+                            event_loop
+                        )
 
-            model_merged = PeftModel.from_pretrained(base_model_reload, final_output_dir)
-            model_merged = model_merged.merge_and_unload()
+                        logger.info(f"🔄 Merging LoRA adapter with base model for upload...")
 
-            # Push to hub
-            logger.info(f"Pushing to HuggingFace Hub (private={config.hf_hub_private})")
-            model_merged.push_to_hub(
-                config.output_name,
-                token=config.hf_token,
-                private=config.hf_hub_private
-            )
-            tokenizer.push_to_hub(
-                config.output_name,
-                token=config.hf_token,
-                private=config.hf_hub_private
-            )
+                        # Reload for merging
+                        base_model_reload = AutoModelForCausalLM.from_pretrained(
+                            config.base_model,
+                            low_cpu_mem_usage=True,
+                            torch_dtype=torch.bfloat16,
+                            device_map="auto",
+                        )
+
+                        model_merged = PeftModel.from_pretrained(base_model_reload, final_output_dir)
+                        model_merged = model_merged.merge_and_unload()
+
+                        # Push to hub
+                        repo_visibility = "private" if config.hf_hub_private else "public"
+                        logger.info(f"📤 Pushing to HuggingFace Hub as {repo_visibility} repository...")
+                        logger.info(f"   Repository: {config.output_name}")
+
+                        # Upload model
+                        model_url = model_merged.push_to_hub(
+                            config.output_name,
+                            token=config.hf_token,
+                            private=config.hf_hub_private
+                        )
+                        logger.info(f"✅ Model uploaded successfully!")
+
+                        # Upload tokenizer
+                        tokenizer_url = tokenizer.push_to_hub(
+                            config.output_name,
+                            token=config.hf_token,
+                            private=config.hf_hub_private
+                        )
+                        logger.info(f"✅ Tokenizer uploaded successfully!")
+
+                        # Construct the hub URL
+                        # Extract username from the API or use the repo name
+                        hub_url = f"https://huggingface.co/{config.output_name}"
+                        logger.info(f"🎉 Model published at: {hub_url}")
+
+                        # Clean up merged model to free memory
+                        del model_merged, base_model_reload
+                        gc.collect()
+                        torch.cuda.empty_cache()
+
+                except Exception as upload_error:
+                    # Log upload failure but don't fail the entire job
+                    logger.error(f"❌ Failed to upload to HuggingFace Hub: {str(upload_error)}", exc_info=True)
+                    logger.warning("⚠️ Training completed successfully, but upload failed")
+                    logger.info(f"💾 Model saved locally at: {final_output_dir}")
+                    # Continue to mark training as completed (upload is optional)
+            else:
+                logger.info("⏭️ Skipping HuggingFace upload (not main process in distributed training)")
 
         # Cleanup
         del trainer, model
