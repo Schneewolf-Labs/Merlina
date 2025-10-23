@@ -653,9 +653,9 @@ async function handleSubmit(e) {
         
         // Open monitoring modal
         showJobDetails(data.job_id);
-        
-        // Reset form
-        form.reset();
+
+        // Only clear the model name field (preserve other settings)
+        document.getElementById('base-model').value = '';
         
     } catch (error) {
         showToast(`❌ Failed to cast spell: ${error.message}`, 'error');
