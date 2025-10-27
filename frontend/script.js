@@ -1026,3 +1026,312 @@ function activateSuperMagic() {
         rainbowStyle.remove();
     }, 5000);
 }
+
+// ===== Config Management Functions =====
+
+// Show save config modal
+document.getElementById('save-config-btn')?.addEventListener('click', () => {
+    document.getElementById('save-config-modal').style.display = 'flex';
+});
+
+// Show load config modal
+document.getElementById('load-config-btn')?.addEventListener('click', () => {
+    document.getElementById('load-config-modal').style.display = 'flex';
+    loadConfigsList();
+});
+
+// Show manage configs modal
+document.getElementById('manage-configs-btn')?.addEventListener('click', () => {
+    document.getElementById('manage-configs-modal').style.display = 'flex';
+    loadManageConfigsList();
+});
+
+// Get current configuration from form
+function getCurrentConfig() {
+    // Get dataset config
+    const sourceType = document.getElementById('dataset-source-type').value;
+    let datasetSource = { source_type: sourceType };
+
+    if (sourceType === 'huggingface') {
+        datasetSource.repo_id = document.getElementById('hf-repo-id').value;
+        datasetSource.split = document.getElementById('hf-split').value;
+    } else if (sourceType === 'local_file') {
+        datasetSource.file_path = document.getElementById('local-file-path').value;
+        datasetSource.file_format = document.getElementById('local-file-format').value;
+    } else if (sourceType === 'upload') {
+        datasetSource.dataset_id = window.uploadedDatasetId || '';
+    }
+
+    const formatType = document.getElementById('format-type').value;
+    let datasetFormat = { format_type: formatType };
+
+    if (formatType === 'qwen3') {
+        datasetFormat.enable_thinking = document.getElementById('enable-thinking')?.checked ?? true;
+    }
+
+    // Get LoRA config
+    const useLora = document.getElementById('use-lora').checked;
+    let loraConfig = {};
+    if (useLora) {
+        loraConfig = {
+            lora_r: parseInt(document.getElementById('lora-r').value),
+            lora_alpha: parseInt(document.getElementById('lora-alpha').value),
+            lora_dropout: parseFloat(document.getElementById('lora-dropout').value)
+        };
+    }
+
+    // Build complete config
+    const config = {
+        base_model: document.getElementById('base-model').value,
+        output_name: document.getElementById('output-name').value,
+        use_lora: useLora,
+        ...loraConfig,
+        use_4bit: document.getElementById('use-4bit').checked,
+        max_seq_length: parseInt(document.getElementById('max-seq-length').value),
+        num_train_epochs: parseInt(document.getElementById('epochs').value),
+        per_device_train_batch_size: parseInt(document.getElementById('batch-size').value),
+        gradient_accumulation_steps: parseInt(document.getElementById('grad-accum').value),
+        learning_rate: parseFloat(document.getElementById('learning-rate').value),
+        warmup_ratio: parseFloat(document.getElementById('warmup-ratio').value),
+        beta: parseFloat(document.getElementById('beta').value),
+        dataset: {
+            source: datasetSource,
+            format: datasetFormat,
+            test_size: parseFloat(document.getElementById('test-size').value)
+        }
+    };
+
+    // Optional fields
+    if (document.getElementById('hf-token').value) {
+        config.hf_token = document.getElementById('hf-token').value;
+    }
+    if (document.getElementById('wandb-token').value) {
+        config.wandb_api_key = document.getElementById('wandb-token').value;
+        config.wandb_project = document.getElementById('wandb-project').value;
+    }
+    if (document.getElementById('push-to-hub').checked) {
+        config.push_to_hub = true;
+        config.hf_hub_repo_id = document.getElementById('hub-repo-id').value;
+        config.hf_hub_private = document.getElementById('hub-private').checked;
+    }
+
+    return config;
+}
+
+// Save current configuration
+async function saveCurrentConfig() {
+    const name = document.getElementById('config-name').value.trim();
+    if (!name) {
+        showToast('Please enter a configuration name', 'error');
+        return;
+    }
+
+    const description = document.getElementById('config-description').value.trim();
+    const tagsInput = document.getElementById('config-tags').value.trim();
+    const tags = tagsInput ? tagsInput.split(',').map(t => t.trim()).filter(t => t) : [];
+
+    const config = getCurrentConfig();
+
+    try {
+        const response = await fetch(`${API_URL}/configs/save`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, config, description, tags })
+        });
+
+        const result = await response.json();
+
+        if (response.ok) {
+            showToast(`Configuration '${name}' saved successfully!`, 'success');
+            document.getElementById('save-config-modal').style.display = 'none';
+            // Clear form
+            document.getElementById('config-name').value = '';
+            document.getElementById('config-description').value = '';
+            document.getElementById('config-tags').value = '';
+        } else {
+            showToast(`Failed to save: ${result.detail}`, 'error');
+        }
+    } catch (error) {
+        showToast('Error saving configuration', 'error');
+        console.error(error);
+    }
+}
+
+// Load list of configs for loading
+async function loadConfigsList() {
+    const listEl = document.getElementById('config-list');
+    listEl.innerHTML = '<p style="text-align: center; color: #888;">Loading...</p>';
+
+    try {
+        const response = await fetch(`${API_URL}/configs/list`);
+        const result = await response.json();
+
+        if (!response.ok) {
+            listEl.innerHTML = '<p style="text-align: center; color: #ef4444;">Failed to load configurations</p>';
+            return;
+        }
+
+        const configs = result.configs;
+
+        if (configs.length === 0) {
+            listEl.innerHTML = '<p style="text-align: center; color: #888;">No saved configurations found.</p>';
+            return;
+        }
+
+        listEl.innerHTML = configs.map(cfg => `
+            <div class="config-item" onclick="loadConfigByName('${cfg.filename}')">
+                <h4>${cfg.name}</h4>
+                ${cfg.description ? `<p>${cfg.description}</p>` : ''}
+                <div class="config-meta">
+                    ${cfg.tags.map(tag => `<span class="config-tag">${tag}</span>`).join('')}
+                    <span class="config-date">Modified: ${new Date(cfg.modified_at).toLocaleString()}</span>
+                </div>
+            </div>
+        `).join('');
+    } catch (error) {
+        listEl.innerHTML = '<p style="text-align: center; color: #ef4444;">Error loading configurations</p>';
+        console.error(error);
+    }
+}
+
+// Load a specific config and populate form
+async function loadConfigByName(name) {
+    try {
+        const response = await fetch(`${API_URL}/configs/${name}`);
+        const result = await response.json();
+
+        if (!response.ok) {
+            showToast(`Failed to load configuration: ${result.detail}`, 'error');
+            return;
+        }
+
+        const config = result.config;
+
+        // Populate form fields
+        document.getElementById('base-model').value = config.base_model || '';
+        document.getElementById('output-name').value = config.output_name || '';
+        document.getElementById('use-lora').checked = config.use_lora ?? true;
+        document.getElementById('use-4bit').checked = config.use_4bit ?? true;
+
+        if (config.lora_r) document.getElementById('lora-r').value = config.lora_r;
+        if (config.lora_alpha) document.getElementById('lora-alpha').value = config.lora_alpha;
+        if (config.lora_dropout) document.getElementById('lora-dropout').value = config.lora_dropout;
+
+        document.getElementById('max-seq-length').value = config.max_seq_length || 2048;
+        document.getElementById('epochs').value = config.num_train_epochs || 1;
+        document.getElementById('batch-size').value = config.per_device_train_batch_size || 1;
+        document.getElementById('grad-accum').value = config.gradient_accumulation_steps || 4;
+        document.getElementById('learning-rate').value = config.learning_rate || 0.000005;
+        document.getElementById('warmup-ratio').value = config.warmup_ratio || 0.1;
+        document.getElementById('beta').value = config.beta || 0.1;
+
+        // Dataset config
+        if (config.dataset) {
+            if (config.dataset.source) {
+                const source = config.dataset.source;
+                document.getElementById('dataset-source-type').value = source.source_type || 'huggingface';
+
+                if (source.repo_id) document.getElementById('hf-repo-id').value = source.repo_id;
+                if (source.split) document.getElementById('hf-split').value = source.split;
+                if (source.file_path) document.getElementById('local-file-path').value = source.file_path;
+                if (source.file_format) document.getElementById('local-file-format').value = source.file_format;
+            }
+
+            if (config.dataset.format) {
+                document.getElementById('format-type').value = config.dataset.format.format_type || 'chatml';
+            }
+
+            if (config.dataset.test_size) {
+                document.getElementById('test-size').value = config.dataset.test_size;
+            }
+        }
+
+        // Optional fields
+        if (config.hf_token) document.getElementById('hf-token').value = config.hf_token;
+        if (config.wandb_api_key) {
+            document.getElementById('wandb-token').value = config.wandb_api_key;
+            document.getElementById('wandb-project').value = config.wandb_project || '';
+        }
+        if (config.push_to_hub) {
+            document.getElementById('push-to-hub').checked = true;
+            document.getElementById('hub-repo-id').value = config.hf_hub_repo_id || '';
+            document.getElementById('hub-private').checked = config.hf_hub_private ?? true;
+        }
+
+        showToast(`Configuration '${name}' loaded successfully!`, 'success');
+        document.getElementById('load-config-modal').style.display = 'none';
+    } catch (error) {
+        showToast('Error loading configuration', 'error');
+        console.error(error);
+    }
+}
+
+// Load list of configs for management
+async function loadManageConfigsList() {
+    const listEl = document.getElementById('manage-config-list');
+    listEl.innerHTML = '<p style="text-align: center; color: #888;">Loading...</p>';
+
+    try {
+        const response = await fetch(`${API_URL}/configs/list`);
+        const result = await response.json();
+
+        if (!response.ok) {
+            listEl.innerHTML = '<p style="text-align: center; color: #ef4444;">Failed to load configurations</p>';
+            return;
+        }
+
+        const configs = result.configs;
+
+        if (configs.length === 0) {
+            listEl.innerHTML = '<p style="text-align: center; color: #888;">No saved configurations found.</p>';
+            return;
+        }
+
+        listEl.innerHTML = configs.map(cfg => `
+            <div class="config-item">
+                <h4>${cfg.name}</h4>
+                ${cfg.description ? `<p>${cfg.description}</p>` : ''}
+                <div class="config-meta">
+                    ${cfg.tags.map(tag => `<span class="config-tag">${tag}</span>`).join('')}
+                    <span class="config-date">Modified: ${new Date(cfg.modified_at).toLocaleString()}</span>
+                </div>
+                <div class="config-actions">
+                    <button class="config-load-btn" onclick="loadConfigByName('${cfg.filename}'); document.getElementById('manage-configs-modal').style.display='none';">
+                        📂 Load
+                    </button>
+                    <button class="config-delete-btn" onclick="deleteConfig('${cfg.filename}')">
+                        🗑️ Delete
+                    </button>
+                </div>
+            </div>
+        `).join('');
+    } catch (error) {
+        listEl.innerHTML = '<p style="text-align: center; color: #ef4444;">Error loading configurations</p>';
+        console.error(error);
+    }
+}
+
+// Delete a configuration
+async function deleteConfig(name) {
+    if (!confirm(`Are you sure you want to delete the configuration '${name}'?`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_URL}/configs/${name}`, {
+            method: 'DELETE'
+        });
+
+        const result = await response.json();
+
+        if (response.ok) {
+            showToast(`Configuration '${name}' deleted successfully!`, 'success');
+            loadManageConfigsList(); // Reload the list
+        } else {
+            showToast(`Failed to delete: ${result.detail}`, 'error');
+        }
+    } catch (error) {
+        showToast('Error deleting configuration', 'error');
+        console.error(error);
+    }
+}

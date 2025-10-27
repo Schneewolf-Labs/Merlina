@@ -571,3 +571,102 @@ small {
     transform: scale(0.95);
 }
 
+/* Config Management Styles */
+.config-item {
+    padding: 15px;
+    margin: 10px 0;
+    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    border-radius: 10px;
+    border: 2px solid transparent;
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+
+.config-item:hover {
+    border-color: var(--primary-purple);
+    transform: translateY(-2px);
+    box-shadow: 0 5px 15px rgba(102, 126, 234, 0.4);
+}
+
+.config-item h4 {
+    margin: 0 0 8px 0;
+    color: var(--primary-purple);
+    font-size: 1.1em;
+}
+
+.config-item p {
+    margin: 5px 0;
+    color: #666;
+    font-size: 0.9em;
+}
+
+.config-item .config-meta {
+    display: flex;
+    gap: 10px;
+    margin-top: 8px;
+    flex-wrap: wrap;
+}
+
+.config-tag {
+    display: inline-block;
+    padding: 3px 10px;
+    background: var(--primary-purple);
+    color: white;
+    border-radius: 12px;
+    font-size: 0.75em;
+    font-weight: bold;
+}
+
+.config-date {
+    color: #999;
+    font-size: 0.75em;
+}
+
+.config-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.config-actions button {
+    padding: 8px 15px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: all 0.3s ease;
+}
+
+.config-load-btn {
+    background: var(--primary-purple);
+    color: white;
+    flex: 1;
+}
+
+.config-load-btn:hover {
+    background: #5568d3;
+    transform: scale(1.05);
+}
+
+.config-delete-btn {
+    background: #ef4444;
+    color: white;
+    padding: 8px 12px !important;
+}
+
+.config-delete-btn:hover {
+    background: #dc2626;
+    transform: scale(1.05);
+}
+
+.config-export-btn {
+    background: #10b981;
+    color: white;
+    padding: 8px 12px !important;
+}
+
+.config-export-btn:hover {
+    background: #059669;
+    transform: scale(1.05);
+}
+

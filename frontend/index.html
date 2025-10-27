@@ -300,6 +300,28 @@
             <!-- Training Configuration (STEP 3) -->
             <section id="config-section" class="card">
                 <h2>✨ Step 3: Configure Training Parameters</h2>
+
+                <!-- Config Management Section -->
+                <div class="spell-section" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 12px; margin-bottom: 25px;">
+                    <h3 style="color: white; margin-bottom: 15px;">💾 Configuration Management</h3>
+
+                    <div class="form-row" style="gap: 10px; margin-bottom: 15px;">
+                        <button type="button" id="save-config-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
+                            💾 Save Config
+                        </button>
+                        <button type="button" id="load-config-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
+                            📂 Load Config
+                        </button>
+                        <button type="button" id="manage-configs-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
+                            🗂️ Manage
+                        </button>
+                    </div>
+
+                    <small style="color: rgba(255,255,255,0.9); display: block; text-align: center;">
+                        Save your current settings for later reuse
+                    </small>
+                </div>
+
                 <form id="training-form">
                     <!-- Output Name -->
                     <div class="form-group">
@@ -688,6 +710,56 @@
 
         <!-- Notification Toast -->
         <div id="toast" class="toast"></div>
+
+        <!-- Save Config Modal -->
+        <div id="save-config-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <span class="close" onclick="document.getElementById('save-config-modal').style.display='none'">&times;</span>
+                <h2>💾 Save Configuration</h2>
+                <div class="form-group">
+                    <label>Configuration Name</label>
+                    <input type="text" id="config-name" placeholder="my-training-config" class="magic-input" required>
+                </div>
+                <div class="form-group">
+                    <label>Description (Optional)</label>
+                    <textarea id="config-description" placeholder="Describe this configuration..." class="magic-input" rows="3"></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Tags (Optional, comma-separated)</label>
+                    <input type="text" id="config-tags" placeholder="llama3, orpo, 4bit" class="magic-input">
+                </div>
+                <div class="action-buttons">
+                    <button type="button" onclick="saveCurrentConfig()" class="action-button" style="background: var(--primary-purple); color: white;">
+                        Save Configuration
+                    </button>
+                    <button type="button" onclick="document.getElementById('save-config-modal').style.display='none'" class="action-button" style="background: #ccc;">
+                        Cancel
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Load Config Modal -->
+        <div id="load-config-modal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <span class="close" onclick="document.getElementById('load-config-modal').style.display='none'">&times;</span>
+                <h2>📂 Load Configuration</h2>
+                <div id="config-list" style="margin: 20px 0;">
+                    <p style="text-align: center; color: #888;">Loading configurations...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Manage Configs Modal -->
+        <div id="manage-configs-modal" class="modal" style="display: none;">
+            <div class="modal-content" style="max-width: 800px;">
+                <span class="close" onclick="document.getElementById('manage-configs-modal').style.display='none'">&times;</span>
+                <h2>🗂️ Manage Configurations</h2>
+                <div id="manage-config-list" style="margin: 20px 0;">
+                    <p style="text-align: center; color: #888;">Loading configurations...</p>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script src="script.js"></script>

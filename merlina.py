@@ -42,6 +42,7 @@ from dataset_handlers import (
 from src.job_manager import JobManager
 from src.websocket_manager import websocket_manager
 from src.preflight_checks import validate_config
+from src.config_manager import ConfigManager
 
 # Import configuration
 from config import settings
@@ -69,6 +70,9 @@ app.add_middleware(
 
 # Initialize job manager with persistent storage
 job_manager = JobManager(db_path=settings.database_path)
+
+# Initialize config manager
+config_manager = ConfigManager(config_dir=str(settings.data_dir / "configs"))
 
 # Global storage for uploaded datasets (still in-memory, could be persisted later)
 uploaded_datasets = {}  # dataset_id -> bytes content
@@ -1019,6 +1023,180 @@ async def list_uploaded_datasets():
             for dataset_id, (content, filename) in uploaded_datasets.items()
         ]
     }
+
+
+# ===== Config Management Endpoints =====
+
+class SaveConfigRequest(BaseModel):
+    """Request to save a training configuration"""
+    name: str = Field(..., description="Name for the configuration")
+    config: dict = Field(..., description="Training configuration to save")
+    description: str = Field("", description="Optional description of the configuration")
+    tags: list[str] = Field(default_factory=list, description="Optional tags for categorization")
+
+
+@app.post("/configs/save")
+async def save_config(request: SaveConfigRequest):
+    """
+    Save a training configuration for later reuse.
+
+    The configuration is saved as a JSON file in data/configs/ directory.
+    """
+    try:
+        filepath = config_manager.save_config(
+            name=request.name,
+            config=request.config,
+            description=request.description,
+            tags=request.tags
+        )
+
+        logger.info(f"Saved configuration: {request.name}")
+
+        return {
+            "status": "success",
+            "message": f"Configuration '{request.name}' saved successfully",
+            "filepath": filepath
+        }
+
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to save configuration: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save configuration: {str(e)}")
+
+
+@app.get("/configs/list")
+async def list_configs(tag: Optional[str] = None):
+    """
+    List all saved training configurations.
+
+    Args:
+        tag: Optional tag to filter configurations
+    """
+    try:
+        configs = config_manager.list_configs(tag=tag)
+        return {
+            "status": "success",
+            "configs": configs,
+            "count": len(configs)
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to list configurations: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to list configurations: {str(e)}")
+
+
+@app.get("/configs/{name}")
+async def get_config(name: str, include_metadata: bool = False):
+    """
+    Load a saved training configuration.
+
+    Args:
+        name: Name of the configuration to load
+        include_metadata: If True, include metadata in response (default: False)
+    """
+    try:
+        if include_metadata:
+            config = config_manager.load_config(name)
+        else:
+            config = config_manager.get_config_without_metadata(name)
+
+        return {
+            "status": "success",
+            "config": config
+        }
+
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Configuration '{name}' not found")
+    except Exception as e:
+        logger.error(f"Failed to load configuration: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to load configuration: {str(e)}")
+
+
+@app.delete("/configs/{name}")
+async def delete_config(name: str):
+    """
+    Delete a saved training configuration.
+
+    Args:
+        name: Name of the configuration to delete
+    """
+    try:
+        deleted = config_manager.delete_config(name)
+
+        if deleted:
+            logger.info(f"Deleted configuration: {name}")
+            return {
+                "status": "success",
+                "message": f"Configuration '{name}' deleted successfully"
+            }
+        else:
+            raise HTTPException(status_code=404, detail=f"Configuration '{name}' not found")
+
+    except Exception as e:
+        logger.error(f"Failed to delete configuration: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete configuration: {str(e)}")
+
+
+class ExportConfigRequest(BaseModel):
+    """Request to export a configuration"""
+    name: str = Field(..., description="Name of the configuration to export")
+    output_path: str = Field(..., description="Path to export the configuration to")
+
+
+@app.post("/configs/export")
+async def export_config(request: ExportConfigRequest):
+    """
+    Export a configuration to a specific file path.
+    """
+    try:
+        filepath = config_manager.export_config(request.name, request.output_path)
+
+        logger.info(f"Exported configuration '{request.name}' to {filepath}")
+
+        return {
+            "status": "success",
+            "message": f"Configuration exported to {filepath}",
+            "filepath": filepath
+        }
+
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"Configuration '{request.name}' not found")
+    except Exception as e:
+        logger.error(f"Failed to export configuration: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to export configuration: {str(e)}")
+
+
+class ImportConfigRequest(BaseModel):
+    """Request to import a configuration"""
+    filepath: str = Field(..., description="Path to the configuration file to import")
+    name: Optional[str] = Field(None, description="Optional name for the imported config")
+
+
+@app.post("/configs/import")
+async def import_config(request: ImportConfigRequest):
+    """
+    Import a configuration from an external file.
+    """
+    try:
+        if not Path(request.filepath).exists():
+            raise HTTPException(status_code=404, detail=f"File not found: {request.filepath}")
+
+        saved_path = config_manager.import_config(request.filepath, request.name)
+
+        logger.info(f"Imported configuration from {request.filepath}")
+
+        return {
+            "status": "success",
+            "message": "Configuration imported successfully",
+            "filepath": saved_path
+        }
+
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        logger.error(f"Failed to import configuration: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to import configuration: {str(e)}")
 
 
 # ===== Model Preload Endpoints =====
