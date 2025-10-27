@@ -691,7 +691,7 @@ async function handleSubmit(e) {
         showJobDetails(data.job_id);
 
         // Only clear the model name field (preserve other settings)
-        document.getElementById('base-model').value = '';
+        document.getElementById('output-name').value = '';
         
     } catch (error) {
         showToast(`❌ Failed to cast spell: ${error.message}`, 'error');
