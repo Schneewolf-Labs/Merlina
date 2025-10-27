@@ -291,6 +291,31 @@ header {
     color: white;
 }
 
+.status-stopped {
+    background: #9e9e9e;
+    color: white;
+}
+
+.status-stopping {
+    background: #ff9800;
+    color: white;
+}
+
+.status-saving_stopped {
+    background: #ff9800;
+    color: white;
+}
+
+.status-started, .status-initializing, .status-loading_model, .status-loading_dataset {
+    background: var(--wizard-blue);
+    color: #333;
+}
+
+.status-saving, .status-uploading {
+    background: var(--secondary-purple);
+    color: white;
+}
+
 /* Progress Bar */
 .progress-bar {
     width: 100%;

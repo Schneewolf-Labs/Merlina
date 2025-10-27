@@ -800,15 +800,29 @@ async function updateJobStatus() {
             wandbLink.style.display = 'none';
         }
         
-        // Handle completion
+        // Handle job status changes
+        const stopButton = document.getElementById('stop-button');
+
         if (status.status === 'completed') {
             clearInterval(pollInterval);
             showToast('✅ Training completed successfully!', 'success');
-            document.getElementById('stop-button').disabled = true;
+            stopButton.disabled = true;
         } else if (status.status === 'failed') {
             clearInterval(pollInterval);
             showToast(`❌ Training failed: ${status.error || 'Unknown error'}`, 'error');
-            document.getElementById('stop-button').disabled = true;
+            stopButton.disabled = true;
+        } else if (status.status === 'stopped') {
+            clearInterval(pollInterval);
+            const finalStep = status.current_step || '?';
+            showToast(`⏸️ Training stopped gracefully at step ${finalStep}`, 'warning');
+            stopButton.disabled = true;
+        } else if (status.status === 'stopping') {
+            stopButton.disabled = true;
+            stopButton.textContent = '⏸️ Stopping...';
+        } else if (status.status === 'training' || status.status === 'initializing' || status.status === 'loading_model' || status.status === 'loading_dataset') {
+            // Re-enable stop button for active statuses (in case it was disabled)
+            stopButton.disabled = false;
+            stopButton.textContent = '⏸️ Stop Training';
         }
         
         // Update jobs list
@@ -830,15 +844,37 @@ function closeJobModal() {
     document.getElementById('stop-button').disabled = false;
 }
 
-// Stop training (placeholder - backend doesn't implement this yet)
+// Stop training gracefully
 async function stopTraining() {
     if (!currentJobId) return;
 
-    if (confirm('Are you sure you want to stop this training?')) {
+    if (confirm('⚠️ Stop training gracefully?\n\nThe training will:\n• Complete the current step\n• Save a checkpoint\n• Exit cleanly\n\nThis cannot be undone.')) {
         try {
-            // In a real implementation, you'd call an endpoint to stop the job
-            showToast('⚠️ Stop functionality not implemented in backend yet', 'warning');
+            const response = await fetch(`${API_URL}/jobs/${currentJobId}/stop`, {
+                method: 'POST'
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail || 'Failed to stop training');
+            }
+
+            const data = await response.json();
+
+            if (data.status === 'success') {
+                showToast('✅ Stop request sent. Training will stop after current step.', 'success');
+
+                // Disable stop button to prevent multiple clicks
+                const stopBtn = document.getElementById('stop-button');
+                if (stopBtn) {
+                    stopBtn.disabled = true;
+                    stopBtn.textContent = '⏸️ Stopping...';
+                }
+            } else {
+                showToast(`⚠️ ${data.message}`, 'warning');
+            }
         } catch (error) {
+            console.error('Failed to stop training:', error);
             showToast(`❌ Failed to stop training: ${error.message}`, 'error');
         }
     }

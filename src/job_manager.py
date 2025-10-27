@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 class JobRecord:
     """Represents a training job"""
     job_id: str
-    status: str  # started, initializing, loading_model, loading_dataset, training, saving, uploading, completed, failed
+    status: str  # started, initializing, loading_model, loading_dataset, training, saving, uploading, completed, failed, stopped
     progress: float
     created_at: str
     updated_at: str
@@ -33,6 +33,7 @@ class JobRecord:
     output_dir: Optional[str] = None
     metrics: Optional[Dict[str, Any]] = None
     wandb_url: Optional[str] = None
+    stop_requested: bool = False
 
 
 class JobManager:
@@ -88,7 +89,8 @@ class JobManager:
                     error TEXT,
                     output_dir TEXT,
                     metrics TEXT,
-                    wandb_url TEXT
+                    wandb_url TEXT,
+                    stop_requested INTEGER DEFAULT 0
                 )
             """)
 
@@ -98,6 +100,13 @@ class JobManager:
             if 'wandb_url' not in columns:
                 cursor.execute("ALTER TABLE jobs ADD COLUMN wandb_url TEXT")
                 logger.info("Added wandb_url column to jobs table")
+
+            # Migration: Add stop_requested column if it doesn't exist
+            cursor.execute("PRAGMA table_info(jobs)")
+            columns = [row[1] for row in cursor.fetchall()]
+            if 'stop_requested' not in columns:
+                cursor.execute("ALTER TABLE jobs ADD COLUMN stop_requested INTEGER DEFAULT 0")
+                logger.info("Added stop_requested column to jobs table")
 
             # Training metrics table (for time-series data)
             cursor.execute("""
@@ -161,8 +170,8 @@ class JobManager:
                 INSERT INTO jobs (
                     job_id, status, progress, created_at, updated_at, config,
                     current_step, total_steps, loss, eval_loss, learning_rate,
-                    error, output_dir, metrics, wandb_url
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    error, output_dir, metrics, wandb_url, stop_requested
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 job.job_id,
                 job.status,
@@ -178,7 +187,8 @@ class JobManager:
                 job.error,
                 job.output_dir,
                 json.dumps(job.metrics) if job.metrics else None,
-                job.wandb_url
+                job.wandb_url,
+                int(job.stop_requested)
             ))
 
         logger.info(f"Created job {job_id}")
@@ -197,7 +207,8 @@ class JobManager:
         error: Optional[str] = None,
         output_dir: Optional[str] = None,
         metrics: Optional[Dict[str, Any]] = None,
-        wandb_url: Optional[str] = None
+        wandb_url: Optional[str] = None,
+        stop_requested: Optional[bool] = None
     ) -> bool:
         """
         Update job fields.
@@ -256,6 +267,10 @@ class JobManager:
             updates.append("wandb_url = ?")
             params.append(wandb_url)
 
+        if stop_requested is not None:
+            updates.append("stop_requested = ?")
+            params.append(int(stop_requested))
+
         if not updates:
             return False
 
@@ -276,6 +291,19 @@ class JobManager:
             logger.debug(f"Updated job {job_id}: {dict(zip([u.split(' = ')[0] for u in updates], params[:-1]))}")
 
         return success
+
+    def request_stop(self, job_id: str) -> bool:
+        """
+        Request a job to stop gracefully.
+        Sets the stop_requested flag so training can detect and stop.
+
+        Args:
+            job_id: Job identifier
+
+        Returns:
+            True if flag was set successfully
+        """
+        return self.update_job(job_id, stop_requested=True)
 
     def get_job(self, job_id: str) -> Optional[JobRecord]:
         """
@@ -491,5 +519,6 @@ class JobManager:
             error=row["error"],
             output_dir=row["output_dir"],
             metrics=json.loads(row["metrics"]) if row["metrics"] else None,
-            wandb_url=row["wandb_url"] if "wandb_url" in row.keys() else None
+            wandb_url=row["wandb_url"] if "wandb_url" in row.keys() else None,
+            stop_requested=bool(row["stop_requested"]) if "stop_requested" in row.keys() else False
         )

@@ -693,6 +693,39 @@ async def get_job_metrics(job_id: str):
     }
 
 
+@app.post("/jobs/{job_id}/stop")
+async def stop_job(job_id: str):
+    """
+    Request a job to stop gracefully.
+    Training will complete the current step, save a checkpoint, and exit cleanly.
+    """
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    # Check if job is in a stoppable state
+    stoppable_states = ["training", "loading_model", "loading_dataset", "initializing"]
+    if job.status not in stoppable_states:
+        return {
+            "status": "warning",
+            "message": f"Job {job_id} is in state '{job.status}' and cannot be stopped",
+            "job_id": job_id
+        }
+
+    # Set stop flag
+    success = job_manager.request_stop(job_id)
+
+    if success:
+        logger.info(f"Stop requested for job {job_id}")
+        return {
+            "status": "success",
+            "message": f"Stop request sent to job {job_id}. Training will stop after current step.",
+            "job_id": job_id
+        }
+    else:
+        raise HTTPException(status_code=500, detail="Failed to set stop flag")
+
+
 @app.delete("/jobs/{job_id}")
 async def delete_job(job_id: str):
     """Delete a specific job and its metrics"""

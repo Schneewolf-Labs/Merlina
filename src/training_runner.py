@@ -126,13 +126,36 @@ def send_websocket_update(coro, loop=None):
 
 class WebSocketCallback(TrainerCallback):
     """
-    Custom callback to send training metrics via WebSocket
+    Custom callback to send training metrics via WebSocket and handle stop requests
     """
 
     def __init__(self, job_id: str, job_manager: JobManager, event_loop=None):
         self.job_id = job_id
         self.job_manager = job_manager
         self.event_loop = event_loop
+
+    def on_step_end(self, args, state, control, **kwargs):
+        """Called at the end of each training step to check for stop requests"""
+        # Check if stop was requested
+        job = self.job_manager.get_job(self.job_id)
+        if job and job.stop_requested:
+            logger.info(f"Stop requested for job {self.job_id} - gracefully stopping training")
+            control.should_training_stop = True
+
+            # Send WebSocket notification
+            send_websocket_update(
+                websocket_manager.send_status_update(
+                    job_id=self.job_id,
+                    status="stopping",
+                    progress=state.global_step / state.max_steps if state.max_steps else 0.5,
+                    current_step=state.global_step,
+                    total_steps=state.max_steps,
+                    message="Stop requested - saving checkpoint..."
+                ),
+                self.event_loop
+            )
+
+        return control
 
     def on_log(self, args, state, control, logs=None, **kwargs):
         """Called when trainer logs metrics"""
@@ -505,8 +528,13 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
         logger.info("Starting training")
         train_result = trainer.train()
 
+        # Check if training was stopped early
+        job = job_manager.get_job(job_id)
+        was_stopped = job and job.stop_requested
+
         # Save model
-        job_manager.update_job(job_id, status="saving", progress=0.9)
+        save_status = "saving_stopped" if was_stopped else "saving"
+        job_manager.update_job(job_id, status=save_status, progress=0.9)
 
         send_websocket_update(
             websocket_manager.send_status_update(
@@ -690,11 +718,14 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
         gc.collect()
         torch.cuda.empty_cache()
 
-        # Mark as completed
+        # Mark as completed or stopped
+        final_status = "stopped" if was_stopped else "completed"
+        final_progress = 1.0 if not was_stopped else (job.current_step / job.total_steps if job.total_steps else 0.9)
+
         job_manager.update_job(
             job_id,
-            status="completed",
-            progress=1.0,
+            status=final_status,
+            progress=final_progress,
             output_dir=final_output_dir
         )
 
@@ -706,7 +737,10 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
             event_loop
         )
 
-        logger.info(f"Training completed for job {job_id}")
+        if was_stopped:
+            logger.info(f"Training stopped early for job {job_id} at step {job.current_step}/{job.total_steps}")
+        else:
+            logger.info(f"Training completed for job {job_id}")
 
     except Exception as e:
         logger.error(f"Training failed for job {job_id}: {str(e)}", exc_info=True)
