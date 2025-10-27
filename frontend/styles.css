@@ -695,3 +695,333 @@ small {
     transform: scale(1.05);
 }
 
+/* ===== NEW FEATURES STYLES ===== */
+
+/* Validation Errors */
+.input-error {
+    border-color: var(--danger) !important;
+    background: #ffebee !important;
+    animation: shake 0.3s ease;
+}
+
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    75% { transform: translateX(5px); }
+}
+
+.field-error-message {
+    color: var(--danger);
+    font-size: 0.85em;
+    margin-top: 5px;
+    padding: 5px 10px;
+    background: #ffebee;
+    border-left: 3px solid var(--danger);
+    border-radius: 4px;
+    animation: fadeInUp 0.3s ease;
+}
+
+/* Loading States */
+.loading {
+    position: relative;
+    pointer-events: none;
+    opacity: 0.6;
+}
+
+.loading::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 16px;
+    height: 16px;
+    margin: -8px 0 0 -8px;
+    border: 2px solid transparent;
+    border-top-color: var(--primary-purple);
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Skeleton Loader */
+.skeleton-loader {
+    padding: 15px;
+}
+
+.skeleton-line {
+    height: 20px;
+    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 4px;
+    margin-bottom: 10px;
+}
+
+.skeleton-line:last-child {
+    width: 60%;
+}
+
+@keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+/* Sparkle Effect */
+.sparkle-effect {
+    position: fixed;
+    pointer-events: none;
+    width: 4px;
+    height: 4px;
+    background: var(--wizard-yellow);
+    border-radius: 50%;
+    animation: sparkleFloat 1s ease-out forwards;
+    z-index: 9999;
+}
+
+@keyframes sparkleFloat {
+    0% {
+        transform: translateY(0) scale(0);
+        opacity: 1;
+    }
+    50% {
+        transform: translateY(-20px) scale(1);
+        opacity: 1;
+    }
+    100% {
+        transform: translateY(-40px) scale(0);
+        opacity: 0;
+    }
+}
+
+/* Tooltips */
+.tooltip {
+    position: fixed;
+    background: rgba(0, 0, 0, 0.9);
+    color: white;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 0.85em;
+    max-width: 250px;
+    z-index: 10000;
+    pointer-events: none;
+    animation: fadeIn 0.2s ease;
+    transform: translateX(-50%);
+}
+
+.tooltip::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    margin-left: -5px;
+    border: 5px solid transparent;
+    border-top-color: rgba(0, 0, 0, 0.9);
+}
+
+/* Message States */
+.success-message {
+    padding: 10px 15px;
+    background: #e8f5e9;
+    border: 1px solid var(--success);
+    border-radius: 8px;
+    color: #2e7d32;
+    margin-top: 10px;
+    animation: fadeInUp 0.3s ease;
+}
+
+.error-message {
+    padding: 10px 15px;
+    background: #ffebee;
+    border: 1px solid var(--danger);
+    border-radius: 8px;
+    color: #c62828;
+    margin-top: 10px;
+    animation: fadeInUp 0.3s ease;
+}
+
+.error-header, .warning-header {
+    font-weight: bold;
+    margin-bottom: 5px;
+}
+
+.error-body, .warning-body {
+    font-size: 0.9em;
+}
+
+.warning-message {
+    padding: 15px;
+    background: #fff3cd;
+    border: 1px solid var(--warning);
+    border-radius: 10px;
+    color: #856404;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 20px;
+    color: #888;
+    font-style: italic;
+}
+
+.error-state {
+    text-align: center;
+    padding: 20px;
+    color: var(--danger);
+}
+
+/* GPU Cards */
+.gpu-card {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    padding: 15px;
+    border-radius: 10px;
+    margin-bottom: 10px;
+    color: white;
+    animation: fadeInUp 0.3s ease;
+}
+
+.gpu-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.gpu-name {
+    font-weight: bold;
+    font-size: 1.1em;
+}
+
+.gpu-badge {
+    background: rgba(255, 255, 255, 0.2);
+    padding: 5px 10px;
+    border-radius: 5px;
+    font-size: 0.85em;
+}
+
+.gpu-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+    font-size: 0.9em;
+}
+
+.gpu-stat {
+    display: flex;
+    flex-direction: column;
+}
+
+.gpu-stat-label {
+    opacity: 0.8;
+    font-size: 0.85em;
+}
+
+.gpu-stat-value {
+    font-weight: bold;
+    margin: 2px 0;
+}
+
+.gpu-stat-detail {
+    font-size: 0.85em;
+    opacity: 0.9;
+}
+
+/* Modal Improvements */
+.modal {
+    display: none;
+    justify-content: center;
+    align-items: center;
+}
+
+.modal.show {
+    display: flex;
+}
+
+/* Progress Bar Improvements */
+.progress-fill.indeterminate {
+    width: 30% !important;
+    animation: indeterminate 1.5s infinite;
+}
+
+@keyframes indeterminate {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(400%); }
+}
+
+/* Focus Improvements */
+input:focus,
+select:focus,
+textarea:focus,
+button:focus {
+    outline: 2px solid var(--primary-purple);
+    outline-offset: 2px;
+}
+
+/* Accessibility - Screen Reader Only */
+.sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+}
+
+/* Print Styles */
+@media print {
+    body::before {
+        display: none;
+    }
+
+    .action-button,
+    .cast-button,
+    .delete-job-btn,
+    .toggle-advanced-btn {
+        display: none;
+    }
+}
+
+/* Dark Mode Support (Future Enhancement) */
+@media (prefers-color-scheme: dark) {
+    /* Uncomment to enable dark mode */
+    /*
+    :root {
+        --card-bg: rgba(30, 30, 30, 0.95);
+    }
+
+    body {
+        color: #e0e0e0;
+    }
+
+    .magic-input,
+    .magic-select {
+        background: #2a2a2a;
+        color: #e0e0e0;
+    }
+    */
+}
+
+/* Reduced Motion Support */
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+    }
+
+    body::before {
+        animation: none;
+    }
+
+    .wizard-hat {
+        animation: none;
+    }
+}
+

@@ -536,14 +536,18 @@ if FRONTEND_DIR.exists():
     # Mount the frontend directory to serve static files
     app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
     
-    # Also serve CSS and JS from root for simplicity
+    # Also serve CSS, JS modules, and images from root for simplicity
     @app.get("/styles.css")
     async def serve_css():
         return FileResponse(FRONTEND_DIR / "styles.css", media_type="text/css")
-    
-    @app.get("/script.js")
-    async def serve_js():
-        return FileResponse(FRONTEND_DIR / "script.js", media_type="application/javascript")
+
+    @app.get("/js/{file_path:path}")
+    async def serve_js_modules(file_path: str):
+        """Serve JavaScript modules from js/ directory"""
+        js_file = FRONTEND_DIR / "js" / file_path
+        if js_file.exists() and js_file.is_file():
+            return FileResponse(js_file, media_type="application/javascript")
+        return {"error": "File not found"}
 
     @app.get("/merlina.png")
     async def serve_logo():
