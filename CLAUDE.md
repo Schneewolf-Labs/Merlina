@@ -55,6 +55,7 @@ pip install -r requirements.txt
 - `websocket_manager.py` - Real-time WebSocket connections
 - `preflight_checks.py` - Configuration validation
 - `training_runner.py` - Enhanced training with callbacks
+- `job_queue.py` - Job queue with priority and concurrency control
 
 **Dataset Handling Module (dataset_handlers/)**
 
@@ -131,11 +132,42 @@ Merlina supports loading models from two sources:
 - HuggingFace models: Checks for gated models and required tokens
 - Both: Automatically detected via `is_local_model_path()` function
 
+### Job Queue System (v1.1)
+
+Jobs are managed through a priority queue system with configurable concurrency:
+
+**Job States:**
+- `queued` - Job waiting in queue for execution
+- `running`/`initializing`/`loading_model`/`loading_dataset`/`training` - Job executing
+- `completed` - Job finished successfully
+- `failed` - Job failed with error
+- `stopped` - Job stopped by user request
+- `cancelled` - Job cancelled while in queue
+
+**Queue Features:**
+- Priority levels: LOW, NORMAL, HIGH (higher priority jobs run first)
+- Configurable max concurrent jobs (default: 1)
+- Thread-safe job management with worker threads
+- Automatic queue processing
+- Job cancellation support (queued or running)
+- Queue position tracking
+
+**Configuration:**
+- `MAX_CONCURRENT_JOBS` in `.env` (default: 1)
+- Set to 1 for single GPU to prevent OOM
+- Increase for multi-GPU systems with sufficient VRAM
+
+**Key Classes:**
+- `JobQueue` (src/job_queue.py) - Main queue manager
+- `QueuedJob` - Represents a job in the queue
+- `JobPriority` - Enum for priority levels
+
 ### Training Flow
 
-1. User submits training config via POST /train
-2. Job created with unique job_id
-3. `run_training()` executes in background:
+1. User submits training config via POST /train with optional priority
+2. Job created with unique job_id and added to queue
+3. Worker thread picks up job when slot available
+4. `run_training()` executes:
    - Load model and tokenizer with optional 4-bit quantization
    - Create DatasetPipeline with appropriate loader and formatter
    - Call `pipeline.prepare()` to get formatted train/eval datasets
@@ -148,9 +180,14 @@ Merlina supports loading models from two sources:
 ### API Endpoints
 
 **Training**
-- POST /train - Start training job
-- GET /status/{job_id} - Get job progress
+- POST /train?priority=normal - Submit training job to queue (priority: low/normal/high)
+- GET /status/{job_id} - Get job progress and queue status
 - GET /jobs - List all jobs
+- POST /jobs/{job_id}/stop - Cancel queued job or stop running job
+
+**Queue Management**
+- GET /queue/status - Get overall queue statistics and job lists
+- GET /queue/jobs - List queued and running jobs with positions
 
 **Dataset Management**
 - POST /dataset/preview - Preview raw dataset (10 samples)

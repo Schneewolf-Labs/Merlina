@@ -63,6 +63,11 @@ class Settings(BaseSettings):
     default_num_epochs: int = 2
 
     # ==========================================
+    # Job Queue Configuration
+    # ==========================================
+    max_concurrent_jobs: int = 1  # Maximum number of training jobs to run simultaneously
+
+    # ==========================================
     # System Configuration
     # ==========================================
     cuda_visible_devices: Optional[str] = None

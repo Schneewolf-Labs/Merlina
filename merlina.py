@@ -43,6 +43,7 @@ from src.job_manager import JobManager
 from src.websocket_manager import websocket_manager
 from src.preflight_checks import validate_config
 from src.config_manager import ConfigManager
+from src.job_queue import JobQueue, JobPriority
 
 # Import configuration
 from config import settings
@@ -70,6 +71,9 @@ app.add_middleware(
 
 # Initialize job manager with persistent storage
 job_manager = JobManager(db_path=settings.database_path)
+
+# Initialize job queue with configurable concurrency
+job_queue = JobQueue(max_concurrent_jobs=settings.max_concurrent_jobs, job_manager=job_manager)
 
 # Initialize config manager
 config_manager = ConfigManager(config_dir=str(settings.data_dir / "configs"))
@@ -282,6 +286,8 @@ class JobStatus(BaseModel):
     loss: Optional[float] = None
     error: Optional[str] = None
     wandb_url: Optional[str] = None
+    queue_position: Optional[int] = None
+    queue_state: Optional[str] = None
 
 # Old training function - kept for reference, now using training_runner.py
 # def run_training(job_id: str, config: TrainingConfig):
@@ -578,10 +584,14 @@ async def validate_training_config(config: TrainingConfig):
 
 
 @app.post("/train", response_model=JobResponse)
-async def create_training_job(config: TrainingConfig, background_tasks: BackgroundTasks):
+async def create_training_job(config: TrainingConfig, priority: Optional[str] = "normal"):
     """
-    Create and start a training job.
-    Runs pre-flight validation before starting.
+    Create and queue a training job.
+    Runs pre-flight validation before queueing.
+
+    Args:
+        config: Training configuration
+        priority: Job priority (low, normal, high) - default: normal
     """
     # Run pre-flight validation
     is_valid, validation_results = validate_config(config)
@@ -595,6 +605,14 @@ async def create_training_job(config: TrainingConfig, background_tasks: Backgrou
                 "warnings": validation_results.get("warnings", [])
             }
         )
+
+    # Parse priority
+    priority_map = {
+        "low": JobPriority.LOW,
+        "normal": JobPriority.NORMAL,
+        "high": JobPriority.HIGH
+    }
+    job_priority = priority_map.get(priority.lower(), JobPriority.NORMAL)
 
     # Create job in database
     job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -610,27 +628,43 @@ async def create_training_job(config: TrainingConfig, background_tasks: Backgrou
     except RuntimeError:
         loop = None
 
-    # Start training in background
-    background_tasks.add_task(run_training_sync, job_id, config, job_manager, uploaded_datasets, loop)
+    # Define callback that will be executed by worker
+    def training_callback(job_id: str, config_dict: dict):
+        """Wrapper to convert config dict back to TrainingConfig"""
+        from pydantic import TypeAdapter
+        config_obj = TypeAdapter(TrainingConfig).validate_python(config_dict)
+        run_training_sync(job_id, config_obj, job_manager, uploaded_datasets, loop)
+
+    # Submit job to queue
+    position = job_queue.submit(
+        job_id=job_id,
+        config=config.model_dump(),
+        callback=training_callback,
+        priority=job_priority
+    )
 
     # Return response with warnings if any
-    message = f"Training spell cast! Job {job_id} is now running."
+    message = f"Training spell cast! Job {job_id} queued at position {position}."
     if validation_results.get("warnings"):
         message += f" Note: {len(validation_results['warnings'])} warning(s) detected."
 
     return JobResponse(
         job_id=job_id,
-        status="started",
+        status="queued",
         message=message
     )
 
 @app.get("/status/{job_id}", response_model=JobStatus)
 async def get_job_status(job_id: str):
-    """Get status of a training job"""
+    """Get status of a training job with queue information"""
     if job_id not in jobs:
         raise HTTPException(status_code=404, detail="Job not found")
 
     job = jobs[job_id]
+
+    # Get queue status
+    queue_status = job_queue.get_status(job_id)
+
     return JobStatus(
         job_id=job_id,
         status=job["status"],
@@ -639,7 +673,9 @@ async def get_job_status(job_id: str):
         total_steps=job.get("total_steps"),
         loss=job.get("loss"),
         error=job.get("error"),
-        wandb_url=job.get("wandb_url")
+        wandb_url=job.get("wandb_url"),
+        queue_position=queue_status.get("position"),
+        queue_state=queue_status.get("state")
     )
 
 @app.get("/jobs")
@@ -696,34 +732,47 @@ async def get_job_metrics(job_id: str):
 @app.post("/jobs/{job_id}/stop")
 async def stop_job(job_id: str):
     """
-    Request a job to stop gracefully.
-    Training will complete the current step, save a checkpoint, and exit cleanly.
+    Cancel or stop a job.
+    - For queued jobs: Removes from queue immediately
+    - For running jobs: Graceful stop after current step
     """
     job = job_manager.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # Check if job is in a stoppable state
-    stoppable_states = ["training", "loading_model", "loading_dataset", "initializing"]
-    if job.status not in stoppable_states:
-        return {
-            "status": "warning",
-            "message": f"Job {job_id} is in state '{job.status}' and cannot be stopped",
-            "job_id": job_id
-        }
+    # Check queue status
+    queue_status = job_queue.get_status(job_id)
 
-    # Set stop flag
-    success = job_manager.request_stop(job_id)
+    # If job is queued, cancel it from the queue
+    if queue_status.get("state") == "queued":
+        success = job_queue.cancel(job_id)
+        if success:
+            logger.info(f"Job {job_id} cancelled from queue")
+            return {
+                "status": "success",
+                "message": f"Job {job_id} removed from queue",
+                "job_id": job_id,
+                "was_queued": True
+            }
 
-    if success:
-        logger.info(f"Stop requested for job {job_id}")
-        return {
-            "status": "success",
-            "message": f"Stop request sent to job {job_id}. Training will stop after current step.",
-            "job_id": job_id
-        }
-    else:
-        raise HTTPException(status_code=500, detail="Failed to set stop flag")
+    # If job is running, request graceful stop
+    if queue_status.get("state") == "running" or job.status in ["training", "loading_model", "loading_dataset", "initializing"]:
+        success = job_queue.cancel(job_id)  # This will set stop_requested flag
+        if success:
+            logger.info(f"Stop requested for running job {job_id}")
+            return {
+                "status": "success",
+                "message": f"Stop request sent to job {job_id}. Training will stop after current step.",
+                "job_id": job_id,
+                "was_queued": False
+            }
+
+    # Job is not in a stoppable state
+    return {
+        "status": "warning",
+        "message": f"Job {job_id} is in state '{job.status}' and cannot be stopped",
+        "job_id": job_id
+    }
 
 
 @app.delete("/jobs/{job_id}")
@@ -795,7 +844,43 @@ async def get_stats():
         "database": job_manager.get_stats(),
         "websockets": {
             "total_connections": websocket_manager.get_connection_count()
-        }
+        },
+        "queue": job_queue.get_queue_stats()
+    }
+
+
+@app.get("/queue/status")
+async def get_queue_status():
+    """
+    Get overall queue status and statistics.
+
+    Returns information about:
+    - Number of queued jobs
+    - Number of running jobs
+    - Available worker slots
+    - Queue configuration
+    """
+    stats = job_queue.get_queue_stats()
+    queued_jobs = job_queue.list_queued_jobs()
+    running_jobs = job_queue.list_running_jobs()
+
+    return {
+        "stats": stats,
+        "queued_jobs": queued_jobs,
+        "running_jobs": running_jobs
+    }
+
+
+@app.get("/queue/jobs")
+async def list_queue_jobs():
+    """
+    List all jobs in the queue (queued and running).
+
+    Returns detailed information about queue position and status.
+    """
+    return {
+        "queued": job_queue.list_queued_jobs(),
+        "running": job_queue.list_running_jobs()
     }
 
 # Dataset management endpoints
