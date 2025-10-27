@@ -249,6 +249,13 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
             event_loop
         )
 
+        # Set visible GPUs if specified
+        if config.gpu_ids is not None:
+            from src.gpu_utils import get_gpu_manager
+            gpu_manager = get_gpu_manager()
+            gpu_manager.set_visible_devices(config.gpu_ids)
+            logger.info(f"Using GPUs: {config.gpu_ids}")
+
         # Setup accelerator
         accelerator = Accelerator()
 

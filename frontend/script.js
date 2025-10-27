@@ -99,6 +99,12 @@ document.addEventListener('DOMContentLoaded', () => {
         inspectColumnsButton.addEventListener('click', handleInspectColumns);
     }
 
+    // GPU refresh button
+    const refreshGpuButton = document.getElementById('refresh-gpu-button');
+    if (refreshGpuButton) {
+        refreshGpuButton.addEventListener('click', handleRefreshGPUs);
+    }
+
     // Advanced settings toggle
     const toggleAdvanced = document.getElementById('toggle-advanced');
     const advancedSections = document.querySelectorAll('.advanced-section');
@@ -640,6 +646,9 @@ async function handleSubmit(e) {
         // Attention settings
         attn_implementation: document.getElementById('attn-implementation').value,
 
+        // GPU settings
+        gpu_ids: getSelectedGPUs(),
+
         // Options
         use_4bit: document.getElementById('use-4bit').checked,
         use_wandb: document.getElementById('use-wandb').checked,
@@ -790,7 +799,17 @@ async function updateJobStatus() {
         // Update metrics
         document.getElementById('current-step').textContent = status.current_step || '-';
         document.getElementById('loss-value').textContent = status.loss ? status.loss.toFixed(4) : '-';
-        
+
+        // Update GPU memory if available
+        const gpuMemoryEl = document.getElementById('gpu-memory-value');
+        if (gpuMemoryEl) {
+            if (status.gpu_memory !== undefined && status.gpu_memory !== null) {
+                gpuMemoryEl.textContent = `${status.gpu_memory.toFixed(2)} GB`;
+            } else {
+                gpuMemoryEl.textContent = '-';
+            }
+        }
+
         // Show W&B link if using wandb and URL is available
         const wandbLink = document.getElementById('wandb-link');
         if (activeJobs[currentJobId]?.config?.use_wandb && status.wandb_url) {
@@ -1369,5 +1388,163 @@ async function deleteConfig(name) {
     } catch (error) {
         showToast('Error deleting configuration', 'error');
         console.error(error);
+    }
+}
+
+// ===== GPU Management Functions =====
+
+// Refresh and display GPU list
+async function handleRefreshGPUs() {
+    const container = document.getElementById('gpu-list-container');
+    const gpuSelect = document.getElementById('gpu-selection');
+    const refreshButton = document.getElementById('refresh-gpu-button');
+
+    // Show loading state
+    refreshButton.disabled = true;
+    refreshButton.textContent = '🔄 Loading...';
+    container.innerHTML = '<div style="text-align: center; padding: 20px; color: #888;">Loading GPU information...</div>';
+
+    try {
+        const response = await fetch(`${API_URL}/gpu/list`);
+        const data = await response.json();
+
+        if (data.status === 'no_cuda') {
+            container.innerHTML = `
+                <div style="background: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 10px;">
+                    <div style="font-weight: bold; color: #856404; margin-bottom: 5px;">⚠️ No CUDA Available</div>
+                    <div style="font-size: 0.9em; color: #666;">${data.message}</div>
+                </div>
+            `;
+            gpuSelect.innerHTML = '<option value="">No GPUs available</option>';
+            gpuSelect.disabled = true;
+        } else if (data.gpus && data.gpus.length > 0) {
+            // Display GPU cards
+            container.innerHTML = data.gpus.map(gpu => `
+                <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 15px; border-radius: 10px; margin-bottom: 10px; color: white;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <div style="font-weight: bold; font-size: 1.1em;">GPU ${gpu.index}: ${gpu.name}</div>
+                        <div style="background: rgba(255,255,255,0.2); padding: 5px 10px; border-radius: 5px; font-size: 0.85em;">
+                            ${gpu.compute_capability || 'N/A'}
+                        </div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; font-size: 0.9em;">
+                        <div>
+                            <div style="opacity: 0.8; font-size: 0.85em;">Memory</div>
+                            <div style="font-weight: bold;">${gpu.used_memory_mb} / ${gpu.total_memory_mb} MB</div>
+                            <div style="font-size: 0.85em;">${gpu.memory_utilization_percent}% used</div>
+                        </div>
+                        ${gpu.gpu_utilization_percent !== null ? `
+                        <div>
+                            <div style="opacity: 0.8; font-size: 0.85em;">GPU Util</div>
+                            <div style="font-weight: bold;">${gpu.gpu_utilization_percent}%</div>
+                        </div>
+                        ` : ''}
+                        ${gpu.temperature_c !== null ? `
+                        <div>
+                            <div style="opacity: 0.8; font-size: 0.85em;">Temperature</div>
+                            <div style="font-weight: bold;">${gpu.temperature_c}°C</div>
+                        </div>
+                        ` : ''}
+                        ${gpu.power_usage_w !== null ? `
+                        <div>
+                            <div style="opacity: 0.8; font-size: 0.85em;">Power</div>
+                            <div style="font-weight: bold;">${gpu.power_usage_w}W</div>
+                        </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `).join('');
+
+            // Update select dropdown
+            gpuSelect.innerHTML = '<option value="">Auto (use all available)</option>' +
+                data.gpus.map(gpu => `<option value="${gpu.index}">GPU ${gpu.index}: ${gpu.name} (${gpu.free_memory_mb} MB free)</option>`).join('');
+            gpuSelect.disabled = false;
+
+            showToast(`Found ${data.gpus.length} GPU(s)`, 'success');
+        } else {
+            container.innerHTML = `
+                <div style="background: #f8f9fa; padding: 15px; border-radius: 10px; text-align: center; color: #666;">
+                    No GPUs detected
+                </div>
+            `;
+            gpuSelect.innerHTML = '<option value="">No GPUs available</option>';
+            gpuSelect.disabled = true;
+        }
+    } catch (error) {
+        container.innerHTML = `
+            <div style="background: #fee; border: 1px solid #fcc; padding: 15px; border-radius: 10px;">
+                <div style="font-weight: bold; color: #c33; margin-bottom: 5px;">❌ Error Loading GPUs</div>
+                <div style="font-size: 0.9em; color: #666;">${error.message}</div>
+            </div>
+        `;
+        showToast('Failed to load GPU information', 'error');
+        console.error(error);
+    } finally {
+        refreshButton.disabled = false;
+        refreshButton.textContent = '🔄 Refresh GPU List';
+    }
+}
+
+// Get selected GPU IDs for training config
+function getSelectedGPUs() {
+    const gpuSelect = document.getElementById('gpu-selection');
+    const selected = Array.from(gpuSelect.selectedOptions)
+        .map(opt => opt.value)
+        .filter(val => val !== ''); // Filter out the "Auto" option
+
+    // If nothing selected or "Auto" is selected, return null (use all GPUs)
+    return selected.length > 0 ? selected.map(Number) : null;
+}
+
+// Refresh GPU stats while monitoring a job
+async function refreshJobGPUs() {
+    const container = document.getElementById('gpu-monitor-cards');
+
+    if (!container) return;
+
+    container.innerHTML = '<div style="text-align: center; padding: 20px; color: #888;">Loading GPU stats...</div>';
+
+    try {
+        const response = await fetch(`${API_URL}/gpu/list`);
+        const data = await response.json();
+
+        if (data.status === 'success' && data.gpus && data.gpus.length > 0) {
+            container.innerHTML = data.gpus.map(gpu => `
+                <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 12px; border-radius: 8px; margin-bottom: 8px; color: white; font-size: 0.9em;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                        <div style="font-weight: bold;">GPU ${gpu.index}: ${gpu.name}</div>
+                        <div style="background: rgba(255,255,255,0.2); padding: 3px 8px; border-radius: 4px; font-size: 0.85em;">
+                            ${gpu.memory_utilization_percent}% mem
+                        </div>
+                    </div>
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; font-size: 0.85em;">
+                        <div>
+                            <div style="opacity: 0.8;">Memory</div>
+                            <div style="font-weight: bold;">${gpu.used_memory_mb}/${gpu.total_memory_mb} MB</div>
+                        </div>
+                        ${gpu.gpu_utilization_percent !== null ? `
+                        <div>
+                            <div style="opacity: 0.8;">GPU Util</div>
+                            <div style="font-weight: bold;">${gpu.gpu_utilization_percent}%</div>
+                        </div>
+                        ` : ''}
+                        ${gpu.temperature_c !== null ? `
+                        <div>
+                            <div style="opacity: 0.8;">Temp</div>
+                            <div style="font-weight: bold;">${gpu.temperature_c}°C</div>
+                        </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `).join('');
+
+            // Show the section if hidden
+            document.getElementById('gpu-monitor-section').style.display = 'block';
+        } else {
+            container.innerHTML = '<div style="text-align: center; padding: 15px; color: #888;">No GPU data available</div>';
+        }
+    } catch (error) {
+        container.innerHTML = `<div style="background: #fee; padding: 10px; border-radius: 8px; color: #c33; text-align: center;">Error: ${error.message}</div>`;
+        console.error('Failed to refresh GPU stats:', error);
     }
 }

@@ -44,6 +44,7 @@ from src.websocket_manager import websocket_manager
 from src.preflight_checks import validate_config
 from src.config_manager import ConfigManager
 from src.job_queue import JobQueue, JobPriority
+from src.gpu_utils import get_gpu_manager
 
 # Import configuration
 from config import settings
@@ -264,6 +265,12 @@ class TrainingConfig(BaseModel):
     attn_implementation: str = Field(
         "auto",
         description="Attention implementation (auto, flash_attention_2, sdpa, eager)"
+    )
+
+    # GPU settings
+    gpu_ids: Optional[list[int]] = Field(
+        None,
+        description="List of GPU indices to use for training (e.g., [0] or [0, 1]). If None, uses all available GPUs or CUDA_VISIBLE_DEVICES"
     )
 
     # Weights & Biases settings
@@ -882,6 +889,143 @@ async def list_queue_jobs():
         "queued": job_queue.list_queued_jobs(),
         "running": job_queue.list_running_jobs()
     }
+
+
+# GPU management endpoints
+@app.get("/gpu/list")
+async def list_gpus():
+    """
+    List all available GPUs with detailed information.
+
+    Returns information about each GPU including:
+    - Index
+    - Name
+    - Memory (total, free, used)
+    - Utilization
+    - Temperature
+    - Power usage
+    - Compute capability
+    """
+    try:
+        gpu_manager = get_gpu_manager()
+
+        if not gpu_manager.is_cuda_available():
+            return {
+                "status": "no_cuda",
+                "message": "CUDA is not available on this system",
+                "gpus": []
+            }
+
+        gpus = gpu_manager.list_gpus()
+
+        return {
+            "status": "success",
+            "gpus": [gpu.to_dict() for gpu in gpus],
+            "count": len(gpus)
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to list GPUs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/gpu/{index}")
+async def get_gpu_info(index: int):
+    """
+    Get detailed information about a specific GPU.
+
+    Args:
+        index: GPU index (0-based)
+    """
+    try:
+        gpu_manager = get_gpu_manager()
+
+        if not gpu_manager.is_cuda_available():
+            raise HTTPException(status_code=404, detail="CUDA is not available")
+
+        gpu = gpu_manager.get_gpu_info(index)
+
+        if not gpu:
+            raise HTTPException(status_code=404, detail=f"GPU {index} not found")
+
+        return {
+            "status": "success",
+            "gpu": gpu.to_dict()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get GPU info: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/gpu/available")
+async def get_available_gpus(min_free_memory_mb: int = 4000):
+    """
+    Get list of available GPUs with sufficient free memory.
+
+    Args:
+        min_free_memory_mb: Minimum free memory in MB (default: 4000)
+
+    Returns:
+        List of GPU indices that meet the memory requirement
+    """
+    try:
+        gpu_manager = get_gpu_manager()
+
+        if not gpu_manager.is_cuda_available():
+            return {
+                "status": "no_cuda",
+                "available_gpus": [],
+                "message": "CUDA is not available"
+            }
+
+        available = gpu_manager.get_available_gpus(min_free_memory_mb)
+
+        return {
+            "status": "success",
+            "available_gpus": available,
+            "count": len(available),
+            "min_free_memory_mb": min_free_memory_mb
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to get available GPUs: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/gpu/recommended")
+async def get_recommended_gpu():
+    """
+    Get the recommended GPU for training.
+    Returns the GPU with the most free memory.
+    """
+    try:
+        gpu_manager = get_gpu_manager()
+
+        if not gpu_manager.is_cuda_available():
+            raise HTTPException(status_code=404, detail="CUDA is not available")
+
+        recommended = gpu_manager.get_recommended_gpu()
+
+        if recommended is None:
+            raise HTTPException(status_code=404, detail="No GPUs available")
+
+        gpu = gpu_manager.get_gpu_info(recommended)
+
+        return {
+            "status": "success",
+            "recommended_index": recommended,
+            "gpu": gpu.to_dict()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get recommended GPU: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 # Dataset management endpoints
 @app.post("/dataset/preview")

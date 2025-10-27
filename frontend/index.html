@@ -53,6 +53,28 @@
                         </div>
                     </div>
                 </div>
+
+                <!-- GPU Selection -->
+                <div class="spell-section">
+                    <h3>🎮 GPU Selection</h3>
+                    <button type="button" id="refresh-gpu-button" class="action-button" style="width: 100%; margin-bottom: 15px; background: var(--primary-purple); color: white;">
+                        🔄 Refresh GPU List
+                    </button>
+
+                    <div id="gpu-list-container" style="margin-top: 15px;">
+                        <div style="text-align: center; padding: 20px; color: #888;">
+                            Click "Refresh GPU List" to see available GPUs
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 15px;">
+                        <label>Selected GPUs for Training</label>
+                        <select id="gpu-selection" class="magic-select" multiple style="min-height: 60px;">
+                            <option value="">Auto (use all available)</option>
+                        </select>
+                        <small style="color: #888; font-size: 0.85em;">Hold Ctrl/Cmd to select multiple GPUs. Leave empty for auto-selection.</small>
+                    </div>
+                </div>
             </section>
 
             <!-- Dataset Configuration (STEP 2) -->
@@ -700,6 +722,19 @@
                             <span class="metric-label">Status</span>
                             <span id="job-status" class="metric-value">-</span>
                         </div>
+                        <div class="metric-card">
+                            <span class="metric-label">GPU Memory</span>
+                            <span id="gpu-memory-value" class="metric-value">-</span>
+                        </div>
+                    </div>
+
+                    <!-- GPU Monitoring Section -->
+                    <div id="gpu-monitor-section" style="margin-top: 20px; display: none;">
+                        <h3 style="color: var(--primary-purple); margin-bottom: 10px;">🎮 GPU Monitoring</h3>
+                        <div id="gpu-monitor-cards"></div>
+                        <button type="button" onclick="refreshJobGPUs()" class="action-button" style="width: 100%; margin-top: 10px; background: var(--secondary-pink); color: white;">
+                            🔄 Refresh GPU Stats
+                        </button>
                     </div>
 
                     <div class="action-buttons">
