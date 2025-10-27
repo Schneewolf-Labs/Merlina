@@ -17,7 +17,7 @@ from transformers import (
     BitsAndBytesConfig,
     TrainerCallback
 )
-from peft import LoraConfig, PeftModel, prepare_model_for_kbit_training
+from peft import LoraConfig, PeftModel, prepare_model_for_kbit_training, AutoPeftModelForCausalLM
 from trl import ORPOConfig, ORPOTrainer
 from accelerate import Accelerator
 
@@ -39,8 +39,9 @@ def generate_wandb_run_name(config: Any) -> str:
     """
     Generate a descriptive W&B run name from training configuration.
 
-    Format: [model_name]-[lr]-[batch]-[epochs]ep-[optimizer]-[attention]
-    Example: llama3-8b-5e-6LR-256B-2ep-adamw8bit-flash2
+    Format: [model_name]-[lora_r]-[lr]-[batch]-[epochs]ep-[optimizer]-[attention]
+    Example: llama3-8b-r64-5e-6LR-256B-2ep-adamw8bit-flash2
+    Example (no LoRA): llama3-8b-full-5e-6LR-256B-2ep-adamw8bit-flash2
 
     Args:
         config: Training configuration object
@@ -75,9 +76,10 @@ def generate_wandb_run_name(config: Any) -> str:
     }
     attn = attn_map.get(config.attn_implementation, config.attn_implementation)
 
-    # Build run name
+    # Build run name - include LoRA rank or "full" if not using LoRA
     parts = [
         model_name,
+        f"r{config.lora_r}" if config.use_lora else "full",
         f"{lr_str}LR",
         f"{effective_batch}B",
         f"{config.num_epochs}ep",
@@ -255,8 +257,9 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
                 "epochs": config.num_epochs,
                 "optimizer": config.optimizer_type,
                 "attention": config.attn_implementation,
-                "lora_r": config.lora_r,
-                "lora_alpha": config.lora_alpha,
+                "use_lora": config.use_lora,
+                "lora_r": config.lora_r if config.use_lora else None,
+                "lora_alpha": config.lora_alpha if config.use_lora else None,
                 "beta": config.beta,
                 "seed": config.seed
             }
@@ -364,15 +367,20 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
         if bnb_config:
             model = prepare_model_for_kbit_training(model)
 
-        # Setup LoRA
-        peft_config = LoraConfig(
-            r=config.lora_r,
-            lora_alpha=config.lora_alpha,
-            lora_dropout=config.lora_dropout,
-            bias="none",
-            task_type="CAUSAL_LM",
-            target_modules=config.target_modules
-        )
+        # Setup LoRA (only if enabled)
+        peft_config = None
+        if config.use_lora:
+            peft_config = LoraConfig(
+                r=config.lora_r,
+                lora_alpha=config.lora_alpha,
+                lora_dropout=config.lora_dropout,
+                bias="none",
+                task_type="CAUSAL_LM",
+                target_modules=config.target_modules
+            )
+            logger.info(f"LoRA enabled with rank={config.lora_r}, alpha={config.lora_alpha}")
+        else:
+            logger.info("LoRA disabled - training full model")
 
         # Load and prepare dataset
         job_manager.update_job(job_id, status="loading_dataset", progress=0.2)
@@ -536,49 +544,137 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
                             event_loop
                         )
 
-                        logger.info(f"🔄 Merging LoRA adapter with base model for upload...")
+                        # Handle upload based on whether LoRA was used
+                        if config.use_lora:
+                            # Check if we should merge LoRA or upload adapter only
+                            if config.merge_lora_before_upload:
+                                logger.info(f"🔄 Merging LoRA adapter with base model for upload...")
 
-                        # Reload for merging
-                        base_model_reload = AutoModelForCausalLM.from_pretrained(
-                            config.base_model,
-                            low_cpu_mem_usage=True,
-                            torch_dtype=torch.bfloat16,
-                            device_map="auto",
-                        )
+                                # Reload for merging
+                                base_model_reload = AutoModelForCausalLM.from_pretrained(
+                                    config.base_model,
+                                    low_cpu_mem_usage=True,
+                                    torch_dtype=torch.bfloat16,
+                                    device_map="auto",
+                                )
 
-                        model_merged = PeftModel.from_pretrained(base_model_reload, final_output_dir)
-                        model_merged = model_merged.merge_and_unload()
+                                model_merged = PeftModel.from_pretrained(base_model_reload, final_output_dir)
+                                model_merged = model_merged.merge_and_unload()
 
-                        # Push to hub
-                        repo_visibility = "private" if config.hf_hub_private else "public"
-                        logger.info(f"📤 Pushing to HuggingFace Hub as {repo_visibility} repository...")
-                        logger.info(f"   Repository: {config.output_name}")
+                                # Push to hub
+                                repo_visibility = "private" if config.hf_hub_private else "public"
+                                logger.info(f"📤 Pushing merged model to HuggingFace Hub as {repo_visibility} repository...")
+                                logger.info(f"   Repository: {config.output_name}")
 
-                        # Upload model
-                        model_url = model_merged.push_to_hub(
-                            config.output_name,
-                            token=config.hf_token,
-                            private=config.hf_hub_private
-                        )
-                        logger.info(f"✅ Model uploaded successfully!")
+                                # Upload model
+                                model_url = model_merged.push_to_hub(
+                                    config.output_name,
+                                    token=config.hf_token,
+                                    private=config.hf_hub_private
+                                )
+                                logger.info(f"✅ Merged model uploaded successfully!")
 
-                        # Upload tokenizer
-                        tokenizer_url = tokenizer.push_to_hub(
-                            config.output_name,
-                            token=config.hf_token,
-                            private=config.hf_hub_private
-                        )
-                        logger.info(f"✅ Tokenizer uploaded successfully!")
+                                # Upload tokenizer
+                                tokenizer_url = tokenizer.push_to_hub(
+                                    config.output_name,
+                                    token=config.hf_token,
+                                    private=config.hf_hub_private
+                                )
+                                logger.info(f"✅ Tokenizer uploaded successfully!")
 
-                        # Construct the hub URL
-                        # Extract username from the API or use the repo name
-                        hub_url = f"https://huggingface.co/{config.output_name}"
-                        logger.info(f"🎉 Model published at: {hub_url}")
+                                # Construct the hub URL
+                                hub_url = f"https://huggingface.co/{config.output_name}"
+                                logger.info(f"🎉 Merged model published at: {hub_url}")
 
-                        # Clean up merged model to free memory
-                        del model_merged, base_model_reload
-                        gc.collect()
-                        torch.cuda.empty_cache()
+                                # Clean up merged model to free memory
+                                del model_merged, base_model_reload
+                                gc.collect()
+                                torch.cuda.empty_cache()
+                            else:
+                                # Upload LoRA adapter only (much smaller!)
+                                logger.info(f"📤 Uploading LoRA adapter only (not merged)...")
+
+                                # Push to hub
+                                repo_visibility = "private" if config.hf_hub_private else "public"
+                                logger.info(f"📤 Pushing LoRA adapter to HuggingFace Hub as {repo_visibility} repository...")
+                                logger.info(f"   Repository: {config.output_name}")
+                                logger.info(f"   Base model: {config.base_model}")
+                                logger.info(f"   LoRA rank: {config.lora_r}")
+
+                                # Load the adapter model
+                                adapter_model = AutoPeftModelForCausalLM.from_pretrained(
+                                    final_output_dir,
+                                    low_cpu_mem_usage=True,
+                                    torch_dtype=torch.bfloat16,
+                                    device_map="auto",
+                                )
+
+                                # Upload adapter
+                                adapter_model.push_to_hub(
+                                    config.output_name,
+                                    token=config.hf_token,
+                                    private=config.hf_hub_private
+                                )
+                                logger.info(f"✅ LoRA adapter uploaded successfully!")
+
+                                # Upload tokenizer
+                                tokenizer.push_to_hub(
+                                    config.output_name,
+                                    token=config.hf_token,
+                                    private=config.hf_hub_private
+                                )
+                                logger.info(f"✅ Tokenizer uploaded successfully!")
+
+                                # Construct the hub URL
+                                hub_url = f"https://huggingface.co/{config.output_name}"
+                                logger.info(f"🎉 LoRA adapter published at: {hub_url}")
+                                logger.info(f"💡 To use: PeftModel.from_pretrained('{config.base_model}', '{config.output_name}')")
+
+                                # Clean up
+                                del adapter_model
+                                gc.collect()
+                                torch.cuda.empty_cache()
+                        else:
+                            # For full model training (no LoRA), just push the saved model directly
+                            logger.info(f"📤 Uploading full model to HuggingFace Hub...")
+
+                            # Reload model for upload
+                            upload_model = AutoModelForCausalLM.from_pretrained(
+                                final_output_dir,
+                                low_cpu_mem_usage=True,
+                                torch_dtype=torch.bfloat16,
+                                device_map="auto",
+                            )
+
+                            # Push to hub
+                            repo_visibility = "private" if config.hf_hub_private else "public"
+                            logger.info(f"📤 Pushing to HuggingFace Hub as {repo_visibility} repository...")
+                            logger.info(f"   Repository: {config.output_name}")
+
+                            # Upload model
+                            model_url = upload_model.push_to_hub(
+                                config.output_name,
+                                token=config.hf_token,
+                                private=config.hf_hub_private
+                            )
+                            logger.info(f"✅ Model uploaded successfully!")
+
+                            # Upload tokenizer
+                            tokenizer_url = tokenizer.push_to_hub(
+                                config.output_name,
+                                token=config.hf_token,
+                                private=config.hf_hub_private
+                            )
+                            logger.info(f"✅ Tokenizer uploaded successfully!")
+
+                            # Construct the hub URL
+                            hub_url = f"https://huggingface.co/{config.output_name}"
+                            logger.info(f"🎉 Model published at: {hub_url}")
+
+                            # Clean up
+                            del upload_model
+                            gc.collect()
+                            torch.cuda.empty_cache()
 
                 except Exception as upload_error:
                     # Log upload failure but don't fail the entire job

@@ -311,27 +311,41 @@
                     <!-- LoRA Configuration -->
                     <div class="spell-section">
                         <h3>🪄 LoRA Enchantments</h3>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Rank (r)</label>
-                                <input type="number" id="lora-r" value="64" min="8" max="256" class="magic-input">
-                            </div>
-                            <div class="form-group">
-                                <label>Alpha</label>
-                                <input type="number" id="lora-alpha" value="32" min="8" max="256" class="magic-input">
-                            </div>
-                            <div class="form-group">
-                                <label>Dropout</label>
-                                <input type="number" id="lora-dropout" value="0.05" min="0" max="0.5" step="0.01" class="magic-input">
-                            </div>
+
+                        <!-- LoRA Enable/Disable Toggle -->
+                        <div class="form-group" style="margin-bottom: 20px;">
+                            <label style="display: flex; align-items: center; cursor: pointer; user-select: none;">
+                                <input type="checkbox" id="use-lora" checked style="margin-right: 10px; width: 20px; height: 20px; cursor: pointer;">
+                                <span style="font-weight: bold; color: var(--primary-purple);">Enable LoRA (Low-Rank Adaptation)</span>
+                            </label>
+                            <small style="color: #888; font-size: 0.85em; margin-top: 5px; display: block;">
+                                When enabled, trains only LoRA adapters (faster, less VRAM). When disabled, trains the full model.
+                            </small>
                         </div>
 
-                        <!-- Advanced LoRA Settings -->
-                        <div class="advanced-section" style="display: none;">
-                            <div class="form-group">
-                                <label>Target Modules (comma-separated)</label>
-                                <input type="text" id="target-modules" value="up_proj,down_proj,gate_proj,k_proj,q_proj,v_proj,o_proj" class="magic-input">
-                                <small style="color: #888; font-size: 0.85em;">Which layers to apply LoRA to</small>
+                        <div id="lora-settings" style="display: block;">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Rank (r)</label>
+                                    <input type="number" id="lora-r" value="64" min="8" max="256" class="magic-input">
+                                </div>
+                                <div class="form-group">
+                                    <label>Alpha</label>
+                                    <input type="number" id="lora-alpha" value="32" min="8" max="256" class="magic-input">
+                                </div>
+                                <div class="form-group">
+                                    <label>Dropout</label>
+                                    <input type="number" id="lora-dropout" value="0.05" min="0" max="0.5" step="0.01" class="magic-input">
+                                </div>
+                            </div>
+
+                            <!-- Advanced LoRA Settings -->
+                            <div class="advanced-section" style="display: none;">
+                                <div class="form-group">
+                                    <label>Target Modules (comma-separated)</label>
+                                    <input type="text" id="target-modules" value="up_proj,down_proj,gate_proj,k_proj,q_proj,v_proj,o_proj" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">Which layers to apply LoRA to</small>
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -587,6 +601,17 @@
                                 <small style="color: #888; font-size: 0.85em; display: block; margin-left: 30px; margin-top: 5px;">
                                     Private repositories are only visible to you. Uncheck to make your model public.
                                 </small>
+
+                                <!-- Merge LoRA Toggle (only visible when LoRA is enabled) -->
+                                <div id="merge-lora-config" style="margin-top: 15px;">
+                                    <label class="magic-checkbox">
+                                        <input type="checkbox" id="merge-lora-before-upload" checked>
+                                        <span>🔀 Merge LoRA with Base Model</span>
+                                    </label>
+                                    <small style="color: #888; font-size: 0.85em; display: block; margin-left: 30px; margin-top: 5px;">
+                                        When checked, uploads full merged model (larger). When unchecked, uploads only LoRA adapter (much smaller, requires base model to use).
+                                    </small>
+                                </div>
                             </div>
                         </div>
 

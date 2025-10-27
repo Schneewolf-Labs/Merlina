@@ -196,6 +196,7 @@ class TrainingConfig(BaseModel):
     output_name: str = Field(..., description="Name for the output model")
     
     # LoRA settings
+    use_lora: bool = Field(True, description="Enable LoRA (Low-Rank Adaptation)")
     lora_r: int = Field(64, ge=8, le=256)
     lora_alpha: int = Field(32, ge=8, le=256)
     lora_dropout: float = Field(0.05, ge=0.0, le=0.5)
@@ -230,6 +231,7 @@ class TrainingConfig(BaseModel):
     use_4bit: bool = Field(True, description="Use 4-bit quantization")
     use_wandb: bool = Field(True, description="Log to Weights & Biases")
     push_to_hub: bool = Field(False, description="Push to HuggingFace Hub")
+    merge_lora_before_upload: bool = Field(True, description="Merge LoRA with base model before uploading (if False, uploads LoRA adapter only)")
     hf_hub_private: bool = Field(True, description="Make HuggingFace Hub repository private")
     hf_token: Optional[str] = Field(None, description="HuggingFace token for pushing")
     wandb_key: Optional[str] = Field(None, description="Weights & Biases API key")

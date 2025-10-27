@@ -113,6 +113,31 @@ document.addEventListener('DOMContentLoaded', () => {
             advancedVisible ? '⚙️ Hide Advanced Settings' : '⚙️ Show Advanced Settings';
     });
 
+    // LoRA configuration toggle
+    const useLora = document.getElementById('use-lora');
+    const loraSettings = document.getElementById('lora-settings');
+    const mergeLoraConfig = document.getElementById('merge-lora-config');
+
+    useLora.addEventListener('change', (e) => {
+        loraSettings.style.display = e.target.checked ? 'block' : 'none';
+        // Also update merge LoRA visibility
+        if (mergeLoraConfig) {
+            mergeLoraConfig.style.display = e.target.checked ? 'block' : 'none';
+        }
+    });
+
+    // Initialize LoRA config visibility based on checkbox state
+    if (useLora.checked) {
+        loraSettings.style.display = 'block';
+        if (mergeLoraConfig) {
+            mergeLoraConfig.style.display = 'block';
+        }
+    } else {
+        if (mergeLoraConfig) {
+            mergeLoraConfig.style.display = 'none';
+        }
+    }
+
     // W&B configuration toggle
     const wandbConfig = document.getElementById('wandb-config');
     useWandb.addEventListener('change', (e) => {
@@ -576,6 +601,7 @@ async function handleSubmit(e) {
         dataset: datasetConfig,
 
         // LoRA settings
+        use_lora: document.getElementById('use-lora').checked,
         lora_r: parseInt(document.getElementById('lora-r').value),
         lora_alpha: parseInt(document.getElementById('lora-alpha').value),
         lora_dropout: parseFloat(document.getElementById('lora-dropout').value),
@@ -618,6 +644,7 @@ async function handleSubmit(e) {
         use_4bit: document.getElementById('use-4bit').checked,
         use_wandb: document.getElementById('use-wandb').checked,
         push_to_hub: document.getElementById('push-hub').checked,
+        merge_lora_before_upload: document.getElementById('merge-lora-before-upload').checked,
         hf_hub_private: document.getElementById('hf-hub-private').checked,
 
         // API Keys
