@@ -203,7 +203,7 @@ class TrainingConfig(BaseModel):
         description="Base model to fine-tune (HuggingFace model ID or local directory path)"
     )
     output_name: str = Field(..., description="Name for the output model")
-    
+
     # LoRA settings
     use_lora: bool = Field(True, description="Enable LoRA (Low-Rank Adaptation)")
     lora_r: int = Field(64, ge=8, le=256)
@@ -212,7 +212,7 @@ class TrainingConfig(BaseModel):
     target_modules: list[str] = Field(
         default=['up_proj', 'down_proj', 'gate_proj', 'k_proj', 'q_proj', 'v_proj', 'o_proj']
     )
-    
+
     # Training hyperparameters
     learning_rate: float = Field(5e-6, ge=1e-8, le=1e-3)
     num_epochs: int = Field(2, ge=1, le=10)
@@ -307,18 +307,18 @@ def _old_run_training_deprecated(job_id: str, config: TrainingConfig):
     try:
         # Update job status
         jobs[job_id] = {"status": "initializing", "progress": 0.0}
-        
+
         # Setup accelerator
         accelerator = Accelerator()
-        
+
         # Login to wandb if configured
         if config.use_wandb and config.wandb_key:
             wandb.login(key=config.wandb_key)
-            
+
         # Set HF token if provided
         if config.hf_token:
             os.environ['HF_TOKEN'] = config.hf_token
-            
+
         # Determine dtype and attention
         if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
             torch_dtype = torch.bfloat16
@@ -326,9 +326,9 @@ def _old_run_training_deprecated(job_id: str, config: TrainingConfig):
         else:
             torch_dtype = torch.float16
             attn_implementation = "eager"
-            
+
         logger.info(f"Using {torch_dtype} with {attn_implementation}")
-        
+
         # Setup quantization
         bnb_config = None
         if config.use_4bit:
@@ -338,19 +338,19 @@ def _old_run_training_deprecated(job_id: str, config: TrainingConfig):
                 bnb_4bit_compute_dtype=torch_dtype,
                 bnb_4bit_use_double_quant=True,
             )
-            
+
         # Load model and tokenizer
         jobs[job_id]["status"] = "loading_model"
         jobs[job_id]["progress"] = 0.1
-        
+
         tokenizer = AutoTokenizer.from_pretrained(
             config.base_model,
             trust_remote_code=True
         )
-        
+
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
-            
+
         model = AutoModelForCausalLM.from_pretrained(
             config.base_model,
             quantization_config=bnb_config,
@@ -359,10 +359,10 @@ def _old_run_training_deprecated(job_id: str, config: TrainingConfig):
             device_map="auto",
             trust_remote_code=True,
         )
-        
+
         if bnb_config:
             model = prepare_model_for_kbit_training(model)
-            
+
         # Setup LoRA
         peft_config = LoraConfig(
             r=config.lora_r,
@@ -372,7 +372,7 @@ def _old_run_training_deprecated(job_id: str, config: TrainingConfig):
             task_type="CAUSAL_LM",
             target_modules=config.target_modules
         )
-        
+
         # Load and prepare dataset using new modular system
         jobs[job_id]["status"] = "loading_dataset"
         jobs[job_id]["progress"] = 0.2
@@ -428,13 +428,13 @@ def _old_run_training_deprecated(job_id: str, config: TrainingConfig):
 
         # Create dict with train/test for compatibility
         dataset = {"train": train_dataset, "test": eval_dataset}
-        
+
         # Setup training arguments
         jobs[job_id]["status"] = "training"
         jobs[job_id]["progress"] = 0.3
-        
+
         output_dir = f"./results/{job_id}"
-        
+
         orpo_args = ORPOConfig(
             run_name=config.output_name,
             learning_rate=config.learning_rate,
@@ -461,7 +461,7 @@ def _old_run_training_deprecated(job_id: str, config: TrainingConfig):
             save_steps=config.eval_steps,
             save_total_limit=2,
         )
-        
+
         # Create trainer
         trainer = ORPOTrainer(
             model=model,
@@ -471,23 +471,23 @@ def _old_run_training_deprecated(job_id: str, config: TrainingConfig):
             peft_config=peft_config,
             tokenizer=tokenizer,
         )
-        
+
         # Train
         logger.info("Starting training")
         train_result = trainer.train()
-        
+
         # Save model
         jobs[job_id]["status"] = "saving"
         jobs[job_id]["progress"] = 0.9
-        
+
         final_output_dir = f"./models/{config.output_name}"
         trainer.save_model(final_output_dir)
         tokenizer.save_pretrained(final_output_dir)
-        
+
         # Optional: merge and upload
         if config.push_to_hub and accelerator.is_main_process:
             jobs[job_id]["status"] = "uploading"
-            
+
             # Reload for merging
             base_model_reload = AutoModelForCausalLM.from_pretrained(
                 config.base_model,
@@ -495,10 +495,10 @@ def _old_run_training_deprecated(job_id: str, config: TrainingConfig):
                 torch_dtype=torch.bfloat16,
                 device_map="auto",
             )
-            
+
             model_merged = PeftModel.from_pretrained(base_model_reload, final_output_dir)
             model_merged = model_merged.merge_and_unload()
-            
+
             # Push to hub
             logger.info(f"Pushing to HuggingFace Hub (private={config.hf_hub_private})")
             model_merged.push_to_hub(
@@ -511,16 +511,16 @@ def _old_run_training_deprecated(job_id: str, config: TrainingConfig):
                 token=config.hf_token,
                 private=config.hf_hub_private
             )
-            
+
         # Cleanup
         del trainer, model
         gc.collect()
         torch.cuda.empty_cache()
-        
+
         jobs[job_id]["status"] = "completed"
         jobs[job_id]["progress"] = 1.0
         logger.info(f"Training completed for job {job_id}")
-        
+
     except Exception as e:
         logger.error(f"Training failed for job {job_id}: {str(e)}")
         jobs[job_id]["status"] = "failed"
@@ -532,10 +532,10 @@ if FRONTEND_DIR.exists():
     async def serve_frontend():
         """Serve the main HTML page"""
         return FileResponse(FRONTEND_DIR / "index.html")
-    
+
     # Mount the frontend directory to serve static files
     app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
-    
+
     # Also serve CSS, JS modules, and images from root for simplicity
     @app.get("/styles.css")
     async def serve_css():
