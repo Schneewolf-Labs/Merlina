@@ -48,6 +48,9 @@ class MerlinaApp {
         // Setup LoRA toggle
         this.setupLoRAToggle();
 
+        // Setup training mode toggle
+        this.setupTrainingModeToggle();
+
         // Setup advanced settings toggle
         this.setupAdvancedToggle();
 
@@ -166,6 +169,7 @@ class MerlinaApp {
             target_modules: targetModules,
 
             // Training
+            training_mode: document.getElementById('training-mode')?.value || 'orpo',
             learning_rate: parseFloat(document.getElementById('learning-rate')?.value || 0.000005),
             num_epochs: parseInt(document.getElementById('epochs')?.value || 2),
             batch_size: parseInt(document.getElementById('batch-size')?.value || 1),
@@ -285,6 +289,26 @@ class MerlinaApp {
             if (loraSettings) loraSettings.style.display = 'block';
             if (mergeLoraConfig) mergeLoraConfig.style.display = 'block';
         }
+    }
+
+    /**
+     * Setup training mode toggle (show/hide ORPO beta field)
+     */
+    setupTrainingModeToggle() {
+        const trainingMode = document.getElementById('training-mode');
+        const betaField = document.getElementById('beta-field');
+
+        if (!trainingMode || !betaField) return;
+
+        trainingMode.addEventListener('change', (e) => {
+            const mode = e.target.value;
+            // Show beta field only for ORPO mode
+            betaField.style.display = mode === 'orpo' ? 'block' : 'none';
+        });
+
+        // Initialize based on current value
+        const currentMode = trainingMode.value;
+        betaField.style.display = currentMode === 'orpo' ? 'block' : 'none';
     }
 
     /**

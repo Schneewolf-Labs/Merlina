@@ -18,7 +18,7 @@ from transformers import (
     TrainerCallback
 )
 from peft import LoraConfig, PeftModel, prepare_model_for_kbit_training, AutoPeftModelForCausalLM
-from trl import ORPOConfig, ORPOTrainer
+from trl import ORPOConfig, ORPOTrainer, SFTTrainer, SFTConfig
 from accelerate import Accelerator
 
 from dataset_handlers import (
@@ -486,50 +486,114 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
 
         output_dir = f"./results/{job_id}"
 
-        orpo_args = ORPOConfig(
-            run_name=wandb_run_name if config.use_wandb else config.output_name,
-            learning_rate=config.learning_rate,
-            lr_scheduler_type=config.lr_scheduler_type,  # Use config scheduler type
-            max_length=config.max_length,
-            max_prompt_length=config.max_prompt_length,
-            max_completion_length=config.max_length - config.max_prompt_length,
-            beta=config.beta,
-            per_device_train_batch_size=config.batch_size,
-            per_device_eval_batch_size=config.batch_size,
-            gradient_accumulation_steps=config.gradient_accumulation_steps,
-            optim=config.optimizer_type,  # Use config optimizer type
-            num_train_epochs=config.num_epochs,
-            eval_strategy="steps",
-            eval_steps=config.eval_steps,
-            logging_steps=config.logging_steps,  # Use config logging steps
-            warmup_ratio=config.warmup_ratio,
-            max_grad_norm=config.max_grad_norm,  # Use config max grad norm
-            weight_decay=config.weight_decay,  # Use config weight decay
-            adam_beta1=config.adam_beta1,  # Use config adam beta1
-            adam_beta2=config.adam_beta2,  # Use config adam beta2
-            adam_epsilon=config.adam_epsilon,  # Use config adam epsilon
-            report_to=["wandb"] if config.use_wandb else [],
-            output_dir=output_dir,
-            bf16=torch_dtype == torch.bfloat16,
-            fp16=torch_dtype == torch.float16,
-            save_strategy="steps",
-            save_steps=config.eval_steps,
-            save_total_limit=2,
-            seed=config.seed,  # Set seed for training
-            gradient_checkpointing=config.gradient_checkpointing,  # Enable gradient checkpointing if requested
-        )
+        # Choose trainer based on training mode
+        training_mode = config.training_mode.lower()
+        logger.info(f"Using training mode: {training_mode}")
 
-        # Create trainer with WebSocket callback
-        # Note: ORPOTrainer in newer TRL versions requires processing_class (tokenizer)
-        trainer = ORPOTrainer(
-            model=model,
-            args=orpo_args,
-            train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
-            peft_config=peft_config,
-            processing_class=tokenizer,
-            callbacks=[WebSocketCallback(job_id, job_manager, event_loop)]
-        )
+        if training_mode == "sft":
+            # SFT Configuration
+            logger.info("Configuring SFT (Supervised Fine-Tuning) trainer")
+
+            # For SFT, we need to format the dataset as text
+            # Convert the dataset to have a 'text' field with prompt + chosen
+            def format_for_sft(example):
+                """Format dataset entry for SFT training"""
+                return {
+                    'text': example['prompt'] + example['chosen']
+                }
+
+            train_dataset = train_dataset.map(format_for_sft, remove_columns=train_dataset.column_names)
+            eval_dataset = eval_dataset.map(format_for_sft, remove_columns=eval_dataset.column_names)
+
+            sft_args = SFTConfig(
+                run_name=wandb_run_name if config.use_wandb else config.output_name,
+                learning_rate=config.learning_rate,
+                lr_scheduler_type=config.lr_scheduler_type,
+                max_seq_length=config.max_length,
+                per_device_train_batch_size=config.batch_size,
+                per_device_eval_batch_size=config.batch_size,
+                gradient_accumulation_steps=config.gradient_accumulation_steps,
+                optim=config.optimizer_type,
+                num_train_epochs=config.num_epochs,
+                eval_strategy="steps",
+                eval_steps=config.eval_steps,
+                logging_steps=config.logging_steps,
+                warmup_ratio=config.warmup_ratio,
+                max_grad_norm=config.max_grad_norm,
+                weight_decay=config.weight_decay,
+                adam_beta1=config.adam_beta1,
+                adam_beta2=config.adam_beta2,
+                adam_epsilon=config.adam_epsilon,
+                report_to=["wandb"] if config.use_wandb else [],
+                output_dir=output_dir,
+                bf16=torch_dtype == torch.bfloat16,
+                fp16=torch_dtype == torch.float16,
+                save_strategy="steps",
+                save_steps=config.eval_steps,
+                save_total_limit=2,
+                seed=config.seed,
+                gradient_checkpointing=config.gradient_checkpointing,
+                dataset_text_field="text",  # SFT specific
+                packing=False,  # Don't pack multiple samples together
+            )
+
+            # Create SFT trainer
+            trainer = SFTTrainer(
+                model=model,
+                args=sft_args,
+                train_dataset=train_dataset,
+                eval_dataset=eval_dataset,
+                peft_config=peft_config,
+                processing_class=tokenizer,
+                callbacks=[WebSocketCallback(job_id, job_manager, event_loop)]
+            )
+        else:
+            # ORPO Configuration (default)
+            logger.info("Configuring ORPO (Odds Ratio Preference Optimization) trainer")
+
+            orpo_args = ORPOConfig(
+                run_name=wandb_run_name if config.use_wandb else config.output_name,
+                learning_rate=config.learning_rate,
+                lr_scheduler_type=config.lr_scheduler_type,
+                max_length=config.max_length,
+                max_prompt_length=config.max_prompt_length,
+                max_completion_length=config.max_length - config.max_prompt_length,
+                beta=config.beta,
+                per_device_train_batch_size=config.batch_size,
+                per_device_eval_batch_size=config.batch_size,
+                gradient_accumulation_steps=config.gradient_accumulation_steps,
+                optim=config.optimizer_type,
+                num_train_epochs=config.num_epochs,
+                eval_strategy="steps",
+                eval_steps=config.eval_steps,
+                logging_steps=config.logging_steps,
+                warmup_ratio=config.warmup_ratio,
+                max_grad_norm=config.max_grad_norm,
+                weight_decay=config.weight_decay,
+                adam_beta1=config.adam_beta1,
+                adam_beta2=config.adam_beta2,
+                adam_epsilon=config.adam_epsilon,
+                report_to=["wandb"] if config.use_wandb else [],
+                output_dir=output_dir,
+                bf16=torch_dtype == torch.bfloat16,
+                fp16=torch_dtype == torch.float16,
+                save_strategy="steps",
+                save_steps=config.eval_steps,
+                save_total_limit=2,
+                seed=config.seed,
+                gradient_checkpointing=config.gradient_checkpointing,
+            )
+
+            # Create ORPO trainer
+            trainer = ORPOTrainer(
+                model=model,
+                args=orpo_args,
+                train_dataset=train_dataset,
+                eval_dataset=eval_dataset,
+                peft_config=peft_config,
+                processing_class=tokenizer,
+                callbacks=[WebSocketCallback(job_id, job_manager, event_loop)]
+            )
 
         # Train
         logger.info("Starting training")
