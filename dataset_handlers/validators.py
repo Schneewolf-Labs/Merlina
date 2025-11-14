@@ -17,7 +17,8 @@ class DatasetValidationError(Exception):
 def validate_dataset_schema(
     dataset: Dataset,
     required_columns: Optional[Set[str]] = None,
-    optional_columns: Optional[Set[str]] = None
+    optional_columns: Optional[Set[str]] = None,
+    training_mode: str = 'orpo'
 ) -> bool:
     """
     Validate that dataset has required columns.
@@ -26,6 +27,7 @@ def validate_dataset_schema(
         dataset: Dataset to validate
         required_columns: Set of column names that must be present
         optional_columns: Set of column names that may be present
+        training_mode: Training mode ('sft' or 'orpo'). For SFT, rejected is optional.
 
     Returns:
         True if validation passes
@@ -34,7 +36,11 @@ def validate_dataset_schema(
         DatasetValidationError: If validation fails
     """
     if required_columns is None:
-        required_columns = {'prompt', 'chosen', 'rejected'}
+        # For SFT mode, 'rejected' field is optional
+        if training_mode == 'sft':
+            required_columns = {'prompt', 'chosen'}
+        else:
+            required_columns = {'prompt', 'chosen', 'rejected'}
 
     if optional_columns is None:
         optional_columns = {'system', 'reasoning'}
@@ -57,7 +63,8 @@ def validate_dataset_samples(
     dataset: Dataset,
     max_prompt_length: Optional[int] = None,
     max_chosen_length: Optional[int] = None,
-    max_rejected_length: Optional[int] = None
+    max_rejected_length: Optional[int] = None,
+    training_mode: str = 'orpo'
 ) -> dict:
     """
     Validate dataset samples and return statistics.
@@ -67,6 +74,7 @@ def validate_dataset_samples(
         max_prompt_length: Optional maximum prompt length
         max_chosen_length: Optional maximum chosen response length
         max_rejected_length: Optional maximum rejected response length
+        training_mode: Training mode ('sft' or 'orpo'). For SFT, rejected validation is skipped.
 
     Returns:
         Dictionary with validation statistics
@@ -85,7 +93,7 @@ def validate_dataset_samples(
     for idx, row in enumerate(dataset):
         prompt = str(row.get('prompt', ''))
         chosen = str(row.get('chosen', ''))
-        rejected = str(row.get('rejected', ''))
+        rejected = str(row.get('rejected', '')) if training_mode == 'orpo' else ''
 
         # Check for empty fields
         if not prompt.strip():
@@ -96,9 +104,11 @@ def validate_dataset_samples(
             stats['empty_chosen'] += 1
             stats['issues'].append(f"Row {idx}: Empty chosen response")
 
-        if not rejected.strip():
-            stats['empty_rejected'] += 1
-            stats['issues'].append(f"Row {idx}: Empty rejected response")
+        # Only check rejected field for ORPO mode
+        if training_mode == 'orpo':
+            if not rejected.strip():
+                stats['empty_rejected'] += 1
+                stats['issues'].append(f"Row {idx}: Empty rejected response")
 
         # Check for length limits
         if max_prompt_length and len(prompt) > max_prompt_length:
@@ -107,7 +117,8 @@ def validate_dataset_samples(
         if max_chosen_length and len(chosen) > max_chosen_length:
             stats['long_chosen'] += 1
 
-        if max_rejected_length and len(rejected) > max_rejected_length:
+        # Only check rejected length for ORPO mode
+        if training_mode == 'orpo' and max_rejected_length and len(rejected) > max_rejected_length:
             stats['long_rejected'] += 1
 
     return stats

@@ -394,6 +394,22 @@
                         </div>
                     </div>
 
+                    <!-- Training Mode Selection -->
+                    <div class="spell-section">
+                        <h3>🎯 Training Mode</h3>
+                        <div class="form-group">
+                            <label>Training Method</label>
+                            <select id="training-mode" class="magic-select">
+                                <option value="orpo">ORPO - Preference Optimization (requires chosen + rejected)</option>
+                                <option value="sft">SFT - Supervised Fine-Tuning (only uses chosen)</option>
+                            </select>
+                            <small style="color: #888; font-size: 0.85em; display: block; margin-top: 8px;">
+                                <strong>ORPO:</strong> Trains model to prefer "chosen" responses over "rejected" responses<br>
+                                <strong>SFT:</strong> Traditional fine-tuning on "chosen" responses only (rejected field not needed)
+                            </small>
+                        </div>
+                    </div>
+
                     <!-- Training Parameters -->
                     <div class="spell-section">
                         <h3>⚗️ Training Potions</h3>
@@ -420,9 +436,10 @@
                                 <label>Max Length</label>
                                 <input type="number" id="max-length" value="2048" min="512" max="8192" step="512" class="magic-input">
                             </div>
-                            <div class="form-group">
+                            <div class="form-group" id="beta-field">
                                 <label>ORPO Beta</label>
                                 <input type="number" id="beta" value="0.1" min="0.01" max="1" step="0.01" class="magic-input">
+                                <small style="color: #888; font-size: 0.85em;">Only used in ORPO mode</small>
                             </div>
                         </div>
                         <div class="form-row">

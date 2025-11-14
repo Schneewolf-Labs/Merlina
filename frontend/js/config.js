@@ -348,6 +348,7 @@ class ConfigManager {
         if (config.target_modules) this.setInputValue('target-modules', config.target_modules);
 
         // Training settings
+        this.setInputValue('training-mode', config.training_mode || 'orpo');
         this.setInputValue('max-length', config.max_length || 2048);
         this.setInputValue('max-prompt-length', config.max_prompt_length || 1024);
         this.setInputValue('epochs', config.num_train_epochs || 2);

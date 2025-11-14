@@ -221,8 +221,11 @@ class TrainingConfig(BaseModel):
     max_length: int = Field(2048, ge=512, le=8192)
     max_prompt_length: int = Field(1024, ge=256, le=4096)
 
+    # Training mode
+    training_mode: str = Field("orpo", description="Training mode: 'sft' or 'orpo'")
+
     # ORPO specific
-    beta: float = Field(0.1, ge=0.01, le=1.0)
+    beta: float = Field(0.1, ge=0.01, le=1.0, description="ORPO beta parameter (only used when training_mode='orpo')")
 
     # Dataset configuration
     dataset: DatasetConfig = Field(
