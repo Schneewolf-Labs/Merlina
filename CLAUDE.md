@@ -14,6 +14,23 @@ Merlina is a magical LLM training system with ORPO (Odds Ratio Preference Optimi
 - Support for both HuggingFace model IDs and local model directories
 - Private/public repository control for HuggingFace Hub uploads
 
+## Project Spirit
+
+Merlina is designed to make LLM fine-tuning approachable and delightful, not intimidating. The entire project is themed around a cute anime magician girl who guides you through the training process with charm and style.
+
+The philosophy is simple: **powerful ML training shouldn't require arcane command-line incantations or PhD-level expertise**. Whether you're a researcher experimenting with preference optimization or a hobbyist trying to make your first fine-tuned model, Merlina welcomes you with a friendly interface, clear feedback, and magical animations.
+
+Behind the whimsical wizard theme is a carefully architected system that handles the complex stuff (dataset formatting, memory management, quantization, GPU optimization) so you can focus on what matters: creating better models. The UI is playful, but the engineering is serious.
+
+**Key principles:**
+- **Approachable**: No config files to edit, no command-line arguments to memorize
+- **Visual**: See your datasets, preview formatting, watch training progress in real-time
+- **Safe**: Pre-flight checks catch errors before wasting GPU time
+- **Flexible**: Support for multiple dataset sources, formats, and model types
+- **Delightful**: Smooth animations, clear status updates, and a touch of magic
+
+When working on Merlina, preserve this spirit. Keep the code clean and well-documented, but remember that the end goal is to make someone smile while they train their model.
+
 ## Development Commands
 
 ### Running the Application
