@@ -23,6 +23,31 @@ from io import BytesIO
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# ============================================================================
+# Mock GPU-dependent imports BEFORE importing merlina
+# This prevents import errors on CI runners without GPUs
+# ============================================================================
+
+# Mock torch
+mock_torch = MagicMock()
+mock_torch.cuda.is_available.return_value = True
+mock_torch.cuda.device_count.return_value = 1
+mock_torch.cuda.get_device_capability.return_value = (8, 6)
+mock_torch.cuda.get_device_name.return_value = "Mock GPU"
+mock_torch.cuda.empty_cache = Mock()
+mock_torch.bfloat16 = "bfloat16"
+mock_torch.float16 = "float16"
+sys.modules['torch'] = mock_torch
+sys.modules['torch.cuda'] = mock_torch.cuda
+
+# Mock transformers
+mock_transformers = MagicMock()
+sys.modules['transformers'] = mock_transformers
+
+# Mock other ML libraries
+for module in ['trl', 'peft', 'accelerate', 'bitsandbytes', 'wandb']:
+    sys.modules[module] = MagicMock()
+
 from fastapi.testclient import TestClient
 from fastapi import UploadFile
 

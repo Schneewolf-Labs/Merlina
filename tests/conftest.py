@@ -14,6 +14,25 @@ from unittest.mock import Mock, MagicMock
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# ============================================================================
+# Mock GPU-dependent imports for CI environments without GPUs
+# ============================================================================
+
+# Mock torch and CUDA
+if 'torch' not in sys.modules:
+    mock_torch = MagicMock()
+    mock_torch.cuda.is_available.return_value = False  # Default to no CUDA for safety
+    mock_torch.cuda.device_count.return_value = 0
+    mock_torch.cuda.empty_cache = Mock()
+    mock_torch.bfloat16 = "bfloat16"
+    mock_torch.float16 = "float16"
+    sys.modules['torch'] = mock_torch
+
+# Mock other ML libraries if not already imported
+for module in ['transformers', 'trl', 'peft', 'accelerate', 'bitsandbytes', 'wandb']:
+    if module not in sys.modules:
+        sys.modules[module] = MagicMock()
+
 
 # ============================================================================
 # Session-level fixtures (run once per test session)

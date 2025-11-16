@@ -102,7 +102,21 @@ A single, well-organized test file containing:
 
 ## Mock Architecture
 
-The test suite uses a sophisticated mocking strategy to avoid external dependencies:
+The test suite uses a sophisticated mocking strategy to avoid external dependencies and GPU requirements, making it suitable for CI environments without GPUs.
+
+### Import-Level Mocking (CI Compatibility)
+
+To run on GitHub Actions runners without GPUs, the test suite mocks GPU-dependent libraries at import time:
+
+- **torch**: Fully mocked CUDA interface
+- **transformers**: Model and tokenizer classes mocked
+- **trl**: Training library mocked
+- **peft**: LoRA and adapter methods mocked
+- **bitsandbytes**: Quantization mocked
+- **accelerate**: Distributed training mocked
+- **wandb**: Experiment tracking mocked
+
+This allows tests to run without installing the heavy ML stack (~10GB+), making CI runs fast and reliable.
 
 ### Mocked Components
 

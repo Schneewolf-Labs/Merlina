@@ -105,9 +105,21 @@ The new `test_api_comprehensive.py` provides complete coverage of all Merlina AP
 - **Comprehensive Mocking**: All external dependencies mocked (JobManager, JobQueue, GPU, etc.)
 - **Fast Execution**: Pure unit tests, no I/O operations
 - **Isolated**: No database writes, no actual training, no GPU required
+- **CI Compatible**: Import-level mocking allows tests to run without GPUs or ML libraries
 - **Well Organized**: Tests grouped into logical classes
 - **Error Handling**: Tests for success and error cases
 - **CI/CD Ready**: pytest framework with coverage reporting
+
+### Running Without GPU (CI Mode)
+
+The tests automatically mock all GPU-dependent imports, making them run on any machine:
+
+- ✅ Runs on GitHub Actions (no GPU required)
+- ✅ Runs on local machines without CUDA
+- ✅ Fast execution without heavy ML libraries (~10GB saved)
+- ✅ Import-time mocking of torch, transformers, etc.
+
+This means you can run the full test suite even if you don't have PyTorch or a GPU installed!
 
 ## 🧪 Running Tests
 

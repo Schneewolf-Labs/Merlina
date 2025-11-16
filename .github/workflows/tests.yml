@@ -33,8 +33,13 @@ jobs:
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        # Install core dependencies for FastAPI and testing
+        pip install fastapi uvicorn pydantic pydantic-settings python-multipart
+        pip install datasets  # Needed for some dataset tests
+        # Install test dependencies
         pip install -r tests/requirements-test.txt
+        # Note: We don't install full ML stack (torch, transformers, etc.)
+        # because tests mock these dependencies
 
     - name: Run comprehensive API tests
       run: |
