@@ -20,16 +20,37 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 # Mock torch and CUDA
 if 'torch' not in sys.modules:
+    # Create fake classes that can be used with isinstance() and issubclass()
+    class FakeTensor:
+        pass
+
+    class FakeModule:
+        pass
+
     mock_torch = MagicMock()
+    mock_torch.__spec__ = MagicMock()  # Required by datasets library
+    mock_torch.Tensor = FakeTensor  # Required for isinstance() checks
+    mock_torch.nn = MagicMock()
+    mock_torch.nn.Module = FakeModule  # Required for issubclass() checks
     mock_torch.cuda.is_available.return_value = False  # Default to no CUDA for safety
     mock_torch.cuda.device_count.return_value = 0
     mock_torch.cuda.empty_cache = Mock()
     mock_torch.bfloat16 = "bfloat16"
     mock_torch.float16 = "float16"
     sys.modules['torch'] = mock_torch
+    sys.modules['torch.nn'] = mock_torch.nn
 
-# Mock other ML libraries if not already imported
-for module in ['transformers', 'trl', 'peft', 'accelerate', 'bitsandbytes', 'wandb']:
+# Mock transformers with fake classes
+if 'transformers' not in sys.modules:
+    class FakeTokenizerBase:
+        pass
+
+    mock_transformers = MagicMock()
+    mock_transformers.PreTrainedTokenizerBase = FakeTokenizerBase
+    sys.modules['transformers'] = mock_transformers
+
+# Mock other ML libraries and system dependencies if not already imported
+for module in ['trl', 'peft', 'accelerate', 'bitsandbytes', 'wandb', 'psutil', 'pynvml']:
     if module not in sys.modules:
         sys.modules[module] = MagicMock()
 

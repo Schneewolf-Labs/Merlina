@@ -29,7 +29,18 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # ============================================================================
 
 # Mock torch
+# Create fake classes that can be used with isinstance() and issubclass()
+class FakeTensor:
+    pass
+
+class FakeModule:
+    pass
+
 mock_torch = MagicMock()
+mock_torch.__spec__ = MagicMock()  # Required by datasets library
+mock_torch.Tensor = FakeTensor  # Required for isinstance() checks
+mock_torch.nn = MagicMock()
+mock_torch.nn.Module = FakeModule  # Required for issubclass() checks
 mock_torch.cuda.is_available.return_value = True
 mock_torch.cuda.device_count.return_value = 1
 mock_torch.cuda.get_device_capability.return_value = (8, 6)
@@ -39,13 +50,18 @@ mock_torch.bfloat16 = "bfloat16"
 mock_torch.float16 = "float16"
 sys.modules['torch'] = mock_torch
 sys.modules['torch.cuda'] = mock_torch.cuda
+sys.modules['torch.nn'] = mock_torch.nn
 
 # Mock transformers
+class FakeTokenizerBase:
+    pass
+
 mock_transformers = MagicMock()
+mock_transformers.PreTrainedTokenizerBase = FakeTokenizerBase  # Required for issubclass() checks
 sys.modules['transformers'] = mock_transformers
 
-# Mock other ML libraries
-for module in ['trl', 'peft', 'accelerate', 'bitsandbytes', 'wandb']:
+# Mock other ML libraries and system dependencies
+for module in ['trl', 'peft', 'accelerate', 'bitsandbytes', 'wandb', 'psutil', 'pynvml']:
     sys.modules[module] = MagicMock()
 
 from fastapi.testclient import TestClient
@@ -77,9 +93,9 @@ def mock_job_manager():
         loss=None,
         eval_loss=None,
         learning_rate=None,
-        gpu_memory_used=None,
         error=None,
-        wandb_url=None
+        wandb_url=None,
+        stop_requested=False
     )
 
     # Configure mock methods
@@ -199,13 +215,12 @@ def mock_gpu_manager():
     gpu_info = GPUInfo(
         index=0,
         name="NVIDIA GeForce RTX 3090",
-        total_memory_mb=24576,
-        free_memory_mb=20000,
-        used_memory_mb=4576,
-        utilization_percent=25,
-        temperature_celsius=55,
-        power_usage_watts=150,
-        power_limit_watts=350,
+        total_memory=24576 * 1024 * 1024,  # 24GB in bytes
+        free_memory=20000 * 1024 * 1024,   # 20GB in bytes
+        used_memory=4576 * 1024 * 1024,    # ~4.5GB in bytes
+        utilization=25,                     # percent
+        temperature=55,                     # celsius
+        power_usage=150,                    # watts
         compute_capability=(8, 6)
     )
 
