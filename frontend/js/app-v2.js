@@ -6,6 +6,10 @@
 import { LayoutManager } from './core/layout-manager.js';
 import { TrainingModeManager } from './managers/training-mode-manager.js';
 import { DashboardView } from './views/dashboard-view.js';
+import { TrainingConfigView } from './views/training-config-view.js';
+import { DatasetView } from './views/dataset-view.js';
+import { JobPanel } from './components/job-panel.js';
+import { trainingAPI, datasetAPI, gpuAPI, statsAPI } from './services/api-client.js';
 
 /**
  * Main Application Class
@@ -15,6 +19,13 @@ class MerlinaAppV2 {
         // Core managers
         this.layoutManager = null;
         this.trainingModeManager = null;
+        this.jobPanel = null;
+
+        // API clients
+        this.trainingAPI = trainingAPI;
+        this.datasetAPI = datasetAPI;
+        this.gpuAPI = gpuAPI;
+        this.statsAPI = statsAPI;
 
         // Views
         this.views = new Map();
@@ -72,9 +83,13 @@ class MerlinaAppV2 {
         this.trainingModeManager = new TrainingModeManager();
         this.trainingModeManager.loadMode();
 
+        // Job panel
+        this.jobPanel = new JobPanel();
+
         // Make managers globally accessible
         window.layoutManager = this.layoutManager;
         window.trainingModeManager = this.trainingModeManager;
+        window.jobPanel = this.jobPanel;
     }
 
     /**
@@ -84,15 +99,19 @@ class MerlinaAppV2 {
         // Dashboard view
         this.views.set('dashboard', new DashboardView(this.trainingModeManager));
 
+        // Training configuration view
+        this.views.set('training', new TrainingConfigView(this.trainingModeManager));
+
+        // Dataset manager view
+        this.views.set('dataset', new DatasetView(this.trainingModeManager));
+
         // Placeholder views (to be implemented)
-        this.views.set('model', { render: () => '<div class="card"><h2>Model Selection</h2><p>Coming soon...</p></div>', attachEventListeners: () => {} });
-        this.views.set('dataset', { render: () => '<div class="card"><h2>Dataset Manager</h2><p>Coming soon...</p></div>', attachEventListeners: () => {} });
-        this.views.set('training', { render: () => '<div class="card"><h2>Training Config</h2><p>Coming soon...</p></div>', attachEventListeners: () => {} });
-        this.views.set('active-jobs', { render: () => '<div class="card"><h2>Active Jobs</h2><p>Coming soon...</p></div>', attachEventListeners: () => {} });
-        this.views.set('job-history', { render: () => '<div class="card"><h2>Job History</h2><p>Coming soon...</p></div>', attachEventListeners: () => {} });
-        this.views.set('configs', { render: () => '<div class="card"><h2>Saved Configs</h2><p>Coming soon...</p></div>', attachEventListeners: () => {} });
-        this.views.set('gpu', { render: () => '<div class="card"><h2>GPU Manager</h2><p>Coming soon...</p></div>', attachEventListeners: () => {} });
-        this.views.set('analytics', { render: () => '<div class="card"><h2>Analytics</h2><p>Coming soon...</p></div>', attachEventListeners: () => {} });
+        this.views.set('model', { render: () => '<div class="card"><h2>🎯 Model Selection</h2><p>Coming soon...</p></div>', attachEventListeners: () => {} });
+        this.views.set('active-jobs', { render: () => '<div class="card"><h2>🔮 Active Jobs</h2><p>Coming soon...</p></div>', attachEventListeners: () => {} });
+        this.views.set('job-history', { render: () => '<div class="card"><h2>📊 Job History</h2><p>Coming soon...</p></div>', attachEventListeners: () => {} });
+        this.views.set('configs', { render: () => '<div class="card"><h2>💾 Saved Configs</h2><p>Coming soon...</p></div>', attachEventListeners: () => {} });
+        this.views.set('gpu', { render: () => '<div class="card"><h2>🎮 GPU Manager</h2><p>Coming soon...</p></div>', attachEventListeners: () => {} });
+        this.views.set('analytics', { render: () => '<div class="card"><h2>📈 Analytics</h2><p>Coming soon...</p></div>', attachEventListeners: () => {} });
     }
 
     /**
@@ -109,6 +128,12 @@ class MerlinaAppV2 {
         window.addEventListener('trainingModeChanged', (e) => {
             console.log('Training mode changed:', e.detail);
             this.handleModeChange(e.detail);
+        });
+
+        // Toast notifications
+        window.addEventListener('toast', (e) => {
+            const { message, type } = e.detail;
+            this.showToast(message, type);
         });
 
         // Keyboard shortcuts
@@ -222,16 +247,27 @@ class MerlinaAppV2 {
      */
     async fetchStats() {
         try {
-            // Fetch from API (placeholder for now)
-            // const response = await fetch('/api/stats');
-            // const stats = await response.json();
+            // Try to fetch real stats from API
+            try {
+                const stats = await this.statsAPI.getStats();
+                this.updateStats({
+                    activeJobs: stats.active_jobs || 0,
+                    completedJobs: stats.completed_jobs || 0,
+                    savedConfigs: Object.keys(localStorage).filter(k => k.startsWith('merlina_config_')).length,
+                    gpus: stats.gpu_count ? `${stats.gpu_count}/${stats.gpu_count}` : '-'
+                });
+                return;
+            } catch (apiError) {
+                // Fallback to mock data if API is not available
+                console.log('API not available, using mock data');
+            }
 
-            // Mock data for now
+            // Mock data fallback
             const stats = {
                 activeJobs: 0,
                 completedJobs: 0,
                 savedConfigs: Object.keys(localStorage).filter(k => k.startsWith('merlina_config_')).length,
-                gpus: '0/0'
+                gpus: '-'
             };
 
             this.updateStats(stats);
