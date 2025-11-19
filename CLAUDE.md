@@ -4,7 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Merlina is a magical LLM training system with ORPO (Odds Ratio Preference Optimization) support. It provides a delightful wizard-themed web interface for fine-tuning language models with LoRA adapters. The system supports flexible dataset loading from multiple sources and automatic chat template formatting.
+Merlina is a magical LLM training system with support for both ORPO (Odds Ratio Preference Optimization) and SFT (Supervised Fine-Tuning). It provides a delightful wizard-themed web interface for fine-tuning language models with LoRA adapters. The system supports flexible dataset loading from multiple sources and automatic chat template formatting.
+
+**New in v1.2:**
+- **SFT Mode**: Train with only chosen responses (rejected field not required)
+- Dynamic UI that adapts based on selected training mode
 
 **New in v1.1:**
 - Persistent job storage with SQLite database
@@ -113,11 +117,15 @@ The dataset system uses a modular strategy pattern with three main abstractions:
 All datasets must have these columns after loading and column mapping:
 - `prompt` (required) - User input/question
 - `chosen` (required) - Preferred response
-- `rejected` (required) - Non-preferred response
+- `rejected` (required for ORPO, not used in SFT) - Non-preferred response
 - `system` (optional) - System message
 - `reasoning` (optional) - Reasoning/thinking process (used by Qwen3 format)
 
 Formatters transform these into chat-formatted strings with proper special tokens.
+
+**Training Mode Requirements**:
+- **ORPO Mode**: Requires all three fields (`prompt`, `chosen`, `rejected`) for preference optimization
+- **SFT Mode**: Only uses `prompt` and `chosen` fields. The `rejected` field is ignored if present.
 
 **Reasoning Field**: When using the Qwen3 format, if a `reasoning` column is present, it will be wrapped in `<think>` tags and prepended to both the chosen and rejected responses. This allows training models with explicit reasoning steps.
 
@@ -179,6 +187,30 @@ Jobs are managed through a priority queue system with configurable concurrency:
 - `QueuedJob` - Represents a job in the queue
 - `JobPriority` - Enum for priority levels
 
+### Training Modes
+
+Merlina supports two training modes, selectable via the `training_mode` configuration parameter:
+
+**1. ORPO (Odds Ratio Preference Optimization)** - Default
+- Requires: `prompt`, `chosen`, and `rejected` fields
+- Trains the model to prefer "chosen" responses over "rejected" responses
+- Uses preference optimization loss to push chosen responses up and rejected responses down
+- Best for: Alignment, RLHF-style training, improving response quality
+- Trainer: `ORPOTrainer` from TRL library
+- Parameters: Includes `beta` parameter to control preference strength
+
+**2. SFT (Supervised Fine-Tuning)**
+- Requires: `prompt` and `chosen` fields only (rejected field ignored)
+- Traditional supervised learning on chosen responses
+- Trains the model to predict the chosen response given the prompt
+- Best for: General instruction following, adapting to new tasks, style transfer
+- Trainer: `SFTTrainer` from TRL library
+- Parameters: Does not use `beta` parameter
+
+**Choosing a Mode**:
+- Use **ORPO** when you have paired chosen/rejected responses and want to optimize for preference
+- Use **SFT** when you only have good examples or want traditional fine-tuning
+
 ### Training Flow
 
 1. User submits training config via POST /train with optional priority
@@ -188,8 +220,10 @@ Jobs are managed through a priority queue system with configurable concurrency:
    - Load model and tokenizer with optional 4-bit quantization
    - Create DatasetPipeline with appropriate loader and formatter
    - Call `pipeline.prepare()` to get formatted train/eval datasets
-   - Setup LoRA config and ORPOTrainer
-   - Train with ORPO preference optimization
+   - Setup LoRA config (if enabled)
+   - Choose trainer based on `training_mode`:
+     - **ORPO Mode**: Setup ORPOTrainer and train with preference optimization (uses chosen vs rejected)
+     - **SFT Mode**: Setup SFTTrainer and train with supervised fine-tuning (uses only chosen)
    - Save to ./models/{output_name}
    - Optionally merge and push to HuggingFace Hub
 4. Frontend polls GET /status/{job_id} for progress updates
