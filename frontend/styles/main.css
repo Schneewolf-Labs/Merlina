@@ -1,0 +1,56 @@
+/*
+ * Merlina Modular Frontend v2.0
+ * Main stylesheet - imports all modular CSS files
+ */
+
+@import url('00-variables.css');
+@import url('01-reset.css');
+@import url('02-base.css');
+@import url('03-layout.css');
+@import url('04-components.css');
+@import url('05-dashboard.css');
+@import url('06-forms.css');
+
+/* Quick additions for job cards and animations */
+
+.job-card {
+    background: linear-gradient(135deg, #f8f8f8, #f0e6ff);
+    border: 2px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    padding: var(--space-lg);
+    margin-bottom: var(--space-md);
+    cursor: pointer;
+    transition: all var(--transition-base);
+}
+
+.job-card:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-lg);
+}
+
+/* Sparkle effect */
+.sparkle-effect {
+    position: fixed;
+    pointer-events: none;
+    width: 4px;
+    height: 4px;
+    background: var(--wizard-yellow);
+    border-radius: 50%;
+    animation: sparkleFloat 1s ease-out forwards;
+    z-index: var(--z-sparkle);
+}
+
+@keyframes sparkleFloat {
+    0% {
+        transform: translateY(0) scale(0);
+        opacity: 1;
+    }
+    50% {
+        transform: translateY(-20px) scale(1);
+        opacity: 1;
+    }
+    100% {
+        transform: translateY(-40px) scale(0);
+        opacity: 0;
+    }
+}
