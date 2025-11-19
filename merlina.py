@@ -1331,7 +1331,7 @@ class EditorRowCreate(BaseModel):
     """Request to create a new row"""
     prompt: str
     chosen: str
-    rejected: str
+    rejected: Optional[str] = None  # Optional for SFT mode
     system: Optional[str] = None
     reasoning: Optional[str] = None
 
@@ -1354,13 +1354,27 @@ class EditorExportRequest(BaseModel):
 
 
 @app.post("/editor/import")
-async def editor_import_file(file: UploadFile = File(...), session_name: str = Form(...)):
+async def editor_import_file(
+    file: UploadFile = File(...),
+    session_name: str = Form(...),
+    training_mode: str = Form("orpo")
+):
     """
     Import a file into the data editor
+
+    Args:
+        file: Dataset file to import
+        session_name: Name for the editing session
+        training_mode: Training mode ("orpo" or "sft"), defaults to "orpo"
 
     Returns: session_id and import metadata
     """
     try:
+        # Validate training mode
+        training_mode = training_mode.lower()
+        if training_mode not in ["orpo", "sft"]:
+            raise HTTPException(status_code=400, detail="training_mode must be 'orpo' or 'sft'")
+
         # Read file content
         content = await file.read()
 
@@ -1370,10 +1384,11 @@ async def editor_import_file(file: UploadFile = File(...), session_name: str = F
         # Detect schema and suggest column mapping
         suggested_mapping = editor_import_engine.suggest_column_mapping(rows_data)
 
-        # Create editor session
+        # Create editor session with training mode
         session_id = editor_session_manager.create_session(
             name=session_name,
-            source_file=file.filename
+            source_file=file.filename,
+            training_mode=training_mode
         )
 
         # Convert raw rows to EditorRow objects (without transformation yet)
@@ -1394,11 +1409,12 @@ async def editor_import_file(file: UploadFile = File(...), session_name: str = F
             statistics=metadata
         )
 
-        logger.info(f"Imported {len(rows_data)} rows into editor session {session_id}")
+        logger.info(f"Imported {len(rows_data)} rows into editor session {session_id} (mode: {training_mode})")
 
         return {
             "status": "success",
             "session_id": session_id,
+            "training_mode": training_mode,
             "num_rows": len(rows_data),
             "metadata": metadata,
             "suggested_mapping": suggested_mapping,
@@ -1411,14 +1427,31 @@ async def editor_import_file(file: UploadFile = File(...), session_name: str = F
 
 
 @app.post("/editor/session/create")
-async def editor_create_session(name: str, source_file: Optional[str] = None):
-    """Create a new empty editing session"""
+async def editor_create_session(
+    name: str,
+    source_file: Optional[str] = None,
+    training_mode: str = "orpo"
+):
+    """
+    Create a new empty editing session
+
+    Args:
+        name: Name for the session
+        source_file: Optional source filename
+        training_mode: Training mode ("orpo" or "sft"), defaults to "orpo"
+    """
     try:
-        session_id = editor_session_manager.create_session(name, source_file)
+        # Validate training mode
+        training_mode = training_mode.lower()
+        if training_mode not in ["orpo", "sft"]:
+            raise HTTPException(status_code=400, detail="training_mode must be 'orpo' or 'sft'")
+
+        session_id = editor_session_manager.create_session(name, source_file, training_mode)
 
         return {
             "status": "success",
-            "session_id": session_id
+            "session_id": session_id,
+            "training_mode": training_mode
         }
 
     except Exception as e:
@@ -1446,6 +1479,7 @@ async def editor_get_session(session_id: str, limit: int = 100, offset: int = 0)
                 "name": session.name,
                 "source_file": session.source_file,
                 "column_mapping": session.column_mapping,
+                "training_mode": session.training_mode,
                 "statistics": session.statistics,
                 "created_at": session.created_at.isoformat(),
                 "updated_at": session.updated_at.isoformat(),
@@ -1525,8 +1559,8 @@ async def editor_add_row(session_id: str, row: EditorRowCreate):
             reasoning=row.reasoning
         )
 
-        # Validate the row
-        validation_result = editor_validation_engine.validate_row(editor_row)
+        # Validate the row using session's training mode
+        validation_result = editor_validation_engine.validate_row(editor_row, training_mode=session.training_mode)
         editor_row.validation_errors = validation_result.errors
         editor_row.validation_warnings = validation_result.warnings
 
@@ -1566,7 +1600,7 @@ async def editor_update_row(session_id: str, idx: int, updates: EditorRowUpdate)
         row = session.get_row(idx)
 
         if row:
-            validation_result = editor_validation_engine.validate_row(row)
+            validation_result = editor_validation_engine.validate_row(row, training_mode=session.training_mode)
             editor_session_manager.update_row(
                 session_id, idx,
                 {
@@ -1656,9 +1690,9 @@ async def editor_transform_data(request: EditorTransformRequest):
             column_mapping=request.column_mapping
         )
 
-        # Validate all rows
+        # Validate all rows using session's training mode
         session = editor_session_manager.get_session(request.session_id)
-        validation_result = editor_validation_engine.validate_session(session)
+        validation_result = editor_validation_engine.validate_session(session, training_mode=session.training_mode)
 
         logger.info(f"Transformed {transformed_count} rows in session {request.session_id}")
 
@@ -1683,12 +1717,12 @@ async def editor_validate_session(session_id: str):
         if not session:
             raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
 
-        # Run validation
-        validation_result = editor_validation_engine.validate_session(session)
+        # Run validation using session's training mode
+        validation_result = editor_validation_engine.validate_session(session, training_mode=session.training_mode)
 
         # Update validation results for each row
         for row in session.rows:
-            row_result = editor_validation_engine.validate_row(row)
+            row_result = editor_validation_engine.validate_row(row, training_mode=session.training_mode)
             editor_session_manager.update_row(
                 session_id,
                 row.idx,
