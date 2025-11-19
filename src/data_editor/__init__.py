@@ -102,6 +102,7 @@ class EditorSession:
     updated_at: datetime
     source_file: Optional[str] = None
     column_mapping: Optional[Dict[str, Any]] = None
+    training_mode: str = "orpo"  # "orpo" or "sft"
     statistics: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -114,6 +115,7 @@ class EditorSession:
             "updated_at": self.updated_at.isoformat(),
             "source_file": self.source_file,
             "column_mapping": self.column_mapping,
+            "training_mode": self.training_mode,
             "statistics": self.statistics
         }
 

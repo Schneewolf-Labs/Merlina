@@ -43,12 +43,21 @@ class SessionManager:
                     name TEXT NOT NULL,
                     source_file TEXT,
                     column_mapping TEXT,
+                    training_mode TEXT DEFAULT 'orpo',
                     statistics TEXT,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     num_rows INTEGER DEFAULT 0
                 )
             """)
+
+            # Add training_mode column if it doesn't exist (for existing databases)
+            try:
+                cursor.execute("ALTER TABLE sessions ADD COLUMN training_mode TEXT DEFAULT 'orpo'")
+                conn.commit()
+            except sqlite3.OperationalError:
+                # Column already exists
+                pass
 
             # Rows table (stores current state)
             cursor.execute("""
@@ -108,9 +117,14 @@ class SessionManager:
         finally:
             conn.close()
 
-    def create_session(self, name: str, source_file: Optional[str] = None) -> str:
+    def create_session(self, name: str, source_file: Optional[str] = None, training_mode: str = "orpo") -> str:
         """
         Create a new editing session
+
+        Args:
+            name: Name of the session
+            source_file: Optional source filename
+            training_mode: Training mode ("orpo" or "sft"), defaults to "orpo"
 
         Returns: session_id
         """
@@ -120,9 +134,9 @@ class SessionManager:
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-                INSERT INTO sessions (session_id, name, source_file, created_at, updated_at, num_rows)
-                VALUES (?, ?, ?, ?, ?, 0)
-            """, (session_id, name, source_file, now, now))
+                INSERT INTO sessions (session_id, name, source_file, training_mode, created_at, updated_at, num_rows)
+                VALUES (?, ?, ?, ?, ?, ?, 0)
+            """, (session_id, name, source_file, training_mode.lower(), now, now))
 
             # Initialize undo state
             cursor.execute("""
@@ -175,12 +189,13 @@ class SessionManager:
                 updated_at=datetime.fromisoformat(session_row['updated_at']),
                 source_file=session_row['source_file'],
                 column_mapping=json.loads(session_row['column_mapping']) if session_row['column_mapping'] else None,
+                training_mode=session_row.get('training_mode', 'orpo'),  # Default to orpo for legacy sessions
                 statistics=json.loads(session_row['statistics']) if session_row['statistics'] else {}
             )
 
     def update_session(self, session_id: str, **kwargs) -> bool:
         """Update session metadata"""
-        allowed_fields = ['name', 'source_file', 'column_mapping', 'statistics']
+        allowed_fields = ['name', 'source_file', 'column_mapping', 'training_mode', 'statistics']
         updates = []
         values = []
 

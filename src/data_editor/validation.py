@@ -1,7 +1,7 @@
 """
 Validation Engine for Data Editor
 
-Provides comprehensive validation for ORPO dataset schema and quality checks.
+Provides comprehensive validation for both ORPO and SFT dataset schemas with quality checks.
 """
 
 from typing import List, Dict, Any, Optional, Tuple
@@ -18,17 +18,38 @@ logger = logging.getLogger(__name__)
 class ValidationEngine:
     """
     Engine for validating dataset rows and providing quality metrics
+
+    Supports both ORPO and SFT training modes:
+    - ORPO: Requires prompt, chosen, and rejected fields
+    - SFT: Requires prompt and chosen fields only (rejected is optional)
     """
 
-    def __init__(self):
-        self.logger = logging.getLogger(__name__)
+    def __init__(self, training_mode: str = "orpo"):
+        """
+        Initialize validation engine
 
-    def validate_session(self, session: EditorSession) -> ValidationResult:
+        Args:
+            training_mode: "orpo" or "sft" - determines required fields
+        """
+        self.logger = logging.getLogger(__name__)
+        self.training_mode = training_mode.lower()
+
+        if self.training_mode not in ["orpo", "sft"]:
+            raise ValueError(f"Invalid training_mode: {training_mode}. Must be 'orpo' or 'sft'")
+
+    def validate_session(self, session: EditorSession, training_mode: Optional[str] = None) -> ValidationResult:
         """
         Validate all rows in a session
 
+        Args:
+            session: EditorSession to validate
+            training_mode: Override the default training mode for this validation
+
         Returns: ValidationResult with errors, warnings, and statistics
         """
+        # Use provided training_mode or fall back to instance default
+        mode = (training_mode or self.training_mode).lower()
+
         result = ValidationResult(
             is_valid=True,
             errors=[],
@@ -42,10 +63,13 @@ class ValidationEngine:
             result.errors.append("Dataset is empty - no rows to validate")
             return result
 
+        # Add mode info to statistics
+        result.statistics['training_mode'] = mode
+
         # Validate each row
         valid_rows = 0
         for row in session.rows:
-            row_result = self.validate_row(row)
+            row_result = self.validate_row(row, training_mode=mode)
 
             if row_result.errors:
                 result.row_issues[row.idx] = {
@@ -80,19 +104,26 @@ class ValidationEngine:
 
         return result
 
-    def validate_row(self, row: EditorRow) -> ValidationResult:
+    def validate_row(self, row: EditorRow, training_mode: Optional[str] = None) -> ValidationResult:
         """
         Validate a single row
 
+        Args:
+            row: EditorRow to validate
+            training_mode: Override the default training mode for this validation
+
         Checks:
-        - Required fields present and non-empty
+        - Required fields present and non-empty (based on training mode)
         - Field types
         - Content quality (length, encoding, etc.)
-        - Chosen vs rejected similarity
+        - Chosen vs rejected similarity (ORPO only)
         """
+        # Use provided training_mode or fall back to instance default
+        mode = (training_mode or self.training_mode).lower()
+
         result = ValidationResult(is_valid=True, errors=[], warnings=[])
 
-        # Check required fields
+        # Check required fields (always required)
         if not row.prompt or not row.prompt.strip():
             result.errors.append("Prompt is required and cannot be empty")
             result.is_valid = False
@@ -101,9 +132,15 @@ class ValidationEngine:
             result.errors.append("Chosen response is required and cannot be empty")
             result.is_valid = False
 
-        if not row.rejected or not row.rejected.strip():
-            result.errors.append("Rejected response is required and cannot be empty")
-            result.is_valid = False
+        # Rejected field: Required for ORPO, optional for SFT
+        if mode == "orpo":
+            if not row.rejected or not row.rejected.strip():
+                result.errors.append("Rejected response is required for ORPO mode")
+                result.is_valid = False
+        elif mode == "sft":
+            # For SFT, rejected is optional but warn if missing
+            if not row.rejected or not row.rejected.strip():
+                result.warnings.append("Rejected response is empty (optional for SFT mode)")
 
         # If required fields missing, don't continue with other checks
         if not result.is_valid:
@@ -112,11 +149,14 @@ class ValidationEngine:
         # Content quality checks
         prompt_issues = self._check_content_quality(row.prompt, "prompt")
         chosen_issues = self._check_content_quality(row.chosen, "chosen")
-        rejected_issues = self._check_content_quality(row.rejected, "rejected")
 
         result.warnings.extend(prompt_issues)
         result.warnings.extend(chosen_issues)
-        result.warnings.extend(rejected_issues)
+
+        # Check rejected field quality only if present (ORPO needs it, SFT doesn't)
+        if row.rejected:
+            rejected_issues = self._check_content_quality(row.rejected, "rejected")
+            result.warnings.extend(rejected_issues)
 
         # Check optional fields if present
         if row.system:
@@ -127,18 +167,18 @@ class ValidationEngine:
             reasoning_issues = self._check_content_quality(row.reasoning, "reasoning")
             result.warnings.extend(reasoning_issues)
 
-        # Check similarity between chosen and rejected
-        similarity = self._compute_similarity(row.chosen, row.rejected)
-        if similarity > 0.9:
-            result.warnings.append(f"Chosen and rejected responses are very similar ({similarity:.1%})")
-        elif similarity > 0.95:
-            result.errors.append("Chosen and rejected responses are nearly identical - poor training signal")
-            result.is_valid = False
+        # Check similarity between chosen and rejected (ORPO mode only)
+        if mode == "orpo" and row.rejected:
+            similarity = self._compute_similarity(row.chosen, row.rejected)
+            if similarity > 0.9:
+                result.warnings.append(f"Chosen and rejected responses are very similar ({similarity:.1%})")
+            elif similarity > 0.95:
+                result.errors.append("Chosen and rejected responses are nearly identical - poor training signal")
+                result.is_valid = False
 
         # Token length checks
         prompt_tokens = self._estimate_tokens(row.prompt)
         chosen_tokens = self._estimate_tokens(row.chosen)
-        rejected_tokens = self._estimate_tokens(row.rejected)
 
         if prompt_tokens > 4096:
             result.warnings.append(f"Prompt is very long ({prompt_tokens} tokens) - may cause training issues")
@@ -146,12 +186,21 @@ class ValidationEngine:
         if chosen_tokens > 4096:
             result.warnings.append(f"Chosen response is very long ({chosen_tokens} tokens)")
 
-        if rejected_tokens > 4096:
-            result.warnings.append(f"Rejected response is very long ({rejected_tokens} tokens)")
+        # For ORPO mode, check combined length with rejected
+        if mode == "orpo" and row.rejected:
+            rejected_tokens = self._estimate_tokens(row.rejected)
 
-        if prompt_tokens + max(chosen_tokens, rejected_tokens) > 8192:
-            result.errors.append("Combined prompt + response exceeds 8192 tokens - will be truncated in training")
-            result.is_valid = False
+            if rejected_tokens > 4096:
+                result.warnings.append(f"Rejected response is very long ({rejected_tokens} tokens)")
+
+            if prompt_tokens + max(chosen_tokens, rejected_tokens) > 8192:
+                result.errors.append("Combined prompt + response exceeds 8192 tokens - will be truncated in training")
+                result.is_valid = False
+        else:
+            # For SFT mode, check prompt + chosen
+            if prompt_tokens + chosen_tokens > 8192:
+                result.errors.append("Combined prompt + chosen exceeds 8192 tokens - will be truncated in training")
+                result.is_valid = False
 
         return result
 
@@ -338,12 +387,21 @@ class ValidationEngine:
         return errors, warnings
 
     def quick_validate_row(self, prompt: Optional[str], chosen: Optional[str],
-                          rejected: Optional[str]) -> Tuple[bool, List[str]]:
+                          rejected: Optional[str], training_mode: Optional[str] = None) -> Tuple[bool, List[str]]:
         """
         Quick validation for a single row (used in UI for real-time feedback)
 
+        Args:
+            prompt: Prompt text
+            chosen: Chosen response text
+            rejected: Rejected response text
+            training_mode: Override the default training mode
+
         Returns: (is_valid, error_messages)
         """
+        # Use provided training_mode or fall back to instance default
+        mode = (training_mode or self.training_mode).lower()
+
         errors = []
 
         if not prompt or not prompt.strip():
@@ -352,11 +410,13 @@ class ValidationEngine:
         if not chosen or not chosen.strip():
             errors.append("Chosen response is required")
 
-        if not rejected or not rejected.strip():
-            errors.append("Rejected response is required")
+        # Rejected is required only for ORPO mode
+        if mode == "orpo":
+            if not rejected or not rejected.strip():
+                errors.append("Rejected response is required for ORPO mode")
 
-        if chosen and rejected and chosen == rejected:
-            errors.append("Chosen and rejected responses must be different")
+            if chosen and rejected and chosen == rejected:
+                errors.append("Chosen and rejected responses must be different")
 
         return len(errors) == 0, errors
 
