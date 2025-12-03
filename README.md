@@ -4,6 +4,12 @@ Train LLMs with ORPO using a delightful web interface powered by magic ✨
 
 ![Merlina Banner](https://img.shields.io/badge/Merlina-Magical%20Training-c042ff?style=for-the-badge&logo=data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==)
 
+[![Tests](https://github.com/Schneewolf-Labs/Merlina/actions/workflows/tests.yml/badge.svg)](https://github.com/Schneewolf-Labs/Merlina/actions/workflows/tests.yml)
+[![Quick Tests](https://github.com/Schneewolf-Labs/Merlina/actions/workflows/quick-test.yml/badge.svg)](https://github.com/Schneewolf-Labs/Merlina/actions/workflows/quick-test.yml)
+[![codecov](https://codecov.io/gh/Schneewolf-Labs/Merlina/branch/main/graph/badge.svg)](https://codecov.io/gh/Schneewolf-Labs/Merlina)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](tests/TEST_SUMMARY.md)
+
 ## Features
 
 - 🎨 **Beautiful Web Interface** - Cute wizard-themed UI with animations

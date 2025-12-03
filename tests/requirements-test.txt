@@ -1,0 +1,26 @@
+# Testing Dependencies for Merlina
+# Install with: pip install -r tests/requirements-test.txt
+
+# Core testing framework
+pytest>=7.4.0
+pytest-asyncio>=0.21.0  # For async test support
+pytest-mock>=3.11.0     # Enhanced mocking
+
+# FastAPI testing
+httpx>=0.24.0          # Required by TestClient
+websockets>=11.0.0     # For WebSocket testing
+
+# Optional but recommended testing tools
+pytest-cov>=4.1.0      # Coverage reporting
+pytest-xdist>=3.3.0    # Parallel test execution
+pytest-timeout>=2.1.0  # Test timeouts
+pytest-sugar>=0.9.7    # Better test output
+
+# Assertions and validation
+responses>=0.23.0      # Mock HTTP requests
+faker>=19.0.0          # Generate test data
+
+# Code quality (optional)
+# black>=23.0.0        # Code formatting
+# ruff>=0.0.280        # Linting
+# mypy>=1.4.0          # Type checking
