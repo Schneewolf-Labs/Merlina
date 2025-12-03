@@ -509,7 +509,6 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
                 run_name=wandb_run_name if config.use_wandb else config.output_name,
                 learning_rate=config.learning_rate,
                 lr_scheduler_type=config.lr_scheduler_type,
-                max_seq_length=config.max_length,
                 per_device_train_batch_size=config.batch_size,
                 per_device_eval_batch_size=config.batch_size,
                 gradient_accumulation_steps=config.gradient_accumulation_steps,
@@ -533,11 +532,11 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
                 save_total_limit=2,
                 seed=config.seed,
                 gradient_checkpointing=config.gradient_checkpointing,
-                dataset_text_field="text",  # SFT specific
-                packing=False,  # Don't pack multiple samples together
             )
 
             # Create SFT trainer
+            # Note: max_seq_length, dataset_text_field, and packing are passed
+            # directly to SFTTrainer (not SFTConfig) for compatibility with various TRL versions
             trainer = SFTTrainer(
                 model=model,
                 args=sft_args,
@@ -545,6 +544,9 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
                 eval_dataset=eval_dataset,
                 peft_config=peft_config,
                 processing_class=tokenizer,
+                max_seq_length=config.max_length,
+                dataset_text_field="text",
+                packing=False,
                 callbacks=[WebSocketCallback(job_id, job_manager, event_loop)]
             )
         else:
