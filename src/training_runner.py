@@ -532,11 +532,13 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
                 save_total_limit=2,
                 seed=config.seed,
                 gradient_checkpointing=config.gradient_checkpointing,
+                # SFT-specific parameters (use max_length, not max_seq_length)
+                max_length=config.max_length,
+                dataset_text_field="text",
+                packing=False,
             )
 
             # Create SFT trainer
-            # Note: max_seq_length, dataset_text_field, and packing are passed
-            # directly to SFTTrainer (not SFTConfig) for compatibility with various TRL versions
             trainer = SFTTrainer(
                 model=model,
                 args=sft_args,
@@ -544,9 +546,6 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
                 eval_dataset=eval_dataset,
                 peft_config=peft_config,
                 processing_class=tokenizer,
-                max_seq_length=config.max_length,
-                dataset_text_field="text",
-                packing=False,
                 callbacks=[WebSocketCallback(job_id, job_manager, event_loop)]
             )
         else:
