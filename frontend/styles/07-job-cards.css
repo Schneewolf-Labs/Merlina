@@ -1,0 +1,193 @@
+/*
+ * Job Cards & Monitoring Styles
+ * Merlina Modular Frontend v2.0
+ */
+
+/* ===== Job Card ===== */
+
+.job-card {
+    background: linear-gradient(135deg, #f8f8f8, #f0e6ff);
+    border: 2px solid var(--border-light);
+    border-radius: var(--radius-lg);
+    padding: var(--space-lg);
+    margin-bottom: var(--space-md);
+    cursor: pointer;
+    transition: all var(--transition-base);
+}
+
+.job-card:hover {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-lg);
+    border-color: var(--primary-purple);
+}
+
+.job-card-compact {
+    padding: var(--space-md);
+}
+
+.job-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-md);
+}
+
+.job-card-title {
+    font-size: var(--text-lg);
+    font-weight: var(--font-bold);
+    color: var(--text-primary);
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
+.job-card-progress {
+    margin-bottom: var(--space-md);
+}
+
+.job-card-metrics {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: var(--space-sm);
+    margin-bottom: var(--space-md);
+    padding: var(--space-md);
+    background: rgba(255, 255, 255, 0.5);
+    border-radius: var(--radius-sm);
+}
+
+.job-card-metrics .metric-item {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.job-card-metrics .metric-label {
+    font-size: var(--text-xs);
+    color: var(--text-secondary);
+    font-weight: var(--font-medium);
+}
+
+.job-card-metrics .metric-value {
+    font-size: var(--text-base);
+    font-weight: var(--font-bold);
+    color: var(--primary-purple);
+    font-family: var(--font-mono);
+}
+
+.job-card-actions {
+    display: flex;
+    gap: var(--space-sm);
+    padding-top: var(--space-md);
+    border-top: 1px solid var(--border-light);
+}
+
+/* ===== Job Panel ===== */
+
+.job-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+}
+
+/* ===== Job Status Colors ===== */
+
+.job-card[data-status="running"],
+.job-card[data-status="training"] {
+    border-left: 4px solid var(--warning);
+}
+
+.job-card[data-status="completed"] {
+    border-left: 4px solid var(--success);
+}
+
+.job-card[data-status="failed"] {
+    border-left: 4px solid var(--danger);
+}
+
+.job-card[data-status="stopped"],
+.job-card[data-status="cancelled"] {
+    border-left: 4px solid var(--gray-500);
+}
+
+.job-card[data-status="queued"] {
+    border-left: 4px solid var(--info);
+}
+
+/* ===== Metrics Grid (for detailed view) ===== */
+
+.metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: var(--space-md);
+    margin: var(--space-lg) 0;
+}
+
+.metric-card {
+    background: linear-gradient(135deg, #f8f8f8, #f0e6ff);
+    border: 1px solid var(--border-light);
+    border-radius: var(--radius-md);
+    padding: var(--space-md);
+    text-align: center;
+}
+
+.metric-label {
+    display: block;
+    color: var(--text-secondary);
+    font-size: var(--text-sm);
+    margin-bottom: var(--space-xs);
+}
+
+.metric-value {
+    display: block;
+    color: var(--primary-purple);
+    font-size: var(--text-2xl);
+    font-weight: var(--font-bold);
+    font-family: var(--font-mono);
+}
+
+/* ===== Source Config Sections ===== */
+
+.source-config {
+    margin-top: var(--space-lg);
+}
+
+/* ===== Tab Content Containers ===== */
+
+.tab-contents {
+    margin-top: var(--space-lg);
+}
+
+.training-config,
+.dataset-view {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-lg);
+}
+
+/* ===== Mode Indicator in Forms ===== */
+
+[data-mode-indicator] {
+    transition: color var(--transition-base);
+}
+
+/* ===== Responsive Job Cards ===== */
+
+@media (max-width: 768px) {
+    .job-card-metrics {
+        grid-template-columns: 1fr 1fr;
+    }
+
+    .job-card-actions {
+        flex-direction: column;
+    }
+
+    .job-card-actions .btn {
+        width: 100%;
+    }
+}
+
+@media (max-width: 480px) {
+    .job-card-metrics {
+        grid-template-columns: 1fr;
+    }
+}
