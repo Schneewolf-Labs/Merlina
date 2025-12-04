@@ -3,824 +3,125 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Merlina - Magical Model Training ✨</title>
-    <link rel="stylesheet" href="styles.css">
+    <title>Merlina v2.0 - Magical Model Training ✨</title>
+
+    <!-- Modular CSS -->
+    <link rel="stylesheet" href="styles/main.css">
 </head>
 <body>
-    <div class="container">
+    <!-- Skip to main content link (accessibility) -->
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+
+    <!-- Main App Layout Grid -->
+    <div class="app-layout">
         <!-- Header -->
-        <header>
-            <div class="logo">
-                <img src="merlina.png" alt="Merlina" class="wizard-hat" style="width: 48px; height: 48px;">
-                <h1>Merlina</h1>
-                <span class="tagline">Magical Model Training</span>
+        <header class="app-header">
+            <div class="app-header-left">
+                <div class="app-header-logo">
+                    <img src="merlina.png" alt="Merlina" class="wizard-hat">
+                    <h1>Merlina</h1>
+                </div>
+            </div>
+            <div class="app-header-right">
+                <button class="btn btn-primary btn-sm" id="quick-train-btn">
+                    <span>⚡</span>
+                    <span>Quick Train</span>
+                </button>
+                <button class="btn btn-icon btn-ghost" id="notifications-btn" aria-label="Notifications">
+                    <span>🔔</span>
+                </button>
+                <button class="btn btn-icon btn-ghost" id="settings-btn" aria-label="Settings">
+                    <span>⚙️</span>
+                </button>
             </div>
         </header>
 
-        <!-- Main Content -->
-        <main>
-            <!-- Model Selection (STEP 1) -->
-            <section id="model-section" class="card">
-                <h2>🎯 Step 1: Select Your Base Model</h2>
-
-                <div class="spell-section">
-                    <h3>🤖 Model Configuration</h3>
-                    <div class="form-group">
-                        <label>📚 Base Model (HuggingFace Tag)</label>
-                        <input type="text" id="base-model" placeholder="meta-llama/Meta-Llama-3-8B-Instruct" class="magic-input" required>
-                        <small style="color: #888; font-size: 0.85em;">Examples: meta-llama/Llama-3.2-3B-Instruct, mistralai/Mistral-7B-Instruct-v0.3, Qwen/Qwen2.5-7B-Instruct</small>
+        <!-- Sidebar Navigation -->
+        <aside class="app-sidebar" id="sidebar">
+            <nav class="sidebar-nav" role="navigation" aria-label="Main navigation">
+                <div class="sidebar-section">
+                    <div class="sidebar-nav-item active" data-view="dashboard">
+                        <span class="sidebar-nav-icon">🏠</span>
+                        <span class="sidebar-nav-text">Dashboard</span>
+                    </div>
+                    <div class="sidebar-nav-item" data-view="model">
+                        <span class="sidebar-nav-icon">🎯</span>
+                        <span class="sidebar-nav-text">Model Selection</span>
+                    </div>
+                    <div class="sidebar-nav-item" data-view="dataset">
+                        <span class="sidebar-nav-icon">📚</span>
+                        <span class="sidebar-nav-text">Dataset Manager</span>
+                    </div>
+                    <div class="sidebar-nav-item" data-view="training">
+                        <span class="sidebar-nav-icon">⚙️</span>
+                        <span class="sidebar-nav-text">Training Config</span>
                     </div>
                 </div>
 
-                <div class="spell-section">
-                    <h3>🔑 API Tokens (Optional)</h3>
-                    <div class="form-group">
-                        <label>HuggingFace Token</label>
-                        <input type="password" id="hf-token-preload" placeholder="For gated models (Llama, etc.)" class="magic-input">
-                        <small style="color: #888; font-size: 0.85em;">Required for gated models like Llama</small>
+                <div class="sidebar-section">
+                    <div class="sidebar-section-title">Jobs</div>
+                    <div class="sidebar-nav-item" data-view="active-jobs">
+                        <span class="sidebar-nav-icon">🔮</span>
+                        <span class="sidebar-nav-text">Active Jobs</span>
+                        <span class="sidebar-nav-badge" id="active-jobs-count">0</span>
+                    </div>
+                    <div class="sidebar-nav-item" data-view="job-history">
+                        <span class="sidebar-nav-icon">📊</span>
+                        <span class="sidebar-nav-text">Job History</span>
                     </div>
                 </div>
 
-                <!-- Preload Button and Status -->
-                <div class="spell-section">
-                    <button type="button" id="preload-model-button" class="action-button" style="width: 100%; background: var(--primary-purple); color: white; font-weight: bold; padding: 15px;">
-                        🔮 Validate & Preload Model
-                    </button>
-                    <div id="model-status" style="margin-top: 15px; display: none;">
-                        <div style="padding: 15px; background: #e8f5e9; border-radius: 10px; border: 1px solid #4caf50;">
-                            <div style="font-weight: bold; color: #2e7d32; margin-bottom: 5px;">✓ Model Ready</div>
-                            <div id="model-info" style="font-size: 0.9em; color: #555;"></div>
-                        </div>
+                <div class="sidebar-section">
+                    <div class="sidebar-section-title">Tools</div>
+                    <div class="sidebar-nav-item" data-view="configs">
+                        <span class="sidebar-nav-icon">💾</span>
+                        <span class="sidebar-nav-text">Saved Configs</span>
+                    </div>
+                    <div class="sidebar-nav-item" data-view="gpu">
+                        <span class="sidebar-nav-icon">🎮</span>
+                        <span class="sidebar-nav-text">GPU Manager</span>
+                    </div>
+                    <div class="sidebar-nav-item" data-view="analytics">
+                        <span class="sidebar-nav-icon">📈</span>
+                        <span class="sidebar-nav-text">Analytics</span>
                     </div>
                 </div>
+            </nav>
+        </aside>
 
-                <!-- GPU Selection -->
-                <div class="spell-section">
-                    <h3>🎮 GPU Selection</h3>
-                    <button type="button" id="refresh-gpu-button" class="action-button" style="width: 100%; margin-bottom: 15px; background: var(--primary-purple); color: white;">
-                        🔄 Refresh GPU List
-                    </button>
-
-                    <div id="gpu-list-container" style="margin-top: 15px;">
-                        <div style="text-align: center; padding: 20px; color: #888;">
-                            Click "Refresh GPU List" to see available GPUs
-                        </div>
-                    </div>
-
-                    <div class="form-group" style="margin-top: 15px;">
-                        <label>Selected GPUs for Training</label>
-                        <select id="gpu-selection" class="magic-select" multiple style="min-height: 60px;">
-                            <option value="">Auto (use all available)</option>
-                        </select>
-                        <small style="color: #888; font-size: 0.85em;">Hold Ctrl/Cmd to select multiple GPUs. Leave empty for auto-selection.</small>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Dataset Configuration (STEP 2) -->
-            <section id="dataset-section" class="card">
-                <h2>📚 Step 2: Configure Your Dataset</h2>
-
-                <!-- Dataset Source Selection -->
-                <div class="spell-section">
-                    <h3>🔮 Dataset Source</h3>
-                    <div class="form-group">
-                        <label>Source Type</label>
-                        <select id="dataset-source-type" class="magic-select">
-                            <option value="huggingface">HuggingFace Dataset</option>
-                            <option value="upload">Upload File</option>
-                            <option value="local_file">Local File Path</option>
-                        </select>
-                    </div>
-
-                    <!-- HuggingFace Source -->
-                    <div id="hf-source-config" class="source-config">
-                        <div class="form-group">
-                            <label>HuggingFace Repository ID</label>
-                            <input type="text" id="hf-repo-id" value="schneewolflabs/Athanor-DPO" class="magic-input">
-                            <small style="color: #888; font-size: 0.85em;">Example: username/dataset-name</small>
-                        </div>
-                        <div class="form-group">
-                            <label>Split</label>
-                            <input type="text" id="hf-split" value="train" class="magic-input">
-                        </div>
-                    </div>
-
-                    <!-- Upload Source -->
-                    <div id="upload-source-config" class="source-config" style="display: none;">
-                        <div class="form-group">
-                            <label>Upload Dataset File</label>
-                            <input type="file" id="dataset-file" accept=".json,.jsonl,.csv,.parquet" class="magic-input">
-                            <small style="color: #888; font-size: 0.85em;">Supported: JSON, JSONL, CSV, Parquet</small>
-                        </div>
-                        <div id="upload-status"></div>
-                        <button type="button" id="upload-button" class="action-button" style="margin-top: 10px;">
-                            📤 Upload Dataset
-                        </button>
-                    </div>
-
-                    <!-- Local File Source -->
-                    <div id="local-source-config" class="source-config" style="display: none;">
-                        <div class="form-group">
-                            <label>File Path</label>
-                            <input type="text" id="local-file-path" placeholder="/path/to/dataset.json" class="magic-input">
-                        </div>
-                        <div class="form-group">
-                            <label>File Format</label>
-                            <select id="local-file-format" class="magic-select">
-                                <option value="">Auto-detect</option>
-                                <option value="json">JSON</option>
-                                <option value="csv">CSV</option>
-                                <option value="parquet">Parquet</option>
-                            </select>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Column Mapping -->
-                <div class="spell-section">
-                    <h3>🔗 Column Mapping</h3>
-                    <button type="button" id="inspect-columns-button" class="action-button" style="width: 100%; margin-bottom: 15px;">
-                        🔍 Inspect Dataset Columns
-                    </button>
-
-                    <div id="column-mapping-config" style="display: none;">
-                        <div style="background: #f5f7fa; padding: 15px; border-radius: 10px; margin-bottom: 15px;">
-                            <div style="font-weight: bold; color: var(--primary-purple); margin-bottom: 10px;">
-                                Available Columns: <span id="available-columns"></span>
-                            </div>
-                            <div style="font-size: 0.85em; color: #666;">
-                                Map your dataset columns to the standard format
-                            </div>
-                        </div>
-
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Prompt Column</label>
-                                <select id="map-prompt" class="magic-select">
-                                    <option value="">-- Select Column --</option>
-                                </select>
-                                <small style="color: #888; font-size: 0.85em;">Required: User input/question</small>
-                            </div>
-                            <div class="form-group">
-                                <label>Chosen Column</label>
-                                <select id="map-chosen" class="magic-select">
-                                    <option value="">-- Select Column --</option>
-                                </select>
-                                <small style="color: #888; font-size: 0.85em;">Required: Preferred response</small>
-                            </div>
-                        </div>
-
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Rejected Column</label>
-                                <select id="map-rejected" class="magic-select">
-                                    <option value="">-- Select Column --</option>
-                                </select>
-                                <small style="color: #888; font-size: 0.85em;">Required: Non-preferred response</small>
-                            </div>
-                            <div class="form-group">
-                                <label>System Column (Optional)</label>
-                                <select id="map-system" class="magic-select">
-                                    <option value="">-- None --</option>
-                                </select>
-                                <small style="color: #888; font-size: 0.85em;">Optional: System message</small>
-                            </div>
-                        </div>
-
-                        <div class="form-group">
-                            <label>Reasoning Column (Optional)</label>
-                            <select id="map-reasoning" class="magic-select">
-                                <option value="">-- None --</option>
-                            </select>
-                            <small style="color: #888; font-size: 0.85em;">Optional: Reasoning/thinking process (for Qwen3)</small>
-                        </div>
-
-                        <!-- Sample Preview -->
-                        <div id="column-sample-preview" style="margin-top: 15px; display: none;">
-                            <div style="font-weight: bold; color: var(--primary-purple); margin-bottom: 10px;">
-                                Sample Data (First Row):
-                            </div>
-                            <div style="background: white; padding: 15px; border-radius: 10px; border: 1px solid var(--light-purple); max-height: 300px; overflow-y: auto;">
-                                <pre id="column-sample-content" style="margin: 0; font-size: 0.85em; white-space: pre-wrap;"></pre>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Dataset Format -->
-                <div class="spell-section">
-                    <h3>📝 Dataset Format</h3>
-                    <div class="form-group">
-                        <label>Format Type</label>
-                        <select id="dataset-format-type" class="magic-select">
-                            <option value="tokenizer">Tokenizer (Recommended) - Uses model's native chat template</option>
-                            <option value="chatml">ChatML</option>
-                            <option value="llama3">Llama 3</option>
-                            <option value="mistral">Mistral Instruct</option>
-                            <option value="qwen3">Qwen 3 (with thinking support)</option>
-                            <option value="custom">Custom Template</option>
-                        </select>
-                        <small style="color: #888; font-size: 0.85em;">How to format conversations for the model</small>
-                    </div>
-
-                    <!-- Qwen3 Config -->
-                    <div id="qwen3-format-config" style="display: none; margin-top: 15px;">
-                        <div class="form-group">
-                            <label class="magic-checkbox">
-                                <input type="checkbox" id="enable-thinking" checked>
-                                <span>Enable Thinking Mode 🧠</span>
-                            </label>
-                            <small style="color: #888; font-size: 0.85em; display: block; margin-top: 5px;">
-                                When enabled, the model can use &lt;think&gt; tags to show its reasoning process before responding.
-                                When disabled, adds empty &lt;think&gt;&lt;/think&gt; tags to prevent thinking output.
-                            </small>
-                        </div>
-                    </div>
-
-                    <!-- Custom Template Config -->
-                    <div id="custom-format-config" style="display: none; margin-top: 15px;">
-                        <div class="form-group">
-                            <label>Prompt Template</label>
-                            <textarea id="custom-prompt-template" class="magic-input" rows="3" placeholder="{system}\n\n{prompt}">{system}\n\n{prompt}</textarea>
-                            <small style="color: #888; font-size: 0.85em;">Use {system} and {prompt} as placeholders</small>
-                        </div>
-                        <div class="form-group">
-                            <label>Chosen Template</label>
-                            <input type="text" id="custom-chosen-template" value="{chosen}" class="magic-input">
-                        </div>
-                        <div class="form-group">
-                            <label>Rejected Template</label>
-                            <input type="text" id="custom-rejected-template" value="{rejected}" class="magic-input">
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Dataset Preview -->
-                <div class="spell-section">
-                    <h3>👁️ Dataset Preview</h3>
-                    <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                        <button type="button" id="preview-dataset-button" class="action-button" style="flex: 1;">
-                            🔍 Preview Raw Data
-                        </button>
-                        <button type="button" id="preview-formatted-button" class="action-button" style="flex: 1; background: var(--secondary-purple);">
-                            ✨ Preview Formatted
-                        </button>
-                    </div>
-
-                    <!-- Raw Preview -->
-                    <div id="dataset-preview" style="margin-top: 15px; display: none;">
-                        <h4 style="color: var(--secondary-purple); margin-bottom: 10px;">Raw Dataset (First 3 Samples)</h4>
-                        <div style="max-height: 400px; overflow-y: auto; background: white; padding: 15px; border-radius: 10px; border: 1px solid var(--light-purple);">
-                            <pre id="dataset-preview-content" style="margin: 0; font-size: 0.85em; white-space: pre-wrap;"></pre>
-                        </div>
-                    </div>
-
-                    <!-- Formatted Preview -->
-                    <div id="formatted-preview" style="margin-top: 15px; display: none;">
-                        <h4 style="color: var(--secondary-purple); margin-bottom: 10px;">Formatted for Training (Sample 1)</h4>
-                        <div style="background: white; padding: 15px; border-radius: 10px; border: 1px solid var(--light-purple);">
-                            <div style="margin-bottom: 20px;">
-                                <div style="font-weight: bold; color: var(--primary-purple); margin-bottom: 5px;">Prompt:</div>
-                                <div style="background: #f5f7fa; padding: 10px; border-radius: 5px; max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 0.85em; white-space: pre-wrap;" id="formatted-prompt"></div>
-                            </div>
-                            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
-                                <div>
-                                    <div style="font-weight: bold; color: var(--success); margin-bottom: 5px;">✓ Chosen Response:</div>
-                                    <div style="background: #e8f5e9; padding: 10px; border-radius: 5px; max-height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.85em; white-space: pre-wrap;" id="formatted-chosen"></div>
-                                </div>
-                                <div>
-                                    <div style="font-weight: bold; color: var(--danger); margin-bottom: 5px;">✗ Rejected Response:</div>
-                                    <div style="background: #ffebee; padding: 10px; border-radius: 5px; max-height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.85em; white-space: pre-wrap;" id="formatted-rejected"></div>
-                                </div>
-                            </div>
-                            <div style="margin-top: 15px; padding: 10px; background: #e6d0ff; border-radius: 5px; font-size: 0.85em;">
-                                <strong>📝 Format Type:</strong> <span id="format-type-display"></span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Advanced Dataset Options -->
-                <div class="spell-section">
-                    <h3>⚙️ Advanced Options</h3>
-                    <div class="form-row">
-                        <div class="form-group">
-                            <label>Test Split Size</label>
-                            <input type="number" id="test-size" value="0.01" min="0.001" max="0.5" step="0.01" class="magic-input">
-                            <small style="color: #888; font-size: 0.85em;">Fraction of data for evaluation</small>
-                        </div>
-                        <div class="form-group">
-                            <label>Max Samples (Optional)</label>
-                            <input type="number" id="max-samples" placeholder="Use all" class="magic-input">
-                            <small style="color: #888; font-size: 0.85em;">Limit dataset size for testing</small>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <!-- Training Configuration (STEP 3) -->
-            <section id="config-section" class="card">
-                <h2>✨ Step 3: Configure Training Parameters</h2>
-
-                <!-- Config Management Section -->
-                <div class="spell-section" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 12px; margin-bottom: 25px;">
-                    <h3 style="color: white; margin-bottom: 15px;">💾 Configuration Management</h3>
-
-                    <div class="form-row" style="gap: 10px; margin-bottom: 15px;">
-                        <button type="button" id="save-config-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
-                            💾 Save Config
-                        </button>
-                        <button type="button" id="load-config-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
-                            📂 Load Config
-                        </button>
-                        <button type="button" id="manage-configs-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
-                            🗂️ Manage
-                        </button>
-                    </div>
-
-                    <small style="color: rgba(255,255,255,0.9); display: block; text-align: center;">
-                        Save your current settings for later reuse
-                    </small>
-                </div>
-
-                <form id="training-form">
-                    <!-- Output Name -->
-                    <div class="form-group">
-                        <label>🏷️ Output Model Name</label>
-                        <input type="text" id="output-name" placeholder="My-Magical-Model" class="magic-input" required>
-                        <small style="color: #888; font-size: 0.85em;">Name for your fine-tuned model</small>
-                    </div>
-
-                    <!-- LoRA Configuration -->
-                    <div class="spell-section">
-                        <h3>🪄 LoRA Enchantments</h3>
-
-                        <!-- LoRA Enable/Disable Toggle -->
-                        <div class="form-group" style="margin-bottom: 20px;">
-                            <label style="display: flex; align-items: center; cursor: pointer; user-select: none;">
-                                <input type="checkbox" id="use-lora" checked style="margin-right: 10px; width: 20px; height: 20px; cursor: pointer;">
-                                <span style="font-weight: bold; color: var(--primary-purple);">Enable LoRA (Low-Rank Adaptation)</span>
-                            </label>
-                            <small style="color: #888; font-size: 0.85em; margin-top: 5px; display: block;">
-                                When enabled, trains only LoRA adapters (faster, less VRAM). When disabled, trains the full model.
-                            </small>
-                        </div>
-
-                        <div id="lora-settings" style="display: block;">
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>Rank (r)</label>
-                                    <input type="number" id="lora-r" value="64" min="8" max="256" class="magic-input">
-                                </div>
-                                <div class="form-group">
-                                    <label>Alpha</label>
-                                    <input type="number" id="lora-alpha" value="32" min="8" max="256" class="magic-input">
-                                </div>
-                                <div class="form-group">
-                                    <label>Dropout</label>
-                                    <input type="number" id="lora-dropout" value="0.05" min="0" max="0.5" step="0.01" class="magic-input">
-                                </div>
-                            </div>
-
-                            <!-- Advanced LoRA Settings -->
-                            <div class="advanced-section" style="display: none;">
-                                <div class="form-group">
-                                    <label>Target Modules (comma-separated)</label>
-                                    <input type="text" id="target-modules" value="up_proj,down_proj,gate_proj,k_proj,q_proj,v_proj,o_proj" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Which layers to apply LoRA to</small>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Training Mode Selection -->
-                    <div class="spell-section">
-                        <h3>🎯 Training Mode</h3>
-                        <div class="form-group">
-                            <label>Training Method</label>
-                            <select id="training-mode" class="magic-select">
-                                <option value="orpo">ORPO - Preference Optimization (requires chosen + rejected)</option>
-                                <option value="sft">SFT - Supervised Fine-Tuning (only uses chosen)</option>
-                            </select>
-                            <small style="color: #888; font-size: 0.85em; display: block; margin-top: 8px;">
-                                <strong>ORPO:</strong> Trains model to prefer "chosen" responses over "rejected" responses<br>
-                                <strong>SFT:</strong> Traditional fine-tuning on "chosen" responses only (rejected field not needed)
-                            </small>
-                        </div>
-                    </div>
-
-                    <!-- Training Parameters -->
-                    <div class="spell-section">
-                        <h3>⚗️ Training Potions</h3>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Learning Rate</label>
-                                <input type="number" id="learning-rate" value="0.000005" step="0.000001" class="magic-input">
-                            </div>
-                            <div class="form-group">
-                                <label>Epochs</label>
-                                <input type="number" id="epochs" value="2" min="1" max="10" class="magic-input">
-                            </div>
-                            <div class="form-group">
-                                <label>Batch Size</label>
-                                <input type="number" id="batch-size" value="1" min="1" max="8" class="magic-input">
-                            </div>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Gradient Accumulation</label>
-                                <input type="number" id="grad-accum" value="16" min="1" max="128" class="magic-input">
-                            </div>
-                            <div class="form-group">
-                                <label>Max Length</label>
-                                <input type="number" id="max-length" value="2048" min="512" max="8192" step="512" class="magic-input">
-                            </div>
-                            <div class="form-group" id="beta-field">
-                                <label>ORPO Beta</label>
-                                <input type="number" id="beta" value="0.1" min="0.01" max="1" step="0.01" class="magic-input">
-                                <small style="color: #888; font-size: 0.85em;">Only used in ORPO mode</small>
-                            </div>
-                        </div>
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Random Seed 🎲</label>
-                                <input type="number" id="seed" value="42" min="0" max="99999" class="magic-input">
-                                <small style="color: #888; font-size: 0.85em;">For reproducibility</small>
-                            </div>
-                            <div class="form-group">
-                                <label>Max Gradient Norm ✂️</label>
-                                <input type="number" id="max-grad-norm" value="0.3" min="0.01" max="10.0" step="0.01" class="magic-input">
-                                <small style="color: #888; font-size: 0.85em;">Gradient clipping threshold</small>
-                            </div>
-                        </div>
-
-                        <!-- Advanced Training Settings -->
-                        <div class="advanced-section" style="display: none;">
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>Max Prompt Length</label>
-                                    <input type="number" id="max-prompt-length" value="1024" min="256" max="4096" step="128" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Maximum length for prompts</small>
-                                </div>
-                                <div class="form-group">
-                                    <label>Warmup Ratio</label>
-                                    <input type="number" id="warmup-ratio" value="0.05" min="0" max="0.5" step="0.01" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Learning rate warmup proportion</small>
-                                </div>
-                                <div class="form-group">
-                                    <label>Eval Steps Ratio</label>
-                                    <input type="number" id="eval-steps" value="0.2" min="0.1" max="1" step="0.05" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">How often to evaluate (0-1)</small>
-                                </div>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>Weight Decay</label>
-                                    <input type="number" id="weight-decay" value="0.01" min="0" max="0.5" step="0.001" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">L2 regularization strength</small>
-                                </div>
-                                <div class="form-group">
-                                    <label>LR Scheduler Type</label>
-                                    <select id="lr-scheduler-type" class="magic-select">
-                                        <option value="cosine" selected>Cosine</option>
-                                        <option value="linear">Linear</option>
-                                        <option value="cosine_with_restarts">Cosine with Restarts</option>
-                                        <option value="polynomial">Polynomial</option>
-                                        <option value="constant">Constant</option>
-                                        <option value="constant_with_warmup">Constant with Warmup</option>
-                                    </select>
-                                    <small style="color: #888; font-size: 0.85em;">Learning rate schedule</small>
-                                </div>
-                                <div class="form-group">
-                                    <label>Logging Steps</label>
-                                    <input type="number" id="logging-steps" value="1" min="1" max="100" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Log metrics every N steps</small>
-                                </div>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group" style="flex: 1;">
-                                    <label class="magic-checkbox">
-                                        <input type="checkbox" id="shuffle-dataset" checked>
-                                        <span>Shuffle Dataset 🔀</span>
-                                    </label>
-                                    <small style="color: #888; font-size: 0.85em; display: block; margin-top: 5px;">Randomize training data order</small>
-                                </div>
-                                <div class="form-group" style="flex: 1;">
-                                    <label class="magic-checkbox">
-                                        <input type="checkbox" id="gradient-checkpointing">
-                                        <span>Gradient Checkpointing 💾</span>
-                                    </label>
-                                    <small style="color: #888; font-size: 0.85em; display: block; margin-top: 5px;">Save VRAM (slower training)</small>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Optimizer Configuration -->
-                    <div class="spell-section">
-                        <h3>🔧 Optimizer Configuration</h3>
-                        <div class="form-group">
-                            <label>Optimizer Type</label>
-                            <select id="optimizer-type" class="magic-select">
-                                <option value="paged_adamw_8bit" selected>Paged AdamW 8-bit (Recommended - Memory Efficient)</option>
-                                <option value="paged_adamw_32bit">Paged AdamW 32-bit (More Precise, More Memory)</option>
-                                <option value="adamw_8bit">AdamW 8-bit (No Paging)</option>
-                                <option value="adamw_torch">AdamW PyTorch (Full Precision)</option>
-                                <option value="adamw_hf">AdamW HuggingFace</option>
-                                <option value="adafactor">Adafactor (Memory Efficient Alternative)</option>
-                                <option value="sgd">SGD (Stochastic Gradient Descent)</option>
-                            </select>
-                            <small style="color: #888; font-size: 0.85em;">
-                                Paged optimizers swap memory to CPU when GPU is full. 8-bit uses less memory but may be slightly less precise.
-                            </small>
-                        </div>
-
-                        <!-- Advanced Optimizer Settings -->
-                        <div class="advanced-section" style="display: none;">
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>Adam Beta1</label>
-                                    <input type="number" id="adam-beta1" value="0.9" min="0.8" max="0.99" step="0.01" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">First moment decay (momentum)</small>
-                                </div>
-                                <div class="form-group">
-                                    <label>Adam Beta2</label>
-                                    <input type="number" id="adam-beta2" value="0.999" min="0.9" max="0.9999" step="0.001" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Second moment decay (variance)</small>
-                                </div>
-                                <div class="form-group">
-                                    <label>Adam Epsilon</label>
-                                    <input type="number" id="adam-epsilon" value="0.00000001" min="0.000000001" max="0.000001" step="0.000000001" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Numerical stability (1e-8)</small>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Attention Configuration -->
-                    <div class="spell-section">
-                        <h3>⚡ Attention Implementation</h3>
-                        <div class="form-group">
-                            <label>Attention Type</label>
-                            <select id="attn-implementation" class="magic-select">
-                                <option value="auto" selected>Auto (Recommended - Smart Selection)</option>
-                                <option value="flash_attention_2">Flash Attention 2 (Fastest - Requires Ampere+ GPU)</option>
-                                <option value="sdpa">SDPA (PyTorch Scaled Dot Product)</option>
-                                <option value="eager">Eager (Standard - Most Compatible)</option>
-                            </select>
-                            <small style="color: #888; font-size: 0.85em;">
-                                <strong>Auto mode:</strong> Uses Flash Attention 2 on Ampere+ GPUs (RTX 30/40 series, A100, H100), falls back to SDPA or Eager for older GPUs.
-                            </small>
-                        </div>
-                        <div style="margin-top: 10px; padding: 10px; background: #e3f2fd; border-radius: 5px; border-left: 3px solid #2196f3;">
-                            <div style="font-size: 0.85em; color: #1565c0;">
-                                <strong>💡 Performance Guide:</strong><br>
-                                • <strong>Flash Attention 2:</strong> Up to 2-3x faster, lowest memory usage<br>
-                                • <strong>SDPA:</strong> Good balance, works on most modern GPUs<br>
-                                • <strong>Eager:</strong> Slower but most compatible, use for debugging
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Options -->
-                    <div class="spell-section">
-                        <h3>🌟 Magical Options</h3>
-                        <div class="checkbox-group">
-                            <label class="magic-checkbox">
-                                <input type="checkbox" id="use-4bit" checked>
-                                <span>Use 4-bit Quantization 🗜️</span>
-                            </label>
-                        </div>
-
-                        <div class="checkbox-group">
-                            <label class="magic-checkbox">
-                                <input type="checkbox" id="push-hub">
-                                <span>Push to HuggingFace Hub 🤗</span>
-                            </label>
-                        </div>
-
-                        <!-- HuggingFace Hub Configuration (shown when Push to Hub is enabled) -->
-                        <div id="hf-hub-config" style="margin-top: 15px; display: none;">
-                            <div style="padding: 15px; background: #fff7ed; border-radius: 10px; border-left: 3px solid #f97316;">
-                                <h4 style="margin-top: 0; color: #f97316; font-size: 0.95em;">🤗 HuggingFace Hub Configuration</h4>
-
-                                <!-- HF Token -->
-                                <div class="form-group">
-                                    <label>HuggingFace Token</label>
-                                    <input type="password" id="hf-token" placeholder="Your HuggingFace token" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Required to push models. Get your token from <a href="https://huggingface.co/settings/tokens" target="_blank" style="color: #f97316;">huggingface.co/settings/tokens</a></small>
-                                </div>
-
-                                <!-- Privacy Toggle -->
-                                <label class="magic-checkbox" style="margin-top: 10px;">
-                                    <input type="checkbox" id="hf-hub-private" checked>
-                                    <span>🔒 Make Repository Private</span>
-                                </label>
-                                <small style="color: #888; font-size: 0.85em; display: block; margin-left: 30px; margin-top: 5px;">
-                                    Private repositories are only visible to you. Uncheck to make your model public.
-                                </small>
-
-                                <!-- Merge LoRA Toggle (only visible when LoRA is enabled) -->
-                                <div id="merge-lora-config" style="margin-top: 15px;">
-                                    <label class="magic-checkbox">
-                                        <input type="checkbox" id="merge-lora-before-upload" checked>
-                                        <span>🔀 Merge LoRA with Base Model</span>
-                                    </label>
-                                    <small style="color: #888; font-size: 0.85em; display: block; margin-left: 30px; margin-top: 5px;">
-                                        When checked, uploads full merged model (larger). When unchecked, uploads only LoRA adapter (much smaller, requires base model to use).
-                                    </small>
-                                </div>
-                            </div>
-                        </div>
-
-                        <div class="checkbox-group">
-                            <label class="magic-checkbox">
-                                <input type="checkbox" id="use-wandb" checked>
-                                <span>Report to Weights & Biases 📊</span>
-                            </label>
-                        </div>
-
-                        <!-- W&B Configuration (shown when W&B is enabled) -->
-                        <div id="wandb-config" style="margin-top: 15px; display: none;">
-                            <div style="padding: 15px; background: #f5f3ff; border-radius: 10px; border-left: 3px solid #7c3aed;">
-                                <h4 style="margin-top: 0; color: #7c3aed; font-size: 0.95em;">📊 Weights & Biases Configuration</h4>
-
-                                <!-- W&B API Key -->
-                                <div class="form-group">
-                                    <label>W&B API Key</label>
-                                    <input type="password" id="wandb-key" placeholder="Your Weights & Biases API key" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Get your API key from <a href="https://wandb.ai/authorize" target="_blank" style="color: #7c3aed;">wandb.ai/authorize</a></small>
-                                </div>
-
-                                <div class="form-row">
-                                    <div class="form-group">
-                                        <label>Project Name</label>
-                                        <input type="text" id="wandb-project" placeholder="merlina-training (default)" class="magic-input">
-                                        <small style="color: #888; font-size: 0.85em;">W&B project to organize runs</small>
-                                    </div>
-                                    <div class="form-group">
-                                        <label>Run Name (Optional)</label>
-                                        <input type="text" id="wandb-run-name" placeholder="Auto-generated from settings" class="magic-input">
-                                        <small style="color: #888; font-size: 0.85em;">Leave empty for auto-naming</small>
-                                    </div>
-                                </div>
-                                <div class="form-group">
-                                    <label>Tags (comma-separated)</label>
-                                    <input type="text" id="wandb-tags" placeholder="e.g., experiment, llama3, production" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Organize runs with tags</small>
-                                </div>
-                                <div class="form-group">
-                                    <label>Notes</label>
-                                    <textarea id="wandb-notes" class="magic-input" rows="2" placeholder="Optional notes about this training run..."></textarea>
-                                    <small style="color: #888; font-size: 0.85em;">Describe the purpose of this run</small>
-                                </div>
-                                <div style="margin-top: 10px; padding: 10px; background: white; border-radius: 5px; font-size: 0.85em; color: #555;">
-                                    <strong>💡 Auto-naming format:</strong> <code>[model]-[lr]-[batch]-[epochs]ep-[optimizer]-[attention]</code><br>
-                                    <strong>Example:</strong> <code>llama3-8b-5e-6LR-256B-2ep-adamw8bit-flash2-4bit</code>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Advanced Toggle Button -->
-                        <button type="button" id="toggle-advanced" class="toggle-advanced-btn">
-                            <span>⚙️ Show Advanced Settings</span>
-                        </button>
-                    </div>
-
-                    <button type="submit" class="cast-button">
-                        <span class="button-icon">🪄</span>
-                        Cast Training Spell
-                    </button>
-                </form>
-            </section>
-
-            <!-- Active Jobs -->
-            <section id="jobs-section" class="card" style="display: none;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                    <h2 style="margin: 0;">🔮 Active Spells</h2>
-                    <button id="clear-all-jobs-btn" class="action-button" style="background: #dc2626; color: white; padding: 8px 16px; font-size: 0.9em;">
-                        🗑️ Clear All Jobs
-                    </button>
-                </div>
-                <div id="jobs-container"></div>
-            </section>
+        <!-- Main Content Area -->
+        <main class="app-main" id="main-content" role="main">
+            <!-- Dynamic content loaded here -->
+            <div id="view-container"></div>
         </main>
 
-        <!-- Job Monitoring Modal -->
-        <div id="job-modal" class="modal" style="display: none;">
-            <div class="modal-content">
-                <span class="close">&times;</span>
-                <h2>📊 Spell Progress</h2>
-                <div id="job-details">
-                    <div class="job-header">
-                        <h3 id="job-name"></h3>
-                        <span id="job-id" class="job-id"></span>
-                    </div>
-                    
-                    <div class="progress-section">
-                        <div class="progress-bar">
-                            <div id="progress-fill" class="progress-fill"></div>
-                            <span id="progress-text" class="progress-text">0%</span>
-                        </div>
-                        <div id="status-text" class="status-text"></div>
-                    </div>
-
-                    <div class="metrics-grid">
-                        <div class="metric-card">
-                            <span class="metric-label">Current Step</span>
-                            <span id="current-step" class="metric-value">-</span>
-                        </div>
-                        <div class="metric-card">
-                            <span class="metric-label">Loss</span>
-                            <span id="loss-value" class="metric-value">-</span>
-                        </div>
-                        <div class="metric-card">
-                            <span class="metric-label">Status</span>
-                            <span id="job-status" class="metric-value">-</span>
-                        </div>
-                        <div class="metric-card">
-                            <span class="metric-label">GPU Memory</span>
-                            <span id="gpu-memory-value" class="metric-value">-</span>
-                        </div>
-                    </div>
-
-                    <!-- GPU Monitoring Section -->
-                    <div id="gpu-monitor-section" style="margin-top: 20px; display: none;">
-                        <h3 style="color: var(--primary-purple); margin-bottom: 10px;">🎮 GPU Monitoring</h3>
-                        <div id="gpu-monitor-cards"></div>
-                        <button type="button" onclick="refreshJobGPUs()" class="action-button" style="width: 100%; margin-top: 10px; background: var(--secondary-pink); color: white;">
-                            🔄 Refresh GPU Stats
-                        </button>
-                    </div>
-
-                    <div class="action-buttons">
-                        <a id="wandb-link" href="#" target="_blank" class="action-button" style="display: none;">
-                            📊 View in W&B
-                        </a>
-                        <button id="stop-button" class="action-button danger">
-                            🛑 Stop Training
-                        </button>
+        <!-- Right Panel (Jobs/GPU Monitor) -->
+        <aside class="app-panel" id="right-panel">
+            <div class="panel-header">
+                <h2 class="panel-title">🔮 Active Training</h2>
+                <button class="btn btn-icon btn-ghost" id="toggle-panel" aria-label="Toggle panel">
+                    <span>×</span>
+                </button>
+            </div>
+            <div class="panel-content" id="panel-content">
+                <div class="empty-state">
+                    <div class="empty-state-icon">🌟</div>
+                    <div class="empty-state-title">No Active Jobs</div>
+                    <div class="empty-state-message">
+                        Start a training job to see live updates here
                     </div>
                 </div>
             </div>
-        </div>
-
-        <!-- Notification Toast -->
-        <div id="toast" class="toast"></div>
-
-        <!-- Save Config Modal -->
-        <div id="save-config-modal" class="modal" style="display: none;">
-            <div class="modal-content">
-                <span class="close" onclick="document.getElementById('save-config-modal').style.display='none'">&times;</span>
-                <h2>💾 Save Configuration</h2>
-                <div class="form-group">
-                    <label>Configuration Name</label>
-                    <input type="text" id="config-name" placeholder="my-training-config" class="magic-input" required>
-                </div>
-                <div class="form-group">
-                    <label>Description (Optional)</label>
-                    <textarea id="config-description" placeholder="Describe this configuration..." class="magic-input" rows="3"></textarea>
-                </div>
-                <div class="form-group">
-                    <label>Tags (Optional, comma-separated)</label>
-                    <input type="text" id="config-tags" placeholder="llama3, orpo, 4bit" class="magic-input">
-                </div>
-                <div class="action-buttons">
-                    <button type="button" onclick="saveCurrentConfig()" class="action-button" style="background: var(--primary-purple); color: white;">
-                        Save Configuration
-                    </button>
-                    <button type="button" onclick="document.getElementById('save-config-modal').style.display='none'" class="action-button" style="background: #ccc;">
-                        Cancel
-                    </button>
-                </div>
-            </div>
-        </div>
-
-        <!-- Load Config Modal -->
-        <div id="load-config-modal" class="modal" style="display: none;">
-            <div class="modal-content">
-                <span class="close" onclick="document.getElementById('load-config-modal').style.display='none'">&times;</span>
-                <h2>📂 Load Configuration</h2>
-                <div id="config-list" style="margin: 20px 0;">
-                    <p style="text-align: center; color: #888;">Loading configurations...</p>
-                </div>
-            </div>
-        </div>
-
-        <!-- Manage Configs Modal -->
-        <div id="manage-configs-modal" class="modal" style="display: none;">
-            <div class="modal-content" style="max-width: 800px;">
-                <span class="close" onclick="document.getElementById('manage-configs-modal').style.display='none'">&times;</span>
-                <h2>🗂️ Manage Configurations</h2>
-                <div id="manage-config-list" style="margin: 20px 0;">
-                    <p style="text-align: center; color: #888;">Loading configurations...</p>
-                </div>
-            </div>
-        </div>
+        </aside>
     </div>
 
-    <!-- Load modular JavaScript -->
-    <script type="module" src="js/app.js"></script>
+    <!-- Backdrop for mobile overlays -->
+    <div class="app-backdrop" id="backdrop"></div>
+
+    <!-- Toast Container -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Load JavaScript Modules -->
+    <script type="module" src="js/app-v2.js"></script>
 </body>
 </html>
