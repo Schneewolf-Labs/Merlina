@@ -8,6 +8,10 @@ import { TrainingModeManager } from './managers/training-mode-manager.js';
 import { DashboardView } from './views/dashboard-view.js';
 import { TrainingConfigView } from './views/training-config-view.js';
 import { DatasetView } from './views/dataset-view.js';
+import { ActiveJobsView } from './views/active-jobs-view.js';
+import { JobHistoryView } from './views/job-history-view.js';
+import { GPUManagerView } from './views/gpu-manager-view.js';
+import { SavedConfigsView } from './views/saved-configs-view.js';
 import { JobPanel } from './components/job-panel.js';
 import { trainingAPI, datasetAPI, gpuAPI, statsAPI } from './services/api-client.js';
 
@@ -105,12 +109,20 @@ class MerlinaAppV2 {
         // Dataset manager view
         this.views.set('dataset', new DatasetView(this.trainingModeManager));
 
-        // Placeholder views (to be implemented)
+        // Active jobs view
+        this.views.set('active-jobs', new ActiveJobsView());
+
+        // Job history view
+        this.views.set('job-history', new JobHistoryView());
+
+        // GPU manager view
+        this.views.set('gpu', new GPUManagerView());
+
+        // Saved configurations view
+        this.views.set('configs', new SavedConfigsView());
+
+        // Placeholder views (to be implemented later)
         this.views.set('model', { render: () => '<div class="card"><h2>🎯 Model Selection</h2><p>Coming soon...</p></div>', attachEventListeners: () => {} });
-        this.views.set('active-jobs', { render: () => '<div class="card"><h2>🔮 Active Jobs</h2><p>Coming soon...</p></div>', attachEventListeners: () => {} });
-        this.views.set('job-history', { render: () => '<div class="card"><h2>📊 Job History</h2><p>Coming soon...</p></div>', attachEventListeners: () => {} });
-        this.views.set('configs', { render: () => '<div class="card"><h2>💾 Saved Configs</h2><p>Coming soon...</p></div>', attachEventListeners: () => {} });
-        this.views.set('gpu', { render: () => '<div class="card"><h2>🎮 GPU Manager</h2><p>Coming soon...</p></div>', attachEventListeners: () => {} });
         this.views.set('analytics', { render: () => '<div class="card"><h2>📈 Analytics</h2><p>Coming soon...</p></div>', attachEventListeners: () => {} });
     }
 
@@ -164,6 +176,14 @@ class MerlinaAppV2 {
         }
 
         console.log(`Navigating to: ${viewName}`);
+
+        // Cleanup previous view if it has a destroy method
+        if (this.currentView) {
+            const previousView = this.views.get(this.currentView);
+            if (previousView && typeof previousView.destroy === 'function') {
+                previousView.destroy();
+            }
+        }
 
         // Update layout manager
         this.layoutManager.currentView = viewName;
