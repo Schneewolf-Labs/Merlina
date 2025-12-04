@@ -3,7 +3,10 @@
 Test script to verify new training settings are properly configured
 """
 import sys
-sys.path.insert(0, '/home/python/AI/merlina')
+import os
+
+# Add parent directory to path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from merlina import TrainingConfig, DatasetConfig, DatasetSource, DatasetFormat
 from pydantic import ValidationError

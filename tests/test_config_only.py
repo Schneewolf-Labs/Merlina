@@ -32,6 +32,9 @@ def test_config_fields():
         "use_wandb": True,
         "push_to_hub": False,
 
+        # Training mode
+        "training_mode": "orpo",
+
         # NEW Priority 1 settings
         "seed": 42,
         "max_grad_norm": 0.3,
@@ -58,6 +61,9 @@ def test_config_fields():
     }
 
     print("✅ Test config dictionary created with all new fields:")
+    print("\nTraining Mode:")
+    print(f"  - training_mode: {config_dict['training_mode']}")
+
     print("\nPriority 1 Settings:")
     print(f"  - seed: {config_dict['seed']}")
     print(f"  - max_grad_norm: {config_dict['max_grad_norm']}")

@@ -5,7 +5,10 @@ Tests the is_local_model_path() function with various inputs
 """
 
 import sys
-sys.path.insert(0, '/home/python/AI/merlina')
+import os
+
+# Add parent directory to path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.preflight_checks import is_local_model_path
 
