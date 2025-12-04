@@ -936,37 +936,6 @@ async def list_gpus():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/gpu/{index}")
-async def get_gpu_info(index: int):
-    """
-    Get detailed information about a specific GPU.
-
-    Args:
-        index: GPU index (0-based)
-    """
-    try:
-        gpu_manager = get_gpu_manager()
-
-        if not gpu_manager.is_cuda_available():
-            raise HTTPException(status_code=404, detail="CUDA is not available")
-
-        gpu = gpu_manager.get_gpu_info(index)
-
-        if not gpu:
-            raise HTTPException(status_code=404, detail=f"GPU {index} not found")
-
-        return {
-            "status": "success",
-            "gpu": gpu.to_dict()
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Failed to get GPU info: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 @app.get("/gpu/available")
 async def get_available_gpus(min_free_memory_mb: int = 4000):
     """
@@ -1031,6 +1000,37 @@ async def get_recommended_gpu():
         raise
     except Exception as e:
         logger.error(f"Failed to get recommended GPU: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/gpu/{index}")
+async def get_gpu_info(index: int):
+    """
+    Get detailed information about a specific GPU.
+
+    Args:
+        index: GPU index (0-based)
+    """
+    try:
+        gpu_manager = get_gpu_manager()
+
+        if not gpu_manager.is_cuda_available():
+            raise HTTPException(status_code=404, detail="CUDA is not available")
+
+        gpu = gpu_manager.get_gpu_info(index)
+
+        if not gpu:
+            raise HTTPException(status_code=404, detail=f"GPU {index} not found")
+
+        return {
+            "status": "success",
+            "gpu": gpu.to_dict()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get GPU info: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -1402,6 +1402,8 @@ async def delete_config(name: str):
         else:
             raise HTTPException(status_code=404, detail=f"Configuration '{name}' not found")
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to delete configuration: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to delete configuration: {str(e)}")
@@ -1461,6 +1463,8 @@ async def import_config(request: ImportConfigRequest):
             "filepath": saved_path
         }
 
+    except HTTPException:
+        raise
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:

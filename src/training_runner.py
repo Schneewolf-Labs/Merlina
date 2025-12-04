@@ -509,7 +509,6 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
                 run_name=wandb_run_name if config.use_wandb else config.output_name,
                 learning_rate=config.learning_rate,
                 lr_scheduler_type=config.lr_scheduler_type,
-                max_seq_length=config.max_length,
                 per_device_train_batch_size=config.batch_size,
                 per_device_eval_batch_size=config.batch_size,
                 gradient_accumulation_steps=config.gradient_accumulation_steps,
@@ -533,8 +532,10 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
                 save_total_limit=2,
                 seed=config.seed,
                 gradient_checkpointing=config.gradient_checkpointing,
-                dataset_text_field="text",  # SFT specific
-                packing=False,  # Don't pack multiple samples together
+                # SFT-specific parameters (use max_length, not max_seq_length)
+                max_length=config.max_length,
+                dataset_text_field="text",
+                packing=False,
             )
 
             # Create SFT trainer
@@ -813,6 +814,11 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
         else:
             logger.info(f"Training completed for job {job_id}")
 
+        # Finish wandb run to mark it as complete
+        if config.use_wandb and wandb.run is not None:
+            wandb.finish()
+            logger.info("W&B run finished successfully")
+
     except Exception as e:
         logger.error(f"Training failed for job {job_id}: {str(e)}", exc_info=True)
         job_manager.update_job(job_id, status="failed", error=str(e))
@@ -824,3 +830,11 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
             ),
             event_loop
         )
+
+        # Finish wandb run even on failure to mark it as crashed
+        try:
+            if config.use_wandb and wandb.run is not None:
+                wandb.finish(exit_code=1)
+                logger.info("W&B run finished (marked as failed)")
+        except Exception:
+            pass  # Ignore errors when finishing wandb on failure

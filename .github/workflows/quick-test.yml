@@ -1,0 +1,52 @@
+name: Quick Tests
+
+# Run on every push to any branch for fast feedback
+on:
+  push:
+    branches: [ '**' ]
+
+jobs:
+  quick-test:
+    name: Quick API Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        # Install minimal dependencies for API testing
+        pip install fastapi uvicorn pydantic pydantic-settings python-multipart
+        pip install datasets
+        pip install -r tests/requirements-test.txt
+        # Note: ML dependencies (torch, transformers) are mocked in tests
+
+    - name: Run comprehensive API tests
+      run: |
+        pytest tests/test_api_comprehensive.py -v --tb=short -x
+
+    - name: Test collection check
+      if: always()
+      run: |
+        pytest tests/test_api_comprehensive.py --collect-only
+
+    - name: Comment on PR
+      if: failure() && github.event_name == 'pull_request'
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: '❌ Quick tests failed. Please check the test output for details.'
+          })
