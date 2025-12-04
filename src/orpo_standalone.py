@@ -138,6 +138,77 @@ def selective_log_softmax(logits: torch.Tensor, labels: torch.Tensor) -> torch.T
 
 
 # ============================================================================
+# Data Collator
+# ============================================================================
+
+class ORPODataCollator:
+    """
+    Data collator for ORPO training.
+
+    Handles padding for preference pairs (chosen/rejected sequences).
+    """
+
+    def __init__(self, pad_token_id: int = 0, label_pad_token_id: int = -100):
+        self.pad_token_id = pad_token_id
+        self.label_pad_token_id = label_pad_token_id
+
+    def __call__(self, features):
+        """
+        Collate a batch of ORPO examples.
+
+        Args:
+            features: List of dicts with chosen_input_ids, rejected_input_ids, etc.
+
+        Returns:
+            Batch dictionary with padded tensors
+        """
+        # Find max lengths
+        max_chosen_len = max(len(f['chosen_input_ids']) for f in features)
+        max_rejected_len = max(len(f['rejected_input_ids']) for f in features)
+
+        batch = {
+            'chosen_input_ids': [],
+            'chosen_attention_mask': [],
+            'chosen_labels': [],
+            'rejected_input_ids': [],
+            'rejected_attention_mask': [],
+            'rejected_labels': [],
+        }
+
+        for feature in features:
+            # Pad chosen sequences
+            chosen_len = len(feature['chosen_input_ids'])
+            chosen_pad_len = max_chosen_len - chosen_len
+
+            batch['chosen_input_ids'].append(
+                feature['chosen_input_ids'] + [self.pad_token_id] * chosen_pad_len
+            )
+            batch['chosen_attention_mask'].append(
+                feature['chosen_attention_mask'] + [0] * chosen_pad_len
+            )
+            batch['chosen_labels'].append(
+                feature['chosen_labels'] + [self.label_pad_token_id] * chosen_pad_len
+            )
+
+            # Pad rejected sequences
+            rejected_len = len(feature['rejected_input_ids'])
+            rejected_pad_len = max_rejected_len - rejected_len
+
+            batch['rejected_input_ids'].append(
+                feature['rejected_input_ids'] + [self.pad_token_id] * rejected_pad_len
+            )
+            batch['rejected_attention_mask'].append(
+                feature['rejected_attention_mask'] + [0] * rejected_pad_len
+            )
+            batch['rejected_labels'].append(
+                feature['rejected_labels'] + [self.label_pad_token_id] * rejected_pad_len
+            )
+
+        # Convert to tensors
+        return {k: torch.tensor(v) for k, v in batch.items()}
+
+
+# ============================================================================
 # ORPO Trainer
 # ============================================================================
 
@@ -232,6 +303,13 @@ class MerlinaORPOTrainer(Trainer):
                 self._tokenize_row,
                 remove_columns=eval_dataset.column_names,
                 desc="Tokenizing eval dataset"
+            )
+
+        # Set up custom data collator if not provided
+        if 'data_collator' not in kwargs:
+            kwargs['data_collator'] = ORPODataCollator(
+                pad_token_id=self.padding_value,
+                label_pad_token_id=self.label_pad_token_id
             )
 
         # Initialize parent Trainer
