@@ -95,7 +95,8 @@ def generate_wandb_run_name(config: Any) -> str:
         suffixes.append("4bit")
     if config.gradient_checkpointing:
         suffixes.append("gc")
-    if config.beta != 0.1:  # Non-default ORPO beta
+    # Only add beta for ORPO mode (SFT doesn't use beta)
+    if config.beta != 0.1 and config.training_mode == "orpo":
         suffixes.append(f"beta{config.beta}")
 
     if suffixes:
