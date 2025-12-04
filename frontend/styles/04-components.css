@@ -19,18 +19,26 @@
 }
 
 .card-header {
-    margin-bottom: var(--space-lg);
+    margin-bottom: var(--space-xl);
+    padding-bottom: var(--space-lg);
+    border-bottom: 2px solid var(--border-light);
+    background: linear-gradient(135deg, var(--surface-1), var(--surface-2));
+    margin: calc(var(--space-xl) * -1) calc(var(--space-xl) * -1) var(--space-xl);
+    padding: var(--space-xl);
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
 }
 
 .card-title {
     font-size: var(--text-2xl);
     color: var(--primary-purple);
     margin-bottom: var(--space-sm);
+    font-weight: var(--font-bold);
 }
 
 .card-subtitle {
     font-size: var(--text-sm);
     color: var(--text-secondary);
+    line-height: var(--leading-relaxed);
 }
 
 .card-content {
@@ -57,6 +65,40 @@
     transform: translateY(-4px);
     box-shadow: var(--shadow-2xl);
     border-color: var(--primary-purple);
+}
+
+/* Section Headers */
+.section-header {
+    background: linear-gradient(135deg, var(--surface-2), var(--surface-3));
+    border-left: 4px solid var(--primary-purple);
+    padding: var(--space-md) var(--space-lg);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-lg);
+    box-shadow: var(--shadow-sm);
+}
+
+.section-header h3 {
+    margin: 0;
+    padding: 0;
+    border: none;
+    color: var(--primary-purple);
+    font-size: var(--text-xl);
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
+/* Within card h3 styling (not in spell-section) */
+.card > h3:not(.spell-section h3),
+.card > div > h3:not(.spell-section h3) {
+    color: var(--secondary-purple);
+    background: linear-gradient(90deg, var(--surface-2), transparent);
+    padding: var(--space-md) var(--space-lg);
+    border-radius: var(--radius-md);
+    margin-left: calc(var(--space-xl) * -1);
+    margin-right: calc(var(--space-xl) * -1);
+    padding-left: calc(var(--space-xl) + var(--space-sm));
+    border-left: 4px solid var(--light-purple);
 }
 
 /* ===== Stat Cards ===== */
@@ -640,22 +682,29 @@
 .empty-state {
     text-align: center;
     padding: var(--space-3xl);
-    color: var(--text-tertiary);
+    color: var(--text-secondary);
+    background: linear-gradient(135deg, var(--surface-1), var(--surface-2));
+    border-radius: var(--radius-lg);
+    border: 2px dashed var(--border-light);
 }
 
 .empty-state-icon {
     font-size: 4rem;
     margin-bottom: var(--space-lg);
-    opacity: 0.5;
+    opacity: 0.6;
+    filter: grayscale(20%);
 }
 
 .empty-state-title {
     font-size: var(--text-xl);
     font-weight: var(--font-bold);
     margin-bottom: var(--space-sm);
+    color: var(--text-primary);
 }
 
 .empty-state-message {
     font-size: var(--text-base);
     margin-bottom: var(--space-lg);
+    color: var(--text-secondary);
+    line-height: var(--leading-relaxed);
 }

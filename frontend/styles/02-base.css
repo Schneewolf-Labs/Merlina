@@ -24,6 +24,8 @@ h2 {
 h3 {
     font-size: var(--text-2xl);
     margin-bottom: var(--space-md);
+    padding-bottom: var(--space-sm);
+    border-bottom: 2px solid var(--border-light);
 }
 
 h4 {
