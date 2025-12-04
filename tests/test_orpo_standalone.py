@@ -7,18 +7,24 @@ Or with pytest: pytest tests/test_orpo_standalone.py -v
 
 import sys
 import os
-import torch
 import pytest
 
 # Add parent directory to path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from src.orpo_standalone import (
-    ORPOConfig,
-    MerlinaORPOTrainer,
-    pad_to_length,
-    selective_log_softmax,
-)
+# Try to import torch - skip entire module if not available
+try:
+    import torch
+    from src.orpo_standalone import (
+        ORPOConfig,
+        MerlinaORPOTrainer,
+        pad_to_length,
+        selective_log_softmax,
+    )
+    TORCH_AVAILABLE = True
+except ImportError as e:
+    TORCH_AVAILABLE = False
+    pytestmark = pytest.mark.skip(reason=f"PyTorch not available: {e}")
 
 
 class TestUtilityFunctions:
@@ -276,6 +282,9 @@ class TestMerlinaORPOTrainer:
 
 def test_import():
     """Test that all exports work"""
+    if not TORCH_AVAILABLE:
+        pytest.skip("PyTorch not available")
+
     from src.orpo_standalone import (
         ORPOConfig,
         MerlinaORPOTrainer,
@@ -289,6 +298,9 @@ def test_import():
 
 def test_config_creation():
     """Test creating a basic config"""
+    if not TORCH_AVAILABLE:
+        pytest.skip("PyTorch not available")
+
     config = ORPOConfig(
         output_dir="./test_output",
         num_train_epochs=1,
@@ -306,6 +318,11 @@ def test_config_creation():
 
 
 if __name__ == "__main__":
+    if not TORCH_AVAILABLE:
+        print("❌ PyTorch not available - skipping ORPO standalone tests")
+        print("Install PyTorch to run these tests: pip install torch")
+        sys.exit(1)
+
     print("Running standalone ORPO tests...")
     print("=" * 50)
 
