@@ -814,6 +814,11 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
         else:
             logger.info(f"Training completed for job {job_id}")
 
+        # Finish wandb run to mark it as complete
+        if config.use_wandb and wandb.run is not None:
+            wandb.finish()
+            logger.info("W&B run finished successfully")
+
     except Exception as e:
         logger.error(f"Training failed for job {job_id}: {str(e)}", exc_info=True)
         job_manager.update_job(job_id, status="failed", error=str(e))
@@ -825,3 +830,11 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
             ),
             event_loop
         )
+
+        # Finish wandb run even on failure to mark it as crashed
+        try:
+            if config.use_wandb and wandb.run is not None:
+                wandb.finish(exit_code=1)
+                logger.info("W&B run finished (marked as failed)")
+        except Exception:
+            pass  # Ignore errors when finishing wandb on failure
