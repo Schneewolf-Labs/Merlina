@@ -375,29 +375,67 @@ export class DatasetView {
      * Load dataset
      */
     async loadDataset() {
-        console.log('Load dataset (mock implementation)');
+        try {
+            const sourceType = document.getElementById('dataset-source-type')?.value;
+            const loadBtn = document.getElementById('load-dataset-btn');
 
-        // Mock columns
-        const mockColumns = ['prompt', 'chosen', 'rejected', 'system'];
+            if (loadBtn) {
+                loadBtn.disabled = true;
+                loadBtn.textContent = '⏳ Loading...';
+            }
 
-        // Populate column selectors
-        this.populateColumnSelectors(mockColumns);
+            // Build dataset config
+            const datasetConfig = this.buildDatasetConfig();
 
-        // Show column mapping section
-        const section = document.getElementById('column-mapping-section');
-        if (section) section.style.display = 'block';
+            // Save to session storage for later use
+            sessionStorage.setItem('merlina_dataset_config', JSON.stringify(datasetConfig));
 
-        // Update available columns display
-        const availableEl = document.getElementById('available-columns');
-        if (availableEl) {
-            availableEl.innerHTML = mockColumns.map(col =>
-                `<span class="badge badge-secondary" style="margin: 2px;">${col}</span>`
-            ).join('');
+            // Fetch columns
+            const response = await fetch('/dataset/columns', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(datasetConfig)
+            });
+
+            const result = await response.json();
+
+            if (response.ok && result.columns) {
+                // Store current dataset
+                this.currentDataset = datasetConfig;
+
+                // Populate column selectors
+                this.populateColumnSelectors(result.columns);
+
+                // Show column mapping section
+                const section = document.getElementById('column-mapping-section');
+                if (section) section.style.display = 'block';
+
+                // Update available columns display
+                const availableEl = document.getElementById('available-columns');
+                if (availableEl) {
+                    availableEl.innerHTML = result.columns.map(col =>
+                        `<span class="badge badge-secondary" style="margin: 2px;">${col}</span>`
+                    ).join('');
+                }
+
+                window.dispatchEvent(new CustomEvent('toast', {
+                    detail: { message: `Dataset loaded: ${result.columns.length} columns, ${result.num_rows || '?'} rows`, type: 'success' }
+                }));
+            } else {
+                throw new Error(result.error || 'Failed to load dataset');
+            }
+        } catch (error) {
+            console.error('Failed to load dataset:', error);
+            window.dispatchEvent(new CustomEvent('toast', {
+                detail: { message: `Failed to load dataset: ${error.message}`, type: 'danger' }
+            }));
+        } finally {
+            const loadBtn = document.getElementById('load-dataset-btn');
+            if (loadBtn) {
+                loadBtn.disabled = false;
+                loadBtn.textContent = '🔍 Load Dataset';
+            }
         }
-
-        window.dispatchEvent(new CustomEvent('toast', {
-            detail: { message: 'Dataset loaded successfully', type: 'success' }
-        }));
     }
 
     /**
@@ -438,6 +476,54 @@ export class DatasetView {
     }
 
     /**
+     * Build dataset configuration from form
+     * @returns {object} - Dataset configuration
+     */
+    buildDatasetConfig() {
+        const sourceType = document.getElementById('dataset-source-type')?.value;
+        const formatType = document.getElementById('dataset-format-type')?.value || 'chatml';
+        const testSize = parseFloat(document.getElementById('test-size')?.value) || 0.01;
+        const maxSamples = parseInt(document.getElementById('max-samples')?.value) || null;
+
+        // Build source config
+        const source = {
+            source_type: sourceType
+        };
+
+        if (sourceType === 'huggingface') {
+            source.repo_id = document.getElementById('hf-repo-id')?.value;
+            source.split = document.getElementById('hf-split')?.value || 'train';
+        } else if (sourceType === 'local') {
+            source.file_path = document.getElementById('local-file-path')?.value;
+            source.file_format = document.getElementById('local-file-format')?.value || null;
+        }
+
+        // Build column mapping
+        const columnMapping = {};
+        const promptCol = document.getElementById('map-prompt')?.value;
+        const chosenCol = document.getElementById('map-chosen')?.value;
+        const rejectedCol = document.getElementById('map-rejected')?.value;
+        const systemCol = document.getElementById('map-system')?.value;
+        const reasoningCol = document.getElementById('map-reasoning')?.value;
+
+        if (promptCol) columnMapping.prompt = promptCol;
+        if (chosenCol) columnMapping.chosen = chosenCol;
+        if (rejectedCol) columnMapping.rejected = rejectedCol;
+        if (systemCol) columnMapping.system = systemCol;
+        if (reasoningCol) columnMapping.reasoning = reasoningCol;
+
+        return {
+            source,
+            format: {
+                format_type: formatType
+            },
+            column_mapping: Object.keys(columnMapping).length > 0 ? columnMapping : null,
+            test_size: testSize,
+            max_samples: maxSamples
+        };
+    }
+
+    /**
      * Preview raw data
      */
     async previewRaw() {
@@ -446,23 +532,36 @@ export class DatasetView {
 
         if (!container || !content) return;
 
-        // Mock data
-        const mockData = [
-            {
-                prompt: 'What is the capital of France?',
-                chosen: 'The capital of France is Paris.',
-                rejected: 'I think it might be London.',
-                system: 'You are a helpful assistant.'
+        try {
+            content.innerHTML = '<div style="text-align: center; padding: var(--space-lg);">Loading preview...</div>';
+            container.style.display = 'block';
+
+            const datasetConfig = this.buildDatasetConfig();
+
+            const response = await fetch('/dataset/preview', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(datasetConfig)
+            });
+
+            const result = await response.json();
+
+            if (response.ok && result.preview) {
+                content.innerHTML = `
+                    <div style="background: var(--surface-1); padding: var(--space-md); border-radius: var(--radius-md); border: 1px solid var(--border-light);">
+                        <pre style="margin: 0; white-space: pre-wrap; font-size: var(--text-sm);">${JSON.stringify(result.preview, null, 2)}</pre>
+                    </div>
+                `;
+            } else {
+                throw new Error(result.error || 'Failed to preview dataset');
             }
-        ];
-
-        content.innerHTML = `
-            <div style="background: var(--surface-1); padding: var(--space-md); border-radius: var(--radius-md); border: 1px solid var(--border-light);">
-                <pre style="margin: 0; white-space: pre-wrap; font-size: var(--text-sm);">${JSON.stringify(mockData, null, 2)}</pre>
-            </div>
-        `;
-
-        container.style.display = 'block';
+        } catch (error) {
+            console.error('Preview error:', error);
+            content.innerHTML = `<div class="alert alert-danger">Failed to preview: ${error.message}</div>`;
+            window.dispatchEvent(new CustomEvent('toast', {
+                detail: { message: 'Failed to preview dataset', type: 'danger' }
+            }));
+        }
     }
 
     /**
@@ -474,33 +573,71 @@ export class DatasetView {
 
         if (!container || !content) return;
 
-        content.innerHTML = `
-            <div style="background: var(--surface-1); padding: var(--space-lg); border-radius: var(--radius-md); border: 1px solid var(--border-light);">
-                <div style="margin-bottom: var(--space-lg);">
-                    <div style="font-weight: bold; color: var(--primary-purple); margin-bottom: var(--space-sm);">Prompt:</div>
-                    <div style="background: var(--surface-2); padding: var(--space-md); border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: var(--text-sm);">
-                        <|begin_of_text|><|start_header_id|>system<|end_header_id|>\\n\\nYou are a helpful assistant.<|eot_id|><|start_header_id|>user<|end_header_id|>\\n\\nWhat is the capital of France?<|eot_id|>
-                    </div>
-                </div>
+        try {
+            content.innerHTML = '<div style="text-align: center; padding: var(--space-lg);">Loading formatted preview...</div>';
+            container.style.display = 'block';
 
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-md);">
-                    <div>
-                        <div style="font-weight: bold; color: var(--success); margin-bottom: var(--space-sm);">✓ Chosen:</div>
-                        <div style="background: var(--success-bg); padding: var(--space-md); border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: var(--text-sm);">
-                            <|start_header_id|>assistant<|end_header_id|>\\n\\nThe capital of France is Paris.<|eot_id|>
+            const datasetConfig = this.buildDatasetConfig();
+
+            const response = await fetch('/dataset/preview-formatted', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(datasetConfig)
+            });
+
+            const result = await response.json();
+
+            if (response.ok && result.preview) {
+                const showRejected = this.trainingModeManager.getMode() === 'orpo';
+
+                content.innerHTML = result.preview.map(sample => `
+                    <div style="background: var(--surface-1); padding: var(--space-lg); border-radius: var(--radius-md); border: 1px solid var(--border-light); margin-bottom: var(--space-md);">
+                        <div style="margin-bottom: var(--space-lg);">
+                            <div style="font-weight: bold; color: var(--primary-purple); margin-bottom: var(--space-sm);">Prompt:</div>
+                            <div style="background: var(--surface-2); padding: var(--space-md); border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: var(--text-sm); white-space: pre-wrap;">
+                                ${this.escapeHtml(sample.prompt)}
+                            </div>
+                        </div>
+
+                        <div style="display: grid; grid-template-columns: ${showRejected ? '1fr 1fr' : '1fr'}; gap: var(--space-md);">
+                            <div>
+                                <div style="font-weight: bold; color: var(--success); margin-bottom: var(--space-sm);">✓ Chosen:</div>
+                                <div style="background: var(--success-bg); padding: var(--space-md); border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: var(--text-sm); white-space: pre-wrap;">
+                                    ${this.escapeHtml(sample.chosen)}
+                                </div>
+                            </div>
+                            ${showRejected && sample.rejected ? `
+                            <div>
+                                <div style="font-weight: bold; color: var(--danger); margin-bottom: var(--space-sm);">✗ Rejected:</div>
+                                <div style="background: var(--danger-bg); padding: var(--space-md); border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: var(--text-sm); white-space: pre-wrap;">
+                                    ${this.escapeHtml(sample.rejected)}
+                                </div>
+                            </div>
+                            ` : ''}
                         </div>
                     </div>
-                    <div>
-                        <div style="font-weight: bold; color: var(--danger); margin-bottom: var(--space-sm);">✗ Rejected:</div>
-                        <div style="background: var(--danger-bg); padding: var(--space-md); border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: var(--text-sm);">
-                            <|start_header_id|>assistant<|end_header_id|>\\n\\nI think it might be London.<|eot_id|>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        `;
+                `).join('');
+            } else {
+                throw new Error(result.error || 'Failed to preview formatted dataset');
+            }
+        } catch (error) {
+            console.error('Preview error:', error);
+            content.innerHTML = `<div class="alert alert-danger">Failed to preview formatted: ${error.message}</div>`;
+            window.dispatchEvent(new CustomEvent('toast', {
+                detail: { message: 'Failed to preview formatted dataset', type: 'danger' }
+            }));
+        }
+    }
 
-        container.style.display = 'block';
+    /**
+     * Escape HTML for display
+     * @param {string} text - Text to escape
+     * @returns {string}
+     */
+    escapeHtml(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
     }
 
     /**

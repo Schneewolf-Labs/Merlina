@@ -109,7 +109,14 @@ export class TrainingConfigView {
             <div class="tab-content ${this.currentTab === 'basic' ? 'active' : ''}" data-tab-content="basic">
                 <div class="card">
                     <div class="spell-section">
-                        <h3>🏷️ Output Configuration</h3>
+                        <h3>🎯 Model Configuration</h3>
+                        <div class="form-group">
+                            <label>Base Model</label>
+                            <input type="text" id="base-model" class="input"
+                                   value="meta-llama/Meta-Llama-3-8B-Instruct"
+                                   placeholder="meta-llama/Meta-Llama-3-8B-Instruct">
+                            <small>HuggingFace model ID or local path</small>
+                        </div>
                         <div class="form-group">
                             <label>Output Model Name</label>
                             <input type="text" id="output-name" class="input"
@@ -456,6 +463,14 @@ export class TrainingConfigView {
             });
         }
 
+        // GPU refresh button
+        const refreshGpuBtn = document.getElementById('refresh-gpu-btn');
+        if (refreshGpuBtn) {
+            refreshGpuBtn.addEventListener('click', () => {
+                this.refreshGPUList();
+            });
+        }
+
         // Action buttons
         document.querySelectorAll('[data-action]').forEach(btn => {
             btn.addEventListener('click', (e) => {
@@ -499,6 +514,56 @@ export class TrainingConfigView {
     }
 
     /**
+     * Refresh GPU list
+     */
+    async refreshGPUList() {
+        const gpuListEl = document.getElementById('gpu-list');
+        if (!gpuListEl) return;
+
+        try {
+            // Show loading state
+            gpuListEl.innerHTML = '<div class="empty-state"><div class="empty-state-message">Loading GPUs...</div></div>';
+
+            // Fetch GPU list
+            const response = await fetch('/gpu/list');
+            const result = await response.json();
+
+            if (result.gpus && result.gpus.length > 0) {
+                // Render GPU cards
+                gpuListEl.innerHTML = result.gpus.map((gpu, index) => `
+                    <div class="card" style="margin-bottom: var(--space-sm); padding: var(--space-md);">
+                        <div style="display: flex; justify-content: space-between; align-items: start;">
+                            <div>
+                                <strong>GPU ${index}: ${gpu.name}</strong>
+                                <div style="font-size: var(--text-sm); margin-top: var(--space-xs);">
+                                    <div>Memory: ${gpu.memory_used_gb.toFixed(1)}GB / ${gpu.memory_total_gb.toFixed(1)}GB</div>
+                                    <div>Free: ${gpu.memory_free_gb.toFixed(1)}GB (${gpu.memory_free_percent.toFixed(0)}%)</div>
+                                    ${gpu.utilization_percent !== undefined ? `<div>Utilization: ${gpu.utilization_percent}%</div>` : ''}
+                                </div>
+                            </div>
+                            <div class="badge ${gpu.memory_free_gb > 10 ? 'badge-success' : gpu.memory_free_gb > 5 ? 'badge-warning' : 'badge-danger'}">
+                                ${gpu.memory_free_gb > 10 ? 'Available' : gpu.memory_free_gb > 5 ? 'Limited' : 'Full'}
+                            </div>
+                        </div>
+                    </div>
+                `).join('');
+
+                window.dispatchEvent(new CustomEvent('toast', {
+                    detail: { message: `Found ${result.gpus.length} GPU(s)`, type: 'success' }
+                }));
+            } else {
+                gpuListEl.innerHTML = '<div class="empty-state"><div class="empty-state-message">No GPUs found</div></div>';
+            }
+        } catch (error) {
+            console.error('Failed to fetch GPU list:', error);
+            gpuListEl.innerHTML = '<div class="empty-state"><div class="empty-state-message">Failed to load GPUs</div></div>';
+            window.dispatchEvent(new CustomEvent('toast', {
+                detail: { message: 'Failed to fetch GPU list', type: 'danger' }
+            }));
+        }
+    }
+
+    /**
      * Handle action button clicks
      * @param {string} action - Action name
      */
@@ -522,32 +587,226 @@ export class TrainingConfigView {
     }
 
     /**
-     * Save configuration
+     * Collect configuration from form
+     * @returns {object} - Training configuration object
+     */
+    collectConfiguration() {
+        // Helper to get value
+        const getValue = (id) => document.getElementById(id)?.value;
+        const getChecked = (id) => document.getElementById(id)?.checked;
+        const getNumber = (id) => parseFloat(getValue(id)) || 0;
+        const getInt = (id) => parseInt(getValue(id)) || 0;
+
+        // Target modules from comma-separated string
+        const targetModulesStr = getValue('target-modules') || '';
+        const targetModules = targetModulesStr.split(',').map(m => m.trim()).filter(m => m);
+
+        // Get dataset config from session storage (set by dataset view)
+        const datasetConfigStr = sessionStorage.getItem('merlina_dataset_config');
+        const datasetConfig = datasetConfigStr ? JSON.parse(datasetConfigStr) : {
+            source: {
+                source_type: 'huggingface',
+                repo_id: 'schneewolflabs/Athanor-DPO',
+                split: 'train'
+            },
+            format: {
+                format_type: 'chatml'
+            },
+            test_size: 0.01
+        };
+
+        const config = {
+            // Model settings
+            base_model: getValue('base-model') || 'meta-llama/Meta-Llama-3-8B-Instruct',
+            output_name: getValue('output-name'),
+
+            // LoRA settings
+            use_lora: getChecked('use-lora'),
+            lora_r: getInt('lora-r'),
+            lora_alpha: getInt('lora-alpha'),
+            lora_dropout: getNumber('lora-dropout'),
+            target_modules: targetModules,
+
+            // Training hyperparameters
+            learning_rate: getNumber('learning-rate'),
+            num_epochs: getInt('epochs'),
+            batch_size: getInt('batch-size'),
+            gradient_accumulation_steps: getInt('grad-accum'),
+            max_length: getInt('max-length'),
+            max_prompt_length: getInt('max-prompt-length'),
+
+            // Training mode
+            training_mode: this.trainingModeManager.getMode(),
+
+            // ORPO specific
+            beta: getNumber('beta'),
+
+            // Dataset configuration
+            dataset: datasetConfig,
+
+            // Seed and grad norm
+            seed: getInt('seed'),
+            max_grad_norm: getNumber('max-grad-norm'),
+
+            // Optional settings
+            warmup_ratio: getNumber('warmup-ratio'),
+            eval_steps: getNumber('eval-steps'),
+            use_4bit: getChecked('use-4bit'),
+            use_wandb: getChecked('use-wandb'),
+            push_to_hub: getChecked('push-hub'),
+
+            // Advanced settings
+            shuffle_dataset: getChecked('shuffle-dataset'),
+            weight_decay: getNumber('weight-decay'),
+            lr_scheduler_type: getValue('lr-scheduler-type'),
+            gradient_checkpointing: getChecked('gradient-checkpointing'),
+            logging_steps: getInt('logging-steps'),
+
+            // Optimizer settings
+            optimizer_type: getValue('optimizer-type'),
+            adam_beta1: getNumber('adam-beta1'),
+            adam_beta2: getNumber('adam-beta2'),
+            adam_epsilon: getNumber('adam-epsilon'),
+
+            // Attention settings
+            attn_implementation: getValue('attn-implementation')
+        };
+
+        return config;
+    }
+
+    /**
+     * Save configuration to localStorage
      */
     saveConfiguration() {
-        console.log('Save configuration (not implemented)');
-        window.dispatchEvent(new CustomEvent('toast', {
-            detail: { message: 'Configuration saved', type: 'success' }
-        }));
+        try {
+            const config = this.collectConfiguration();
+            const configName = config.output_name || `config_${Date.now()}`;
+            localStorage.setItem(`merlina_config_${configName}`, JSON.stringify(config));
+
+            window.dispatchEvent(new CustomEvent('toast', {
+                detail: { message: `Configuration "${configName}" saved`, type: 'success' }
+            }));
+        } catch (error) {
+            console.error('Failed to save configuration:', error);
+            window.dispatchEvent(new CustomEvent('toast', {
+                detail: { message: 'Failed to save configuration', type: 'danger' }
+            }));
+        }
     }
 
     /**
      * Validate configuration
      */
-    validateConfiguration() {
-        console.log('Validate configuration (not implemented)');
-        window.dispatchEvent(new CustomEvent('toast', {
-            detail: { message: 'Validation passed', type: 'success' }
-        }));
+    async validateConfiguration() {
+        try {
+            const config = this.collectConfiguration();
+
+            if (!config.output_name) {
+                window.dispatchEvent(new CustomEvent('toast', {
+                    detail: { message: 'Please provide an output model name', type: 'warning' }
+                }));
+                return;
+            }
+
+            // Show loading state
+            window.dispatchEvent(new CustomEvent('toast', {
+                detail: { message: 'Validating configuration...', type: 'info' }
+            }));
+
+            // Call validation API
+            const response = await fetch('/validate', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config)
+            });
+
+            const result = await response.json();
+
+            if (result.valid) {
+                let message = '✅ Validation passed!';
+                if (result.warnings && result.warnings.length > 0) {
+                    message += `\n\nWarnings:\n${result.warnings.join('\n')}`;
+                }
+                window.dispatchEvent(new CustomEvent('toast', {
+                    detail: { message, type: 'success' }
+                }));
+            } else {
+                let message = '❌ Validation failed';
+                if (result.errors && result.errors.length > 0) {
+                    message += `:\n\n${result.errors.join('\n')}`;
+                }
+                window.dispatchEvent(new CustomEvent('toast', {
+                    detail: { message, type: 'danger' }
+                }));
+            }
+        } catch (error) {
+            console.error('Validation error:', error);
+            window.dispatchEvent(new CustomEvent('toast', {
+                detail: { message: 'Failed to validate configuration', type: 'danger' }
+            }));
+        }
     }
 
     /**
      * Start training
      */
-    startTraining() {
-        console.log('Start training (not implemented)');
-        window.dispatchEvent(new CustomEvent('toast', {
-            detail: { message: 'Training job submitted', type: 'success' }
-        }));
+    async startTraining() {
+        try {
+            const config = this.collectConfiguration();
+
+            if (!config.output_name) {
+                window.dispatchEvent(new CustomEvent('toast', {
+                    detail: { message: 'Please provide an output model name', type: 'warning' }
+                }));
+                return;
+            }
+
+            // Disable button
+            const submitBtn = document.querySelector('[data-action="start-training"]');
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.innerHTML = '<span>⏳</span><span>Submitting...</span>';
+            }
+
+            // Submit training job
+            const response = await fetch('/train', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config)
+            });
+
+            const result = await response.json();
+
+            if (response.ok && result.job_id) {
+                window.dispatchEvent(new CustomEvent('toast', {
+                    detail: {
+                        message: `🎉 Training job submitted!\nJob ID: ${result.job_id}`,
+                        type: 'success'
+                    }
+                }));
+
+                // Navigate to active jobs view
+                setTimeout(() => {
+                    window.dispatchEvent(new CustomEvent('navigate', {
+                        detail: { view: 'dashboard' }
+                    }));
+                }, 1500);
+            } else {
+                throw new Error(result.detail || 'Failed to submit training job');
+            }
+        } catch (error) {
+            console.error('Failed to start training:', error);
+            window.dispatchEvent(new CustomEvent('toast', {
+                detail: { message: `Failed to start training: ${error.message}`, type: 'danger' }
+            }));
+
+            // Re-enable button
+            const submitBtn = document.querySelector('[data-action="start-training"]');
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<span>🪄</span><span>Start Training</span>';
+            }
+        }
     }
 }

@@ -295,15 +295,34 @@ export class JobPanel {
         }
 
         try {
-            // Will be implemented when API is connected
-            console.log(`Stop job: ${jobId}`);
             window.dispatchEvent(new CustomEvent('toast', {
                 detail: { message: 'Stopping job...', type: 'info' }
             }));
+
+            const response = await fetch(`/jobs/${jobId}/stop`, {
+                method: 'POST'
+            });
+
+            const result = await response.json();
+
+            if (response.ok) {
+                window.dispatchEvent(new CustomEvent('toast', {
+                    detail: { message: 'Job stop requested', type: 'success' }
+                }));
+
+                // Update job status
+                const job = this.activeJobs.get(jobId);
+                if (job) {
+                    job.status = 'stopping';
+                    this.updateJob(jobId, job);
+                }
+            } else {
+                throw new Error(result.detail || 'Failed to stop job');
+            }
         } catch (error) {
             console.error('Failed to stop job:', error);
             window.dispatchEvent(new CustomEvent('toast', {
-                detail: { message: 'Failed to stop job', type: 'danger' }
+                detail: { message: `Failed to stop job: ${error.message}`, type: 'danger' }
             }));
         }
     }
