@@ -186,10 +186,10 @@ class MerlinaORPOTrainer(Trainer):
         self.max_length = args.max_length
         self.max_prompt_length = args.max_prompt_length
 
-        # Store tokenizer
-        self.tokenizer = processing_class
-        if self.tokenizer and self.padding_value is None:
-            self.padding_value = self.tokenizer.pad_token_id or 0
+        # Store reference to processing_class (tokenizer) for our use
+        self._processing_class = processing_class
+        if self._processing_class and self.padding_value is None:
+            self.padding_value = self._processing_class.pad_token_id or 0
 
         # Apply PEFT if config provided
         if peft_config is not None and model is not None:
@@ -257,7 +257,7 @@ class MerlinaORPOTrainer(Trainer):
 
         # Tokenize prompt + chosen
         chosen_full = prompt + chosen
-        chosen_tokens = self.tokenizer(
+        chosen_tokens = self._processing_class(
             chosen_full,
             max_length=self.max_length,
             truncation=True,
@@ -266,7 +266,7 @@ class MerlinaORPOTrainer(Trainer):
 
         # Tokenize prompt + rejected
         rejected_full = prompt + rejected
-        rejected_tokens = self.tokenizer(
+        rejected_tokens = self._processing_class(
             rejected_full,
             max_length=self.max_length,
             truncation=True,
@@ -274,7 +274,7 @@ class MerlinaORPOTrainer(Trainer):
         )
 
         # Tokenize just prompt to get its length (for labeling)
-        prompt_tokens = self.tokenizer(
+        prompt_tokens = self._processing_class(
             prompt,
             max_length=self.max_prompt_length,
             truncation=True,
