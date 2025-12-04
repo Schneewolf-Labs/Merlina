@@ -540,9 +540,13 @@ if FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
     
     # Also serve CSS, JS modules, and images from root for simplicity
-    @app.get("/styles.css")
-    async def serve_css():
-        return FileResponse(FRONTEND_DIR / "styles.css", media_type="text/css")
+    @app.get("/styles/{file_path:path}")
+    async def serve_styles(file_path: str):
+        """Serve CSS files from styles/ directory"""
+        css_file = FRONTEND_DIR / "styles" / file_path
+        if css_file.exists() and css_file.is_file():
+            return FileResponse(css_file, media_type="text/css")
+        return {"error": "File not found"}
 
     @app.get("/js/{file_path:path}")
     async def serve_js_modules(file_path: str):
