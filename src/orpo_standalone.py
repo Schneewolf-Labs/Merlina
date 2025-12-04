@@ -176,6 +176,9 @@ class MerlinaORPOTrainer(Trainer):
         if not isinstance(args, ORPOConfig):
             raise ValueError("args must be an instance of ORPOConfig")
 
+        # Extract peft_config if provided (Trainer doesn't accept it)
+        peft_config = kwargs.pop('peft_config', None)
+
         # Store ORPO-specific config
         self.beta = args.beta
         self.label_pad_token_id = args.label_pad_token_id
@@ -187,6 +190,12 @@ class MerlinaORPOTrainer(Trainer):
         self.tokenizer = processing_class
         if self.tokenizer and self.padding_value is None:
             self.padding_value = self.tokenizer.pad_token_id or 0
+
+        # Apply PEFT if config provided
+        if peft_config is not None and model is not None:
+            from peft import get_peft_model
+            logger.info(f"Applying PEFT config: {peft_config}")
+            model = get_peft_model(model, peft_config)
 
         # Disable dropout if requested
         if args.disable_dropout and model is not None:
