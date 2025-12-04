@@ -211,6 +211,26 @@ class MerlinaORPOTrainer(Trainer):
                     "Use at your own risk or fall back to TRL's ORPOTrainer."
                 )
 
+        # Tokenize datasets if they have raw text columns
+        train_dataset = kwargs.get('train_dataset')
+        eval_dataset = kwargs.get('eval_dataset')
+
+        if train_dataset is not None and 'prompt' in train_dataset.column_names:
+            logger.info("Tokenizing training dataset for ORPO...")
+            kwargs['train_dataset'] = train_dataset.map(
+                self._tokenize_row,
+                remove_columns=train_dataset.column_names,
+                desc="Tokenizing train dataset"
+            )
+
+        if eval_dataset is not None and 'prompt' in eval_dataset.column_names:
+            logger.info("Tokenizing evaluation dataset for ORPO...")
+            kwargs['eval_dataset'] = eval_dataset.map(
+                self._tokenize_row,
+                remove_columns=eval_dataset.column_names,
+                desc="Tokenizing eval dataset"
+            )
+
         # Initialize parent Trainer
         super().__init__(
             model=model,
@@ -220,6 +240,63 @@ class MerlinaORPOTrainer(Trainer):
         )
 
         logger.info(f"Initialized MerlinaORPOTrainer with beta={self.beta}")
+
+    def _tokenize_row(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Tokenize a single row with prompt, chosen, and rejected responses.
+
+        Args:
+            row: Dictionary with 'prompt', 'chosen', 'rejected' keys
+
+        Returns:
+            Dictionary with tokenized fields for ORPO training
+        """
+        prompt = row['prompt']
+        chosen = row['chosen']
+        rejected = row['rejected']
+
+        # Tokenize prompt + chosen
+        chosen_full = prompt + chosen
+        chosen_tokens = self.tokenizer(
+            chosen_full,
+            max_length=self.max_length,
+            truncation=True,
+            padding=False,
+        )
+
+        # Tokenize prompt + rejected
+        rejected_full = prompt + rejected
+        rejected_tokens = self.tokenizer(
+            rejected_full,
+            max_length=self.max_length,
+            truncation=True,
+            padding=False,
+        )
+
+        # Tokenize just prompt to get its length (for labeling)
+        prompt_tokens = self.tokenizer(
+            prompt,
+            max_length=self.max_prompt_length,
+            truncation=True,
+            padding=False,
+        )
+        prompt_len = len(prompt_tokens['input_ids'])
+
+        # Create labels (mask prompt tokens, keep response tokens)
+        chosen_labels = chosen_tokens['input_ids'].copy()
+        chosen_labels[:prompt_len] = [self.label_pad_token_id] * prompt_len
+
+        rejected_labels = rejected_tokens['input_ids'].copy()
+        rejected_labels[:prompt_len] = [self.label_pad_token_id] * prompt_len
+
+        return {
+            'chosen_input_ids': chosen_tokens['input_ids'],
+            'chosen_attention_mask': chosen_tokens['attention_mask'],
+            'chosen_labels': chosen_labels,
+            'rejected_input_ids': rejected_tokens['input_ids'],
+            'rejected_attention_mask': rejected_tokens['attention_mask'],
+            'rejected_labels': rejected_labels,
+        }
 
     @staticmethod
     def _disable_dropout_in_model(model: nn.Module) -> None:
