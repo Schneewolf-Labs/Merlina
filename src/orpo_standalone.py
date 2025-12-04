@@ -63,6 +63,9 @@ class ORPOConfig(TrainingArguments):
     def __post_init__(self):
         super().__post_init__()
 
+        # ORPO requires keeping chosen/rejected columns for compute_loss
+        self.remove_unused_columns = False
+
         # Calculate max_completion_length if not provided
         if self.max_completion_length is None:
             self.max_completion_length = self.max_length - self.max_prompt_length
