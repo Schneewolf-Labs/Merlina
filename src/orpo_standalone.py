@@ -665,6 +665,42 @@ class MerlinaORPOTrainer(Trainer):
 
         return chosen_logps, rejected_logps, chosen_nll_loss
 
+    def prediction_step(
+        self,
+        model: PreTrainedModel,
+        inputs: Dict[str, torch.Tensor],
+        prediction_loss_only: bool,
+        ignore_keys: Optional[list] = None,
+    ) -> Tuple[Optional[torch.Tensor], Optional[torch.Tensor], Optional[torch.Tensor]]:
+        """
+        Perform evaluation step on a batch.
+
+        For ORPO evaluation, we evaluate on the chosen sequences only (like standard LM).
+
+        Args:
+            model: The model being evaluated
+            inputs: ORPO batch with chosen_input_ids, rejected_input_ids, etc.
+            prediction_loss_only: Whether to return only the loss
+            ignore_keys: Keys to ignore in outputs
+
+        Returns:
+            (loss, logits, labels) tuple
+        """
+        # Convert ORPO batch format to standard format using chosen sequences
+        standard_inputs = {
+            'input_ids': inputs['chosen_input_ids'],
+            'attention_mask': inputs['chosen_attention_mask'],
+            'labels': inputs['chosen_labels'],
+        }
+
+        # Call parent's prediction_step with standard format
+        return super().prediction_step(
+            model,
+            standard_inputs,
+            prediction_loss_only,
+            ignore_keys=ignore_keys,
+        )
+
     def compute_loss(
         self,
         model: PreTrainedModel,
