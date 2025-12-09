@@ -3,7 +3,10 @@
 Test script to verify W&B settings and auto-naming functionality
 """
 import sys
-sys.path.insert(0, '/home/python/AI/merlina')
+import os
+
+# Add parent directory to path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Import only the run name generator (avoid full imports)
 from src.training_runner import generate_wandb_run_name

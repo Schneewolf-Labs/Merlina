@@ -18,7 +18,8 @@ from transformers import (
     TrainerCallback
 )
 from peft import LoraConfig, PeftModel, prepare_model_for_kbit_training, AutoPeftModelForCausalLM
-from trl import ORPOConfig, ORPOTrainer, SFTTrainer, SFTConfig
+from src.orpo_standalone import ORPOConfig, MerlinaORPOTrainer as ORPOTrainer
+from trl import SFTTrainer, SFTConfig
 from accelerate import Accelerator
 
 from dataset_handlers import (

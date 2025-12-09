@@ -5,7 +5,10 @@ Tests the preflight validation with both types of model sources
 """
 
 import sys
-sys.path.insert(0, '/home/python/AI/merlina')
+import os
+
+# Add parent directory to path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src.preflight_checks import PreflightValidator, is_local_model_path
 from pydantic import BaseModel, Field
