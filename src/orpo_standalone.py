@@ -676,6 +676,8 @@ class MerlinaORPOTrainer(Trainer):
         Perform evaluation step on a batch.
 
         For ORPO evaluation, we evaluate on the chosen sequences only (like standard LM).
+        We compute the loss directly here without going through compute_loss() which expects
+        ORPO format.
 
         Args:
             model: The model being evaluated
@@ -686,20 +688,38 @@ class MerlinaORPOTrainer(Trainer):
         Returns:
             (loss, logits, labels) tuple
         """
-        # Convert ORPO batch format to standard format using chosen sequences
-        standard_inputs = {
-            'input_ids': inputs['chosen_input_ids'],
-            'attention_mask': inputs['chosen_attention_mask'],
-            'labels': inputs['chosen_labels'],
-        }
+        # Extract chosen sequences from ORPO batch
+        input_ids = inputs['chosen_input_ids']
+        attention_mask = inputs['chosen_attention_mask']
+        labels = inputs['chosen_labels']
 
-        # Call parent's prediction_step with standard format
-        return super().prediction_step(
-            model,
-            standard_inputs,
-            prediction_loss_only,
-            ignore_keys=ignore_keys,
-        )
+        with torch.no_grad():
+            # Forward pass
+            outputs = model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+            )
+            logits = outputs.logits
+
+            # Compute loss manually (standard cross-entropy)
+            if labels is not None:
+                # Shift logits and labels for next-token prediction
+                shift_logits = logits[..., :-1, :].contiguous()
+                shift_labels = labels[..., 1:].contiguous()
+
+                # Flatten for loss computation
+                loss_fct = nn.CrossEntropyLoss(ignore_index=self.label_pad_token_id)
+                loss = loss_fct(
+                    shift_logits.view(-1, shift_logits.size(-1)),
+                    shift_labels.view(-1)
+                )
+            else:
+                loss = None
+
+        if prediction_loss_only:
+            return (loss, None, None)
+
+        return (loss, logits, labels)
 
     def compute_loss(
         self,
