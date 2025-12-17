@@ -622,6 +622,14 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
         trainer.save_model(final_output_dir)
         tokenizer.save_pretrained(final_output_dir)
 
+        # Clean up trainer and model to free VRAM before potential merge/upload
+        # This prevents OOM when loading the model again for merging
+        logger.info("🧹 Cleaning up training resources to free VRAM...")
+        del trainer, model
+        gc.collect()
+        torch.cuda.empty_cache()
+        logger.info("✅ VRAM freed successfully")
+
         # Optional: merge and upload
         if config.push_to_hub:
             # Check if we should upload (main process in distributed, or always in single GPU)
@@ -785,11 +793,6 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
                     # Continue to mark training as completed (upload is optional)
             else:
                 logger.info("⏭️ Skipping HuggingFace upload (not main process in distributed training)")
-
-        # Cleanup
-        del trainer, model
-        gc.collect()
-        torch.cuda.empty_cache()
 
         # Mark as completed or stopped
         final_status = "stopped" if was_stopped else "completed"
