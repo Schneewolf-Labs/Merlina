@@ -424,8 +424,12 @@ class DatasetManager {
             config.column_mapping = columnMapping;
         }
 
+        // Get training mode for validation and include in config
+        const trainingMode = document.getElementById('training-mode')?.value || 'orpo';
+        config.training_mode = trainingMode;
+
         // Validate dataset config
-        const errors = Validator.validateDatasetConfig(config);
+        const errors = Validator.validateDatasetConfig(config, trainingMode);
         if (errors.length > 0) {
             throw new Error(errors.join('; '));
         }

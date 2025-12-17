@@ -61,7 +61,8 @@ class DatasetPipeline:
         test_size: float = 0.01,
         max_samples: Optional[int] = None,
         seed: int = 42,
-        shuffle: bool = True
+        shuffle: bool = True,
+        training_mode: str = "orpo"
     ):
         """
         Initialize dataset pipeline.
@@ -75,6 +76,7 @@ class DatasetPipeline:
             max_samples: Optional limit on number of samples (for testing)
             seed: Random seed for train/test split
             shuffle: Whether to shuffle the dataset before splitting
+            training_mode: Training mode ('sft' or 'orpo'). For SFT, rejected is optional.
         """
         self.loader = loader
         self.formatter = formatter
@@ -83,6 +85,7 @@ class DatasetPipeline:
         self.max_samples = max_samples
         self.seed = seed
         self.shuffle = shuffle
+        self.training_mode = training_mode
 
     def prepare(self) -> tuple[Dataset, Dataset]:
         """
@@ -185,9 +188,13 @@ class DatasetPipeline:
         return dataset
 
     def _validate_schema(self, dataset: Dataset):
-        """Validate that dataset has required columns"""
-        required_columns = {'prompt', 'chosen', 'rejected'}
-        optional_columns = {'system', 'reasoning'}
+        """Validate that dataset has required columns based on training mode"""
+        # For SFT mode, rejected is not required
+        if self.training_mode == 'sft':
+            required_columns = {'prompt', 'chosen'}
+        else:
+            required_columns = {'prompt', 'chosen', 'rejected'}
+        optional_columns = {'system', 'reasoning', 'rejected'}
 
         available_columns = set(dataset.column_names)
         missing_required = required_columns - available_columns
@@ -199,4 +206,4 @@ class DatasetPipeline:
                 f"Use column_mapping to map your dataset columns to the expected format."
             )
 
-        logger.info(f"Dataset schema validated. Columns: {available_columns}")
+        logger.info(f"Dataset schema validated (mode={self.training_mode}). Columns: {available_columns}")
