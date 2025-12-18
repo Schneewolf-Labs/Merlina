@@ -238,7 +238,7 @@ class DatasetManager {
         try {
             LoadingManager.show(previewBtn, '⏳ Loading...');
 
-            const datasetConfig = this.getDatasetConfig();
+            const datasetConfig = this.getDatasetConfig(true);  // forPreview=true
             const data = await MerlinaAPI.previewDataset(datasetConfig);
 
             // Display preview
@@ -276,7 +276,7 @@ class DatasetManager {
         try {
             LoadingManager.show(previewBtn, '⏳ Loading...');
 
-            const datasetConfig = this.getDatasetConfig();
+            const datasetConfig = this.getDatasetConfig(true);  // forPreview=true
             const data = await MerlinaAPI.previewFormattedDataset(datasetConfig);
 
             if (!data.samples || data.samples.length === 0) {
@@ -361,8 +361,9 @@ class DatasetManager {
 
     /**
      * Get full dataset config (with format and column mapping)
+     * @param {boolean} forPreview - If true, skip rejected column validation for previews
      */
-    getDatasetConfig() {
+    getDatasetConfig(forPreview = false) {
         const sourceType = document.getElementById('dataset-source-type').value;
         const formatType = document.getElementById('dataset-format-type').value;
 
@@ -425,7 +426,8 @@ class DatasetManager {
         }
 
         // Get training mode for validation and include in config
-        const trainingMode = document.getElementById('training-mode')?.value || 'orpo';
+        // For previews, use 'sft' mode to skip rejected column requirement
+        const trainingMode = forPreview ? 'sft' : (document.getElementById('training-mode')?.value || 'orpo');
         config.training_mode = trainingMode;
 
         // Validate dataset config
