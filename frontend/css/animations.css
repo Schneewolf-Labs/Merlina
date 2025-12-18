@@ -1,0 +1,245 @@
+/* Merlina Animation Styles - Keyframes and Transitions */
+
+/* ===== Entry Animations ===== */
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes fadeInUp {
+    from {
+        opacity: 0;
+        transform: translateY(30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes fadeInDown {
+    from {
+        opacity: 0;
+        transform: translateY(-30px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateY(-50px);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+@keyframes slideInRight {
+    from {
+        transform: translateX(100%);
+        opacity: 0;
+    }
+    to {
+        transform: translateX(0);
+        opacity: 1;
+    }
+}
+
+/* ===== Magical Effects ===== */
+@keyframes sparkle {
+    from { transform: translateY(0); }
+    to { transform: translateY(-250px); }
+}
+
+@keyframes wiggle {
+    0%, 100% { transform: rotate(-3deg); }
+    50% { transform: rotate(3deg); }
+}
+
+@keyframes rotate {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+@keyframes pulse {
+    0%, 100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+    50% {
+        transform: scale(1.05);
+        opacity: 0.8;
+    }
+}
+
+@keyframes glow {
+    0%, 100% {
+        box-shadow: 0 0 5px var(--primary-purple),
+                    0 0 10px var(--primary-purple),
+                    0 0 15px var(--primary-purple);
+    }
+    50% {
+        box-shadow: 0 0 10px var(--primary-purple),
+                    0 0 20px var(--primary-purple),
+                    0 0 30px var(--primary-purple);
+    }
+}
+
+/* ===== Loading Animations ===== */
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+@keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+}
+
+@keyframes indeterminate {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(400%); }
+}
+
+@keyframes bounce {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-10px); }
+}
+
+/* ===== Feedback Animations ===== */
+@keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    75% { transform: translateX(5px); }
+}
+
+@keyframes pop {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.1); }
+    100% { transform: scale(1); }
+}
+
+/* ===== Sparkle Effect ===== */
+@keyframes sparkleFloat {
+    0% {
+        transform: translateY(0) scale(0);
+        opacity: 1;
+    }
+    50% {
+        transform: translateY(-20px) scale(1);
+        opacity: 1;
+    }
+    100% {
+        transform: translateY(-40px) scale(0);
+        opacity: 0;
+    }
+}
+
+.sparkle-effect {
+    position: fixed;
+    pointer-events: none;
+    width: 4px;
+    height: 4px;
+    background: var(--wizard-yellow);
+    border-radius: 50%;
+    animation: sparkleFloat 1s ease-out forwards;
+    z-index: 9999;
+}
+
+/* ===== Loading State ===== */
+.loading {
+    position: relative;
+    pointer-events: none;
+    opacity: 0.6;
+}
+
+.loading::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 16px;
+    height: 16px;
+    margin: -8px 0 0 -8px;
+    border: 2px solid transparent;
+    border-top-color: var(--primary-purple);
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+}
+
+/* ===== Skeleton Loader ===== */
+.skeleton-loader {
+    padding: var(--space-md);
+}
+
+.skeleton-line {
+    height: 20px;
+    background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 4px;
+    margin-bottom: var(--space-sm);
+}
+
+.skeleton-line:last-child {
+    width: 60%;
+}
+
+.skeleton-line.short {
+    width: 40%;
+}
+
+.skeleton-line.medium {
+    width: 70%;
+}
+
+/* ===== Animated Icons ===== */
+.icon-spin {
+    animation: spin 1s linear infinite;
+}
+
+.icon-pulse {
+    animation: pulse 2s ease-in-out infinite;
+}
+
+.icon-bounce {
+    animation: bounce 1s ease-in-out infinite;
+}
+
+/* ===== Transition Classes ===== */
+.transition-all {
+    transition: all var(--transition-normal);
+}
+
+.transition-fast {
+    transition: all var(--transition-fast);
+}
+
+.transition-slow {
+    transition: all var(--transition-slow);
+}
+
+/* ===== Hover Effects ===== */
+.hover-lift {
+    transition: transform var(--transition-fast);
+}
+
+.hover-lift:hover {
+    transform: translateY(-3px);
+}
+
+.hover-scale {
+    transition: transform var(--transition-fast);
+}
+
+.hover-scale:hover {
+    transform: scale(1.05);
+}
+
+.hover-glow:hover {
+    animation: glow 1.5s ease-in-out infinite;
+}

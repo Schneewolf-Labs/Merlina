@@ -7,12 +7,16 @@ import { GPUManager } from './gpu.js';
 import { ModelManager } from './model.js';
 import { Toast, FormUI, Tooltip, createSparkle } from './ui.js';
 import { Validator, debounce } from './validation.js';
+import { ThemeManager } from './theme.js';
 
 /**
  * Main Application Class
  */
 class MerlinaApp {
     constructor() {
+        // Initialize theme first to prevent flash of wrong theme
+        this.themeManager = new ThemeManager();
+
         // Initialize managers
         this.jobManager = new JobManager();
         this.datasetManager = new DatasetManager();
@@ -28,6 +32,7 @@ class MerlinaApp {
         window.configManager = this.configManager;
         window.gpuManager = this.gpuManager;
         window.modelManager = this.modelManager;
+        window.themeManager = this.themeManager;
 
         // Initialize the app
         this.init();

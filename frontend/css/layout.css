@@ -1,0 +1,239 @@
+/* Merlina Layout Styles - Container, Grid, Header */
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: var(--space-lg);
+}
+
+/* Header */
+header {
+    text-align: center;
+    margin-bottom: var(--space-xxl);
+    animation: fadeInDown 0.8s ease;
+}
+
+.logo {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-md);
+    background: var(--card-bg);
+    padding: var(--space-lg) var(--space-xxl);
+    border-radius: var(--radius-full);
+    box-shadow: var(--shadow-lg);
+    border: 3px solid var(--wizard-blue);
+}
+
+.wizard-hat {
+    width: 48px;
+    height: 48px;
+    animation: wiggle 2s ease-in-out infinite;
+}
+
+.tagline {
+    color: var(--secondary-purple);
+    font-style: italic;
+}
+
+/* Cards */
+.card {
+    background: var(--card-bg);
+    border-radius: var(--radius-xl);
+    padding: var(--space-xl);
+    margin-bottom: var(--space-xl);
+    box-shadow: var(--shadow-lg);
+    border: 2px solid var(--border-color);
+    animation: fadeInUp 0.8s ease;
+}
+
+.card h2 {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+}
+
+/* Spell Sections (Form Groups) */
+.spell-section {
+    margin-bottom: var(--space-xl);
+    padding: var(--space-lg);
+    background: var(--section-bg);
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-color);
+}
+
+/* Form Layout */
+.form-group {
+    margin-bottom: var(--space-lg);
+}
+
+.form-group label {
+    display: block;
+    margin-bottom: 8px;
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.form-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: var(--space-lg);
+}
+
+/* Checkbox Group */
+.checkbox-group {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-md);
+}
+
+/* Advanced Section */
+.advanced-section {
+    margin-top: var(--space-lg);
+    padding-top: var(--space-lg);
+    border-top: 2px dashed var(--border-color);
+}
+
+/* Metrics Grid */
+.metrics-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: var(--space-md);
+    margin: var(--space-lg) 0;
+}
+
+.metric-card {
+    background: var(--section-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: var(--space-md);
+    text-align: center;
+}
+
+.metric-label {
+    display: block;
+    color: var(--text-muted);
+    font-size: var(--font-size-sm);
+    margin-bottom: var(--space-xs);
+}
+
+.metric-value {
+    display: block;
+    color: var(--primary-purple);
+    font-size: 1.3em;
+    font-weight: bold;
+}
+
+/* Action Buttons Container */
+.action-buttons {
+    display: flex;
+    gap: var(--space-sm);
+    margin-top: var(--space-lg);
+    flex-wrap: wrap;
+}
+
+/* GPU Stats Grid */
+.gpu-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: var(--space-sm);
+    font-size: var(--font-size-sm);
+}
+
+.gpu-stat {
+    display: flex;
+    flex-direction: column;
+}
+
+.gpu-stat-label {
+    opacity: 0.8;
+    font-size: var(--font-size-sm);
+}
+
+.gpu-stat-value {
+    font-weight: bold;
+    margin: 2px 0;
+}
+
+.gpu-stat-detail {
+    font-size: var(--font-size-sm);
+    opacity: 0.9;
+}
+
+/* Source Config Panels */
+.source-config {
+    margin-top: var(--space-md);
+}
+
+/* Responsive Design */
+@media (max-width: 1024px) {
+    .container {
+        padding: var(--space-md);
+    }
+
+    .card {
+        padding: var(--space-lg);
+    }
+}
+
+@media (max-width: 768px) {
+    .container {
+        padding: var(--space-sm);
+    }
+
+    .logo {
+        padding: var(--space-md) var(--space-lg);
+        flex-direction: column;
+        gap: var(--space-sm);
+    }
+
+    .logo h1 {
+        font-size: 2em;
+    }
+
+    .form-row {
+        grid-template-columns: 1fr;
+    }
+
+    .card {
+        padding: var(--space-md);
+        border-radius: var(--radius-lg);
+    }
+
+    .spell-section {
+        padding: var(--space-md);
+    }
+
+    .action-buttons {
+        flex-direction: column;
+    }
+
+    .action-buttons > * {
+        width: 100%;
+    }
+}
+
+@media (max-width: 480px) {
+    header {
+        margin-bottom: var(--space-lg);
+    }
+
+    .logo {
+        padding: var(--space-sm) var(--space-md);
+    }
+
+    .logo h1 {
+        font-size: 1.5em;
+    }
+
+    .tagline {
+        font-size: var(--font-size-sm);
+    }
+
+    .card h2 {
+        font-size: 1.4em;
+    }
+
+    .metrics-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
