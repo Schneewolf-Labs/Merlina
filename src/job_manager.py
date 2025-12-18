@@ -94,17 +94,15 @@ class JobManager:
                 )
             """)
 
-            # Migration: Add wandb_url column if it doesn't exist
+            # Migration: Add missing columns if they don't exist
             cursor.execute("PRAGMA table_info(jobs)")
-            columns = [row[1] for row in cursor.fetchall()]
-            if 'wandb_url' not in columns:
+            existing_columns = {row[1] for row in cursor.fetchall()}
+
+            if 'wandb_url' not in existing_columns:
                 cursor.execute("ALTER TABLE jobs ADD COLUMN wandb_url TEXT")
                 logger.info("Added wandb_url column to jobs table")
 
-            # Migration: Add stop_requested column if it doesn't exist
-            cursor.execute("PRAGMA table_info(jobs)")
-            columns = [row[1] for row in cursor.fetchall()]
-            if 'stop_requested' not in columns:
+            if 'stop_requested' not in existing_columns:
                 cursor.execute("ALTER TABLE jobs ADD COLUMN stop_requested INTEGER DEFAULT 0")
                 logger.info("Added stop_requested column to jobs table")
 

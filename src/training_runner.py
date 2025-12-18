@@ -28,7 +28,8 @@ from dataset_handlers import (
     HuggingFaceLoader,
     LocalFileLoader,
     UploadedDatasetLoader,
-    get_formatter
+    get_formatter,
+    create_loader_from_config
 )
 from src.job_manager import JobManager
 from src.websocket_manager import websocket_manager
@@ -362,7 +363,7 @@ class WebSocketCallback(TrainerCallback):
 
 async def run_training_async(job_id: str, config: Any, job_manager: JobManager, uploaded_datasets: dict):
     """Async wrapper for training to enable WebSocket updates"""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, run_training_sync, job_id, config, job_manager, uploaded_datasets)
 
 
@@ -568,31 +569,12 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
 
         logger.info(f"Loading dataset with config: {config.dataset.source.source_type}")
 
-        # Create appropriate loader based on source type
-        if config.dataset.source.source_type == "huggingface":
-            loader = HuggingFaceLoader(
-                repo_id=config.dataset.source.repo_id,
-                split=config.dataset.source.split,
-                token=config.hf_token
-            )
-        elif config.dataset.source.source_type == "local_file":
-            loader = LocalFileLoader(
-                file_path=config.dataset.source.file_path,
-                file_format=config.dataset.source.file_format
-            )
-        elif config.dataset.source.source_type == "upload":
-            dataset_id = config.dataset.source.dataset_id
-            if dataset_id not in uploaded_datasets:
-                raise ValueError(f"Uploaded dataset '{dataset_id}' not found")
-
-            file_content, filename = uploaded_datasets[dataset_id]
-            loader = UploadedDatasetLoader(
-                file_content=file_content,
-                filename=filename,
-                file_format=config.dataset.source.file_format
-            )
-        else:
-            raise ValueError(f"Invalid source_type: {config.dataset.source.source_type}")
+        # Create loader using factory
+        loader = create_loader_from_config(
+            source_config=config.dataset.source,
+            uploaded_datasets=uploaded_datasets,
+            hf_token=config.hf_token
+        )
 
         # Get formatter
         formatter = get_formatter(

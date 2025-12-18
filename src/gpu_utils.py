@@ -90,7 +90,8 @@ class GPUManager:
         if self.nvml_initialized:
             try:
                 pynvml.nvmlShutdown()
-            except:
+            except Exception:
+                # Silently ignore cleanup errors in destructor
                 pass
 
     def is_cuda_available(self) -> bool:
