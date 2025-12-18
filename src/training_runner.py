@@ -116,6 +116,15 @@ def generate_model_readme(config: Any, training_mode: str) -> str:
     if config.use_4bit:
         config_lines.append(f"| Quantization | 4-bit (NF4) |")
 
+    # Add GPU info
+    if torch.cuda.is_available():
+        gpu_name = torch.cuda.get_device_name(0)
+        gpu_count = torch.cuda.device_count()
+        if gpu_count > 1:
+            config_lines.append(f"| GPU | {gpu_name} (x{gpu_count}) |")
+        else:
+            config_lines.append(f"| GPU | {gpu_name} |")
+
     # Build complete README
     readme_parts = [
         '\n'.join(frontmatter_lines),

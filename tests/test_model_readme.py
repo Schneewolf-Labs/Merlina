@@ -307,6 +307,31 @@ def test_readme_quantization():
     print()
 
 
+def test_readme_gpu_info():
+    """Test that GPU info is included when CUDA is available"""
+    print("=" * 70)
+    print("Test 12: GPU info (if CUDA available)")
+    print("=" * 70)
+
+    config = MockTrainingConfig()
+    readme = generate_model_readme(config, "orpo")
+
+    # GPU info is only included if CUDA is available
+    # We can't guarantee CUDA in test environment, so just check the function runs
+    try:
+        import torch
+        if torch.cuda.is_available():
+            assert "| GPU |" in readme, "Should include GPU info when CUDA available"
+            print(f"  ✓ GPU info present: {torch.cuda.get_device_name(0)}")
+        else:
+            assert "| GPU |" not in readme, "Should not include GPU info when CUDA unavailable"
+            print("  ✓ GPU info correctly excluded (no CUDA)")
+    except ImportError:
+        print("  ⚠ torch not available, skipping GPU check")
+
+    print()
+
+
 def print_example_readme():
     """Print an example README for visual inspection"""
     print("=" * 70)
@@ -343,6 +368,7 @@ if __name__ == "__main__":
         test_readme_orpo_mode()
         test_readme_merlina_badge()
         test_readme_quantization()
+        test_readme_gpu_info()
 
         print("=" * 70)
         print("✓ All tests passed!")
