@@ -151,11 +151,18 @@ def upload_model_readme(repo_id: str, readme_content: str, token: str) -> None:
     Upload a README.md to an existing HuggingFace repository.
 
     Args:
-        repo_id: The repository ID (e.g., 'username/model-name')
+        repo_id: The repository ID (e.g., 'model-name' or 'username/model-name')
         readme_content: The README.md content to upload
         token: HuggingFace API token
     """
     api = HfApi()
+
+    # If repo_id doesn't contain a slash, prepend the username
+    if '/' not in repo_id:
+        user_info = api.whoami(token=token)
+        username = user_info.get('name') or user_info.get('username')
+        repo_id = f"{username}/{repo_id}"
+        logger.info(f"📦 Full repository path: {repo_id}")
 
     # Upload README.md
     api.upload_file(
