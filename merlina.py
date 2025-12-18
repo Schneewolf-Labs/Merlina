@@ -332,6 +332,14 @@ if FRONTEND_DIR.exists():
             return FileResponse(js_file, media_type="application/javascript")
         return {"error": "File not found"}
 
+    @app.get("/css/{file_path:path}")
+    async def serve_css_modules(file_path: str):
+        """Serve CSS files from css/ directory"""
+        css_file = FRONTEND_DIR / "css" / file_path
+        if css_file.exists() and css_file.is_file():
+            return FileResponse(css_file, media_type="text/css")
+        raise HTTPException(status_code=404, detail="CSS file not found")
+
     @app.get("/merlina.png")
     async def serve_logo():
         return FileResponse(FRONTEND_DIR / "merlina.png", media_type="image/png")

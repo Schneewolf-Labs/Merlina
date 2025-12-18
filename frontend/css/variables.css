@@ -1,0 +1,147 @@
+/* Merlina CSS Variables - Theme Configuration */
+
+:root {
+    /* Primary Colors */
+    --primary-purple: #c042ff;
+    --secondary-purple: #9b42ff;
+    --light-purple: #e6d0ff;
+    --dark-purple: #4a0080;
+
+    /* Accent Colors */
+    --wizard-blue: #a5c9ea;
+    --wizard-yellow: #ffd700;
+    --wizard-pink: #ff6b9d;
+
+    /* Semantic Colors */
+    --success: #4caf50;
+    --success-light: #e8f5e9;
+    --success-dark: #2e7d32;
+    --danger: #f44336;
+    --danger-light: #ffebee;
+    --danger-dark: #c62828;
+    --warning: #ff9800;
+    --warning-light: #fff3cd;
+    --warning-dark: #856404;
+    --info: #2196f3;
+    --info-light: #e3f2fd;
+    --info-dark: #1565c0;
+
+    /* Backgrounds */
+    --bg-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    --card-bg: rgba(255, 255, 255, 0.95);
+    --section-bg: linear-gradient(135deg, #f5f7fa 0%, #f0e6ff 100%);
+
+    /* Text Colors */
+    --text-primary: #333;
+    --text-secondary: #555;
+    --text-muted: #888;
+    --text-light: #aaa;
+
+    /* Borders */
+    --border-light: rgba(230, 208, 255, 0.5);
+    --border-color: var(--light-purple);
+
+    /* Shadows */
+    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08);
+    --shadow-md: 0 5px 15px rgba(0, 0, 0, 0.1);
+    --shadow-lg: 0 15px 35px rgba(0, 0, 0, 0.1);
+    --shadow-purple: 0 5px 15px rgba(192, 66, 255, 0.3);
+    --shadow-purple-lg: 0 8px 25px rgba(192, 66, 255, 0.4);
+
+    /* Spacing */
+    --space-xs: 5px;
+    --space-sm: 10px;
+    --space-md: 15px;
+    --space-lg: 20px;
+    --space-xl: 30px;
+    --space-xxl: 40px;
+
+    /* Border Radius */
+    --radius-sm: 5px;
+    --radius-md: 10px;
+    --radius-lg: 15px;
+    --radius-xl: 20px;
+    --radius-full: 50px;
+
+    /* Transitions */
+    --transition-fast: 0.2s ease;
+    --transition-normal: 0.3s ease;
+    --transition-slow: 0.5s ease;
+
+    /* Z-Index Scale */
+    --z-dropdown: 100;
+    --z-modal: 1000;
+    --z-toast: 1001;
+    --z-tooltip: 10000;
+
+    /* Typography */
+    --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    --font-mono: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+    --font-size-xs: 0.75em;
+    --font-size-sm: 0.85em;
+    --font-size-base: 1em;
+    --font-size-lg: 1.1em;
+    --font-size-xl: 1.2em;
+    --font-size-2xl: 1.8em;
+    --font-size-3xl: 2.5em;
+}
+
+/* Dark Mode Variables */
+[data-theme="dark"] {
+    --primary-purple: #d070ff;
+    --secondary-purple: #b070ff;
+    --light-purple: #3d2066;
+    --dark-purple: #e6d0ff;
+
+    --bg-gradient: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    --card-bg: rgba(30, 30, 45, 0.95);
+    --section-bg: linear-gradient(135deg, #252538 0%, #2d2050 100%);
+
+    --text-primary: #e8e8e8;
+    --text-secondary: #c0c0c0;
+    --text-muted: #888;
+    --text-light: #666;
+
+    --border-light: rgba(100, 80, 150, 0.3);
+    --border-color: #3d2066;
+
+    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+    --shadow-md: 0 5px 15px rgba(0, 0, 0, 0.4);
+    --shadow-lg: 0 15px 35px rgba(0, 0, 0, 0.4);
+
+    --success-light: #1b3d1b;
+    --danger-light: #3d1b1b;
+    --warning-light: #3d3d1b;
+    --info-light: #1b2d3d;
+}
+
+/* System preference dark mode */
+@media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+        --primary-purple: #d070ff;
+        --secondary-purple: #b070ff;
+        --light-purple: #3d2066;
+        --dark-purple: #e6d0ff;
+
+        --bg-gradient: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        --card-bg: rgba(30, 30, 45, 0.95);
+        --section-bg: linear-gradient(135deg, #252538 0%, #2d2050 100%);
+
+        --text-primary: #e8e8e8;
+        --text-secondary: #c0c0c0;
+        --text-muted: #888;
+        --text-light: #666;
+
+        --border-light: rgba(100, 80, 150, 0.3);
+        --border-color: #3d2066;
+
+        --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+        --shadow-md: 0 5px 15px rgba(0, 0, 0, 0.4);
+        --shadow-lg: 0 15px 35px rgba(0, 0, 0, 0.4);
+
+        --success-light: #1b3d1b;
+        --danger-light: #3d1b1b;
+        --warning-light: #3d3d1b;
+        --info-light: #1b2d3d;
+    }
+}

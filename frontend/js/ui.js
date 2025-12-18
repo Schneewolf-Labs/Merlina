@@ -56,9 +56,11 @@ class LoadingManager {
         if (!element) return;
 
         element.dataset.originalText = element.textContent;
+        element.dataset.originalHtml = element.innerHTML;
         element.disabled = true;
         element.classList.add('loading');
-        element.textContent = text;
+        element.innerHTML = `<span class="loading-spinner"></span> ${text}`;
+        element.setAttribute('aria-busy', 'true');
     }
 
     /**
@@ -69,24 +71,131 @@ class LoadingManager {
 
         element.disabled = false;
         element.classList.remove('loading');
-        if (element.dataset.originalText) {
+        element.setAttribute('aria-busy', 'false');
+
+        if (element.dataset.originalHtml) {
+            element.innerHTML = element.dataset.originalHtml;
+            delete element.dataset.originalHtml;
+        } else if (element.dataset.originalText) {
             element.textContent = element.dataset.originalText;
-            delete element.dataset.originalText;
         }
+        delete element.dataset.originalText;
     }
 
     /**
      * Show skeleton loading for container
      */
-    static showSkeleton(container, rows = 3) {
+    static showSkeleton(container, rows = 3, type = 'default') {
         if (!container) return;
 
         const skeleton = document.createElement('div');
         skeleton.className = 'skeleton-loader';
-        skeleton.innerHTML = Array(rows).fill('<div class="skeleton-line"></div>').join('');
+        skeleton.setAttribute('role', 'status');
+        skeleton.setAttribute('aria-label', 'Loading content');
 
+        let content = '';
+        switch (type) {
+            case 'card':
+                content = `
+                    <div class="skeleton-card">
+                        <div class="skeleton-line" style="width: 60%; height: 24px;"></div>
+                        <div class="skeleton-line" style="width: 40%; height: 16px;"></div>
+                        <div class="skeleton-line short"></div>
+                    </div>
+                `;
+                break;
+            case 'table':
+                content = Array(rows).fill(`
+                    <div class="skeleton-row">
+                        <div class="skeleton-cell" style="width: 30%;"></div>
+                        <div class="skeleton-cell" style="width: 50%;"></div>
+                        <div class="skeleton-cell" style="width: 20%;"></div>
+                    </div>
+                `).join('');
+                break;
+            case 'text':
+                content = Array(rows).fill(0).map((_, i) =>
+                    `<div class="skeleton-line ${i === rows - 1 ? 'short' : ''}"></div>`
+                ).join('');
+                break;
+            default:
+                content = Array(rows).fill('<div class="skeleton-line"></div>').join('');
+        }
+
+        skeleton.innerHTML = `<span class="sr-only">Loading...</span>${content}`;
         container.innerHTML = '';
         container.appendChild(skeleton);
+    }
+
+    /**
+     * Create inline loading spinner
+     */
+    static createSpinner(size = 'small') {
+        const spinner = document.createElement('span');
+        spinner.className = `loading-spinner loading-spinner-${size}`;
+        spinner.setAttribute('role', 'status');
+        spinner.innerHTML = '<span class="sr-only">Loading...</span>';
+        return spinner;
+    }
+}
+
+/**
+ * Connection status indicator
+ */
+class ConnectionStatus {
+    constructor(containerId = null) {
+        this.container = containerId ? document.getElementById(containerId) : null;
+        this.status = 'connected';
+    }
+
+    /**
+     * Create status indicator element
+     */
+    createIndicator() {
+        const indicator = document.createElement('div');
+        indicator.className = 'connection-status';
+        indicator.setAttribute('role', 'status');
+        indicator.setAttribute('aria-live', 'polite');
+        indicator.innerHTML = `
+            <span class="connection-dot"></span>
+            <span class="connection-text">Connected</span>
+        `;
+        return indicator;
+    }
+
+    /**
+     * Update connection status
+     */
+    update(status, message = null) {
+        this.status = status;
+
+        const indicators = document.querySelectorAll('.connection-status');
+        indicators.forEach(indicator => {
+            const dot = indicator.querySelector('.connection-dot');
+            const text = indicator.querySelector('.connection-text');
+
+            indicator.className = `connection-status connection-${status}`;
+            if (dot) {
+                dot.className = `connection-dot connection-dot-${status}`;
+            }
+            if (text) {
+                text.textContent = message || this.getStatusText(status);
+            }
+        });
+    }
+
+    /**
+     * Get status text
+     */
+    getStatusText(status) {
+        switch (status) {
+            case 'connected': return 'Connected';
+            case 'connecting': return 'Connecting...';
+            case 'reconnecting': return 'Reconnecting...';
+            case 'disconnected': return 'Disconnected';
+            case 'error': return 'Connection Error';
+            default: return 'Unknown';
+        }
     }
 }
 
@@ -524,6 +633,7 @@ function createSparkle(element) {
 export {
     Toast,
     LoadingManager,
+    ConnectionStatus,
     Modal,
     ProgressBar,
     FormUI,
