@@ -5,7 +5,13 @@ Test local file loading
 
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+# Get the directory containing this test file
+TEST_DIR = os.path.dirname(os.path.abspath(__file__))
+FIXTURES_DIR = os.path.join(TEST_DIR, 'fixtures')
+TEST_DATASET_PATH = os.path.join(FIXTURES_DIR, 'test_dataset.json')
+
+sys.path.insert(0, os.path.join(TEST_DIR, '..'))
 
 from dataset_handlers import (
     DatasetPipeline,
@@ -19,7 +25,7 @@ print("=" * 60)
 
 try:
     # Load from local JSON file
-    loader = LocalFileLoader("test_dataset.json")
+    loader = LocalFileLoader(TEST_DATASET_PATH)
     formatter = get_formatter("chatml")
 
     pipeline = DatasetPipeline(

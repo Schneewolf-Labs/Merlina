@@ -5,7 +5,13 @@ Test formatted preview functionality
 
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+# Get the directory containing this test file
+TEST_DIR = os.path.dirname(os.path.abspath(__file__))
+FIXTURES_DIR = os.path.join(TEST_DIR, 'fixtures')
+TEST_DATASET_PATH = os.path.join(FIXTURES_DIR, 'test_dataset.json')
+
+sys.path.insert(0, os.path.join(TEST_DIR, '..'))
 
 from dataset_handlers import (
     DatasetPipeline,
@@ -26,7 +32,7 @@ for format_type in formatters_to_test:
     print('='*60)
 
     try:
-        loader = LocalFileLoader("test_dataset.json")
+        loader = LocalFileLoader(TEST_DATASET_PATH)
         formatter = get_formatter(format_type)
 
         pipeline = DatasetPipeline(
@@ -66,7 +72,7 @@ print("Format: CUSTOM")
 print('='*60)
 
 try:
-    loader = LocalFileLoader("test_dataset.json")
+    loader = LocalFileLoader(TEST_DATASET_PATH)
     formatter = get_formatter(
         "custom",
         custom_templates={
