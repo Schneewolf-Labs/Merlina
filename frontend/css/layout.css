@@ -164,6 +164,31 @@ header {
     margin-top: var(--space-md);
 }
 
+/* Footer */
+.site-footer {
+    text-align: center;
+    padding: var(--space-xl) var(--space-md);
+    margin-top: var(--space-xl);
+    color: rgba(255, 255, 255, 0.8);
+    font-size: var(--font-size-sm);
+}
+
+.site-footer p {
+    margin: 0;
+}
+
+.site-footer a {
+    color: white;
+    font-weight: 500;
+    text-decoration: none;
+    transition: all var(--transition-fast);
+}
+
+.site-footer a:hover {
+    color: var(--wizard-yellow);
+    text-decoration: underline;
+}
+
 /* Responsive Design */
 @media (max-width: 1024px) {
     .container {
