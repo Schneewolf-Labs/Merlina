@@ -206,8 +206,10 @@ class Validator {
 
     /**
      * Validate dataset configuration
+     * @param {Object} config - Dataset configuration
+     * @param {string} trainingMode - Training mode ('sft' or 'orpo')
      */
-    static validateDatasetConfig(config) {
+    static validateDatasetConfig(config, trainingMode = 'orpo') {
         const errors = [];
 
         // Check source configuration
@@ -233,7 +235,10 @@ class Validator {
 
             if (!hasPrompt) errors.push('Prompt column must be mapped');
             if (!hasChosen) errors.push('Chosen column must be mapped');
-            if (!hasRejected) errors.push('Rejected column must be mapped');
+            // Rejected is only required for ORPO mode
+            if (!hasRejected && trainingMode !== 'sft') {
+                errors.push('Rejected column must be mapped (required for ORPO mode)');
+            }
         }
 
         return errors;

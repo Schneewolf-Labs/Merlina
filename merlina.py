@@ -194,6 +194,9 @@ class DatasetConfig(BaseModel):
     test_size: float = Field(0.01, ge=0.001, le=0.5, description="Fraction of data for evaluation")
     max_samples: Optional[int] = Field(None, description="Limit dataset size (for testing)")
 
+    # Training mode (affects schema validation)
+    training_mode: str = Field("orpo", description="Training mode: 'sft' or 'orpo'. For SFT, rejected column is optional.")
+
 
 # Pydantic models
 class TrainingConfig(BaseModel):
@@ -424,7 +427,8 @@ def _old_run_training_deprecated(job_id: str, config: TrainingConfig):
             column_mapping=config.dataset.column_mapping,
             test_size=config.dataset.test_size,
             max_samples=config.dataset.max_samples,
-            seed=42
+            seed=42,
+            training_mode=config.training_mode
         )
 
         train_dataset, eval_dataset = pipeline.prepare()
@@ -1083,7 +1087,8 @@ async def preview_dataset(config: DatasetConfig):
             formatter=formatter,
             column_mapping=config.column_mapping,
             test_size=config.test_size,
-            max_samples=config.max_samples
+            max_samples=config.max_samples,
+            training_mode=config.training_mode
         )
 
         # Preview raw data
@@ -1164,7 +1169,8 @@ async def preview_formatted_dataset(config: DatasetConfig):
             formatter=formatter,
             column_mapping=config.column_mapping,
             test_size=config.test_size,
-            max_samples=config.max_samples
+            max_samples=config.max_samples,
+            training_mode=config.training_mode
         )
 
         # Preview formatted data
