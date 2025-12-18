@@ -267,9 +267,9 @@ def test_readme_orpo_mode():
 
 
 def test_readme_merlina_badge():
-    """Test that README includes Merlina badge"""
+    """Test that README includes Merlina badge and GitHub link"""
     print("=" * 70)
-    print("Test 10: Merlina badge")
+    print("Test 10: Merlina badge and GitHub link")
     print("=" * 70)
 
     config = MockTrainingConfig()
@@ -278,7 +278,11 @@ def test_readme_merlina_badge():
     expected_badge = "![Trained with Merlina](https://raw.githubusercontent.com/Schneewolf-Labs/Merlina/refs/heads/main/frontend/madewithmerlina_smol.png)"
     assert expected_badge in readme, "Should include Merlina badge"
 
+    expected_link = "[Merlina on GitHub](https://github.com/Schneewolf-Labs/Merlina)"
+    assert expected_link in readme, "Should include GitHub link"
+
     print("  ✓ Merlina badge present")
+    print("  ✓ GitHub link present")
     print()
 
 

@@ -130,6 +130,8 @@ def generate_model_readme(config: Any, training_mode: str) -> str:
         "",
         "![Trained with Merlina](https://raw.githubusercontent.com/Schneewolf-Labs/Merlina/refs/heads/main/frontend/madewithmerlina_smol.png)",
         "",
+        "[Merlina on GitHub](https://github.com/Schneewolf-Labs/Merlina)",
+        "",
     ]
 
     return '\n'.join(readme_parts)
