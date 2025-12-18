@@ -39,7 +39,7 @@ async def monitor_training(job_id, api_url="ws://localhost:8000"):
                     await asyncio.sleep(30)
                     try:
                         await websocket.send(json.dumps({"type": "heartbeat"}))
-                    except:
+                    except (websockets.exceptions.WebSocketException, ConnectionError):
                         break
 
             # Start heartbeat task

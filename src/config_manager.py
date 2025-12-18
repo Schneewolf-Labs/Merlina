@@ -70,7 +70,7 @@ class ConfigManager:
             try:
                 existing = self.load_config(safe_name)
                 existing_metadata = existing.get("_metadata", {})
-            except:
+            except (FileNotFoundError, json.JSONDecodeError, KeyError):
                 pass
 
         # Create metadata

@@ -107,7 +107,7 @@ class LocalFileLoader(DatasetLoader):
                 try:
                     json.loads(first_line)
                     is_jsonl = True
-                except:
+                except json.JSONDecodeError:
                     is_jsonl = False
 
                 if is_jsonl:

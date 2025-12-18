@@ -15,6 +15,12 @@ from .formatters import (
     get_formatter
 )
 from .validators import validate_dataset_schema, DatasetValidationError
+from .factory import (
+    create_loader,
+    create_loader_from_config,
+    create_pipeline_from_config,
+    LoaderCreationError
+)
 
 __all__ = [
     'DatasetLoader',
@@ -32,4 +38,8 @@ __all__ = [
     'get_formatter',
     'validate_dataset_schema',
     'DatasetValidationError',
+    'create_loader',
+    'create_loader_from_config',
+    'create_pipeline_from_config',
+    'LoaderCreationError',
 ]

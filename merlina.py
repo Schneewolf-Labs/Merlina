@@ -9,6 +9,7 @@ import gc
 import torch
 import wandb
 import logging
+import threading
 from datetime import datetime
 from typing import Optional, Dict, Any
 from pathlib import Path
@@ -35,7 +36,9 @@ from dataset_handlers import (
     HuggingFaceLoader,
     LocalFileLoader,
     UploadedDatasetLoader,
-    get_formatter
+    get_formatter,
+    create_loader_from_config,
+    LoaderCreationError
 )
 
 # Import new modules for persistence, WebSockets, and validation
@@ -80,10 +83,14 @@ job_queue = JobQueue(max_concurrent_jobs=settings.max_concurrent_jobs, job_manag
 config_manager = ConfigManager(config_dir=str(settings.data_dir / "configs"))
 
 # Global storage for uploaded datasets (still in-memory, could be persisted later)
-uploaded_datasets = {}  # dataset_id -> bytes content
+# Thread-safe access via lock
+uploaded_datasets = {}  # dataset_id -> (bytes content, filename)
+_uploaded_datasets_lock = threading.Lock()
 
 # Global cache for preloaded tokenizers (for preview functionality)
+# Thread-safe access via lock
 tokenizer_cache = {}  # model_name -> tokenizer instance
+_tokenizer_cache_lock = threading.Lock()
 
 # Keep backwards compatibility - jobs dict now proxies to job_manager
 class JobsProxy:
@@ -301,237 +308,6 @@ class JobStatus(BaseModel):
     wandb_url: Optional[str] = None
     queue_position: Optional[int] = None
     queue_state: Optional[str] = None
-
-# Old training function - kept for reference, now using training_runner.py
-# def run_training(job_id: str, config: TrainingConfig):
-#     """Run ORPO training job - DEPRECATED, see training_runner.py"""
-#     pass
-
-# Placeholder to keep line numbers similar (will be removed)
-def _old_run_training_deprecated(job_id: str, config: TrainingConfig):
-    """DEPRECATED: Old training function. Using training_runner.py instead"""
-    try:
-        # Update job status
-        jobs[job_id] = {"status": "initializing", "progress": 0.0}
-        
-        # Setup accelerator
-        accelerator = Accelerator()
-        
-        # Login to wandb if configured
-        if config.use_wandb and config.wandb_key:
-            wandb.login(key=config.wandb_key)
-            
-        # Set HF token if provided
-        if config.hf_token:
-            os.environ['HF_TOKEN'] = config.hf_token
-            
-        # Determine dtype and attention
-        if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
-            torch_dtype = torch.bfloat16
-            attn_implementation = "flash_attention_2"
-        else:
-            torch_dtype = torch.float16
-            attn_implementation = "eager"
-            
-        logger.info(f"Using {torch_dtype} with {attn_implementation}")
-        
-        # Setup quantization
-        bnb_config = None
-        if config.use_4bit:
-            bnb_config = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_quant_type="nf4",
-                bnb_4bit_compute_dtype=torch_dtype,
-                bnb_4bit_use_double_quant=True,
-            )
-            
-        # Load model and tokenizer
-        jobs[job_id]["status"] = "loading_model"
-        jobs[job_id]["progress"] = 0.1
-        
-        tokenizer = AutoTokenizer.from_pretrained(
-            config.base_model,
-            trust_remote_code=True
-        )
-        
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-            
-        model = AutoModelForCausalLM.from_pretrained(
-            config.base_model,
-            quantization_config=bnb_config,
-            attn_implementation=attn_implementation,
-            torch_dtype=torch_dtype if not bnb_config else None,
-            device_map="auto",
-            trust_remote_code=True,
-        )
-        
-        if bnb_config:
-            model = prepare_model_for_kbit_training(model)
-            
-        # Setup LoRA
-        peft_config = LoraConfig(
-            r=config.lora_r,
-            lora_alpha=config.lora_alpha,
-            lora_dropout=config.lora_dropout,
-            bias="none",
-            task_type="CAUSAL_LM",
-            target_modules=config.target_modules
-        )
-        
-        # Load and prepare dataset using new modular system
-        jobs[job_id]["status"] = "loading_dataset"
-        jobs[job_id]["progress"] = 0.2
-
-        logger.info(f"Loading dataset with config: {config.dataset.source.source_type}")
-
-        # Create appropriate loader based on source type
-        if config.dataset.source.source_type == "huggingface":
-            loader = HuggingFaceLoader(
-                repo_id=config.dataset.source.repo_id,
-                split=config.dataset.source.split,
-                token=config.hf_token
-            )
-        elif config.dataset.source.source_type == "local_file":
-            loader = LocalFileLoader(
-                file_path=config.dataset.source.file_path,
-                file_format=config.dataset.source.file_format
-            )
-        elif config.dataset.source.source_type == "upload":
-            # Get uploaded dataset from storage
-            dataset_id = config.dataset.source.dataset_id
-            if dataset_id not in uploaded_datasets:
-                raise ValueError(f"Uploaded dataset '{dataset_id}' not found")
-
-            file_content, filename = uploaded_datasets[dataset_id]
-            loader = UploadedDatasetLoader(
-                file_content=file_content,
-                filename=filename,
-                file_format=config.dataset.source.file_format
-            )
-        else:
-            raise ValueError(f"Invalid source_type: {config.dataset.source.source_type}")
-
-        # Get formatter (pass tokenizer if using tokenizer format)
-        formatter = get_formatter(
-            format_type=config.dataset.format.format_type,
-            custom_templates=config.dataset.format.custom_templates,
-            tokenizer=tokenizer if config.dataset.format.format_type == 'tokenizer' else None,
-            enable_thinking=config.dataset.format.enable_thinking
-        )
-
-        # Create pipeline and prepare dataset
-        pipeline = DatasetPipeline(
-            loader=loader,
-            formatter=formatter,
-            column_mapping=config.dataset.column_mapping,
-            test_size=config.dataset.test_size,
-            max_samples=config.dataset.max_samples,
-            seed=42,
-            training_mode=config.training_mode
-        )
-
-        train_dataset, eval_dataset = pipeline.prepare()
-
-        # Create dict with train/test for compatibility
-        dataset = {"train": train_dataset, "test": eval_dataset}
-        
-        # Setup training arguments
-        jobs[job_id]["status"] = "training"
-        jobs[job_id]["progress"] = 0.3
-        
-        output_dir = f"./results/{job_id}"
-        
-        orpo_args = ORPOConfig(
-            run_name=config.output_name,
-            learning_rate=config.learning_rate,
-            lr_scheduler_type="cosine",
-            max_length=config.max_length,
-            max_prompt_length=config.max_prompt_length,
-            max_completion_length=config.max_length - config.max_prompt_length,
-            beta=config.beta,
-            per_device_train_batch_size=config.batch_size,
-            per_device_eval_batch_size=config.batch_size,
-            gradient_accumulation_steps=config.gradient_accumulation_steps,
-            optim="paged_adamw_8bit",
-            num_train_epochs=config.num_epochs,
-            evaluation_strategy="steps",
-            eval_steps=config.eval_steps,
-            logging_steps=1,
-            warmup_ratio=config.warmup_ratio,
-            max_grad_norm=0.3,
-            report_to=["wandb"] if config.use_wandb else [],
-            output_dir=output_dir,
-            bf16=torch_dtype == torch.bfloat16,
-            fp16=torch_dtype == torch.float16,
-            save_strategy="steps",
-            save_steps=config.eval_steps,
-            save_total_limit=2,
-        )
-        
-        # Create trainer
-        trainer = ORPOTrainer(
-            model=model,
-            args=orpo_args,
-            train_dataset=dataset["train"],
-            eval_dataset=dataset["test"],
-            peft_config=peft_config,
-            tokenizer=tokenizer,
-        )
-        
-        # Train
-        logger.info("Starting training")
-        train_result = trainer.train()
-        
-        # Save model
-        jobs[job_id]["status"] = "saving"
-        jobs[job_id]["progress"] = 0.9
-        
-        final_output_dir = f"./models/{config.output_name}"
-        trainer.save_model(final_output_dir)
-        tokenizer.save_pretrained(final_output_dir)
-        
-        # Optional: merge and upload
-        if config.push_to_hub and accelerator.is_main_process:
-            jobs[job_id]["status"] = "uploading"
-            
-            # Reload for merging
-            base_model_reload = AutoModelForCausalLM.from_pretrained(
-                config.base_model,
-                low_cpu_mem_usage=True,
-                torch_dtype=torch.bfloat16,
-                device_map="auto",
-            )
-            
-            model_merged = PeftModel.from_pretrained(base_model_reload, final_output_dir)
-            model_merged = model_merged.merge_and_unload()
-            
-            # Push to hub
-            logger.info(f"Pushing to HuggingFace Hub (private={config.hf_hub_private})")
-            model_merged.push_to_hub(
-                config.output_name,
-                token=config.hf_token,
-                private=config.hf_hub_private
-            )
-            tokenizer.push_to_hub(
-                config.output_name,
-                token=config.hf_token,
-                private=config.hf_hub_private
-            )
-            
-        # Cleanup
-        del trainer, model
-        gc.collect()
-        torch.cuda.empty_cache()
-        
-        jobs[job_id]["status"] = "completed"
-        jobs[job_id]["progress"] = 1.0
-        logger.info(f"Training completed for job {job_id}")
-        
-    except Exception as e:
-        logger.error(f"Training failed for job {job_id}: {str(e)}")
-        jobs[job_id]["status"] = "failed"
-        jobs[job_id]["error"] = str(e)
 
 # Mount static files for frontend
 if FRONTEND_DIR.exists():
@@ -1043,30 +819,16 @@ async def get_gpu_info(index: int):
 async def preview_dataset(config: DatasetConfig):
     """Preview dataset without formatting"""
     try:
-        # Create loader
-        if config.source.source_type == "huggingface":
-            loader = HuggingFaceLoader(
-                repo_id=config.source.repo_id,
-                split=config.source.split
+        # Create loader using factory
+        try:
+            loader = create_loader_from_config(
+                source_config=config.source,
+                uploaded_datasets=uploaded_datasets
             )
-        elif config.source.source_type == "local_file":
-            loader = LocalFileLoader(
-                file_path=config.source.file_path,
-                file_format=config.source.file_format
-            )
-        elif config.source.source_type == "upload":
-            dataset_id = config.source.dataset_id
-            if dataset_id not in uploaded_datasets:
-                raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
-
-            file_content, filename = uploaded_datasets[dataset_id]
-            loader = UploadedDatasetLoader(
-                file_content=file_content,
-                filename=filename,
-                file_format=config.source.file_format
-            )
-        else:
-            raise HTTPException(status_code=400, detail=f"Invalid source_type: {config.source.source_type}")
+        except LoaderCreationError as e:
+            if "not found" in str(e):
+                raise HTTPException(status_code=404, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e))
 
         # Get formatter (just for pipeline, we'll preview raw)
         # For tokenizer format, we can't preview without a model, so use chatml as default
@@ -1109,42 +871,31 @@ async def preview_dataset(config: DatasetConfig):
 async def preview_formatted_dataset(config: DatasetConfig):
     """Preview dataset with formatting applied"""
     try:
-        # Create loader
-        if config.source.source_type == "huggingface":
-            loader = HuggingFaceLoader(
-                repo_id=config.source.repo_id,
-                split=config.source.split
+        # Create loader using factory
+        try:
+            loader = create_loader_from_config(
+                source_config=config.source,
+                uploaded_datasets=uploaded_datasets
             )
-        elif config.source.source_type == "local_file":
-            loader = LocalFileLoader(
-                file_path=config.source.file_path,
-                file_format=config.source.file_format
-            )
-        elif config.source.source_type == "upload":
-            dataset_id = config.source.dataset_id
-            if dataset_id not in uploaded_datasets:
-                raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
-
-            file_content, filename = uploaded_datasets[dataset_id]
-            loader = UploadedDatasetLoader(
-                file_content=file_content,
-                filename=filename,
-                file_format=config.source.file_format
-            )
-        else:
-            raise HTTPException(status_code=400, detail=f"Invalid source_type: {config.source.source_type}")
+        except LoaderCreationError as e:
+            if "not found" in str(e):
+                raise HTTPException(status_code=404, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e))
 
         # Get formatter
         formatter_type = config.format.format_type
 
-        # For tokenizer format, check if we have a cached tokenizer
+        # For tokenizer format, check if we have a cached tokenizer (thread-safe)
         if formatter_type == 'tokenizer':
-            if config.model_name and config.model_name in tokenizer_cache:
+            with _tokenizer_cache_lock:
+                cached_tokenizer = tokenizer_cache.get(config.model_name) if config.model_name else None
+
+            if cached_tokenizer is not None:
                 # Use the cached tokenizer
                 logger.info(f"Using cached tokenizer for preview: {config.model_name}")
                 formatter = get_formatter(
                     format_type='tokenizer',
-                    tokenizer=tokenizer_cache[config.model_name]
+                    tokenizer=cached_tokenizer
                 )
             else:
                 # Fall back to chatml
@@ -1194,30 +945,16 @@ async def get_dataset_columns(config: DatasetConfig):
     Returns available columns and a few sample rows.
     """
     try:
-        # Create loader
-        if config.source.source_type == "huggingface":
-            loader = HuggingFaceLoader(
-                repo_id=config.source.repo_id,
-                split=config.source.split
+        # Create loader using factory
+        try:
+            loader = create_loader_from_config(
+                source_config=config.source,
+                uploaded_datasets=uploaded_datasets
             )
-        elif config.source.source_type == "local_file":
-            loader = LocalFileLoader(
-                file_path=config.source.file_path,
-                file_format=config.source.file_format
-            )
-        elif config.source.source_type == "upload":
-            dataset_id = config.source.dataset_id
-            if dataset_id not in uploaded_datasets:
-                raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
-
-            file_content, filename = uploaded_datasets[dataset_id]
-            loader = UploadedDatasetLoader(
-                file_content=file_content,
-                filename=filename,
-                file_format=config.source.file_format
-            )
-        else:
-            raise HTTPException(status_code=400, detail=f"Invalid source_type: {config.source.source_type}")
+        except LoaderCreationError as e:
+            if "not found" in str(e):
+                raise HTTPException(status_code=404, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e))
 
         # Load dataset
         logger.info("Loading dataset to inspect columns...")
@@ -1269,7 +1006,8 @@ async def upload_dataset_file(file: FastAPIUploadFile = File(...)):
         dataset_id = f"upload_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{hashlib.md5(content).hexdigest()[:8]}"
 
         # Store in memory (in production, save to disk/S3)
-        uploaded_datasets[dataset_id] = (content, file.filename)
+        with _uploaded_datasets_lock:
+            uploaded_datasets[dataset_id] = (content, file.filename)
 
         logger.info(f"Uploaded dataset: {file.filename} -> {dataset_id}")
 
@@ -1495,9 +1233,12 @@ async def preload_model_tokenizer(request: ModelPreloadRequest):
     try:
         model_name = request.model_name
 
-        # Check if already cached
-        if model_name in tokenizer_cache:
-            tokenizer = tokenizer_cache[model_name]
+        # Check if already cached (thread-safe)
+        with _tokenizer_cache_lock:
+            cached_tokenizer = tokenizer_cache.get(model_name)
+
+        if cached_tokenizer is not None:
+            tokenizer = cached_tokenizer
             logger.info(f"Using cached tokenizer for {model_name}")
         else:
             logger.info(f"Loading tokenizer for {model_name}...")
@@ -1513,8 +1254,9 @@ async def preload_model_tokenizer(request: ModelPreloadRequest):
                 token=request.hf_token
             )
 
-            # Cache the tokenizer
-            tokenizer_cache[model_name] = tokenizer
+            # Cache the tokenizer (thread-safe)
+            with _tokenizer_cache_lock:
+                tokenizer_cache[model_name] = tokenizer
             logger.info(f"Tokenizer loaded and cached for {model_name}")
 
         # Extract useful info about the tokenizer
@@ -1552,14 +1294,13 @@ if __name__ == "__main__":
     # Determine the URL for display
     display_url = settings.domain or f"http://localhost:{settings.port}"
 
-    print("\n✨ Starting Merlina - Magical Model Training ✨")
-    print(f"🧙‍♀️ Visit {display_url} to access the interface")
-    print(f"📚 API documentation: {display_url}/api/docs")
-    print(f"📁 Frontend directory: {FRONTEND_DIR}")
-    print(f"💾 Database: {settings.database_path}")
-    print(f"📊 Log level: {settings.log_level}")
+    logger.info("Starting Merlina - Magical Model Training")
+    logger.info(f"Visit {display_url} to access the interface")
+    logger.info(f"API documentation: {display_url}/api/docs")
+    logger.info(f"Frontend directory: {FRONTEND_DIR}")
+    logger.info(f"Database: {settings.database_path}")
+    logger.info(f"Log level: {settings.log_level}")
     if settings.cuda_visible_devices:
-        print(f"🎮 GPUs: {settings.cuda_visible_devices}")
-    print("=" * 50 + "\n")
+        logger.info(f"GPUs: {settings.cuda_visible_devices}")
 
     uvicorn.run(app, host=settings.host, port=settings.port)
