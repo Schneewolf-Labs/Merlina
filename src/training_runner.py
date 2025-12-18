@@ -21,6 +21,8 @@ from peft import LoraConfig, PeftModel, prepare_model_for_kbit_training, AutoPef
 from trl import ORPOConfig, ORPOTrainer, SFTTrainer, SFTConfig
 from accelerate import Accelerator
 
+from huggingface_hub import HfApi
+
 from dataset_handlers import (
     DatasetPipeline,
     HuggingFaceLoader,
@@ -33,6 +35,145 @@ from src.websocket_manager import websocket_manager
 from src.preflight_checks import is_local_model_path
 
 logger = logging.getLogger(__name__)
+
+
+def generate_model_readme(config: Any, training_mode: str) -> str:
+    """
+    Generate a README.md for the HuggingFace model card.
+
+    Creates a model card with YAML frontmatter containing metadata about the
+    training configuration, base model, and dataset used.
+
+    Args:
+        config: Training configuration object
+        training_mode: 'sft' or 'orpo'
+
+    Returns:
+        README content as a string
+    """
+    # Extract base model name (handle both HF IDs and local paths)
+    base_model = config.base_model
+    if is_local_model_path(base_model):
+        # For local models, just use the directory name
+        base_model_display = os.path.basename(base_model.rstrip('/'))
+    else:
+        base_model_display = base_model
+
+    # Build YAML frontmatter
+    frontmatter_lines = [
+        "---",
+        "library_name: transformers",
+    ]
+
+    # Add dataset info if using HuggingFace dataset
+    if hasattr(config, 'dataset') and hasattr(config.dataset, 'source'):
+        source = config.dataset.source
+        if source.source_type == "huggingface" and source.repo_id:
+            frontmatter_lines.append(f"datasets:")
+            frontmatter_lines.append(f"- {source.repo_id}")
+
+    # Add base model
+    frontmatter_lines.append(f"base_model:")
+    frontmatter_lines.append(f"- {base_model}")
+
+    frontmatter_lines.append("---")
+
+    # Build configuration section
+    effective_batch = config.batch_size * config.gradient_accumulation_steps
+
+    config_lines = [
+        f"| Parameter | Value |",
+        f"|-----------|-------|",
+        f"| Training Mode | {training_mode.upper()} |",
+        f"| Base Model | `{base_model_display}` |",
+        f"| Learning Rate | {config.learning_rate} |",
+        f"| Epochs | {config.num_epochs} |",
+        f"| Batch Size | {config.batch_size} |",
+        f"| Gradient Accumulation | {config.gradient_accumulation_steps} |",
+        f"| Effective Batch Size | {effective_batch} |",
+        f"| Max Sequence Length | {config.max_length} |",
+        f"| Optimizer | {config.optimizer_type} |",
+        f"| LR Scheduler | {config.lr_scheduler_type} |",
+        f"| Warmup Ratio | {config.warmup_ratio} |",
+        f"| Weight Decay | {config.weight_decay} |",
+        f"| Max Grad Norm | {config.max_grad_norm} |",
+        f"| Seed | {config.seed} |",
+    ]
+
+    # Add ORPO-specific params
+    if training_mode.lower() == "orpo":
+        config_lines.append(f"| ORPO Beta | {config.beta} |")
+        config_lines.append(f"| Max Prompt Length | {config.max_prompt_length} |")
+
+    # Add LoRA params if enabled
+    if config.use_lora:
+        config_lines.append(f"| LoRA Rank (r) | {config.lora_r} |")
+        config_lines.append(f"| LoRA Alpha | {config.lora_alpha} |")
+        config_lines.append(f"| LoRA Dropout | {config.lora_dropout} |")
+        config_lines.append(f"| Target Modules | {', '.join(config.target_modules)} |")
+
+    # Add quantization info
+    if config.use_4bit:
+        config_lines.append(f"| Quantization | 4-bit (NF4) |")
+
+    # Add GPU info
+    if torch.cuda.is_available():
+        gpu_name = torch.cuda.get_device_name(0)
+        gpu_count = torch.cuda.device_count()
+        if gpu_count > 1:
+            config_lines.append(f"| GPU | {gpu_name} (x{gpu_count}) |")
+        else:
+            config_lines.append(f"| GPU | {gpu_name} |")
+
+    # Build complete README
+    readme_parts = [
+        '\n'.join(frontmatter_lines),
+        "",
+        f"# {config.output_name}",
+        "",
+        "## Training Configuration",
+        "",
+        '\n'.join(config_lines),
+        "",
+        "---",
+        "",
+        "![Trained with Merlina](https://raw.githubusercontent.com/Schneewolf-Labs/Merlina/refs/heads/main/frontend/madewithmerlina_smol.png)",
+        "",
+        "[Merlina on GitHub](https://github.com/Schneewolf-Labs/Merlina)",
+        "",
+    ]
+
+    return '\n'.join(readme_parts)
+
+
+def upload_model_readme(repo_id: str, readme_content: str, token: str) -> None:
+    """
+    Upload a README.md to an existing HuggingFace repository.
+
+    Args:
+        repo_id: The repository ID (e.g., 'model-name' or 'username/model-name')
+        readme_content: The README.md content to upload
+        token: HuggingFace API token
+    """
+    api = HfApi()
+
+    # If repo_id doesn't contain a slash, prepend the username
+    if '/' not in repo_id:
+        user_info = api.whoami(token=token)
+        username = user_info.get('name') or user_info.get('username')
+        repo_id = f"{username}/{repo_id}"
+        logger.info(f"📦 Full repository path: {repo_id}")
+
+    # Upload README.md
+    api.upload_file(
+        path_or_fileobj=readme_content.encode('utf-8'),
+        path_in_repo="README.md",
+        repo_id=repo_id,
+        token=token,
+        commit_message="Add model card with training configuration"
+    )
+
+    logger.info(f"✅ README.md uploaded to {repo_id}")
 
 
 def generate_wandb_run_name(config: Any) -> str:
@@ -696,6 +837,11 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
                                 hub_url = f"https://huggingface.co/{config.output_name}"
                                 logger.info(f"🎉 Merged model published at: {hub_url}")
 
+                                # Generate and upload README with model card
+                                logger.info("📝 Generating model card README...")
+                                readme_content = generate_model_readme(config, training_mode)
+                                upload_model_readme(config.output_name, readme_content, config.hf_token)
+
                                 # Clean up merged model to free memory
                                 del model_merged, base_model_reload
                                 gc.collect()
@@ -740,6 +886,11 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
                                 logger.info(f"🎉 LoRA adapter published at: {hub_url}")
                                 logger.info(f"💡 To use: PeftModel.from_pretrained('{config.base_model}', '{config.output_name}')")
 
+                                # Generate and upload README with model card
+                                logger.info("📝 Generating model card README...")
+                                readme_content = generate_model_readme(config, training_mode)
+                                upload_model_readme(config.output_name, readme_content, config.hf_token)
+
                                 # Clean up
                                 del adapter_model
                                 gc.collect()
@@ -780,6 +931,11 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
                             # Construct the hub URL
                             hub_url = f"https://huggingface.co/{config.output_name}"
                             logger.info(f"🎉 Model published at: {hub_url}")
+
+                            # Generate and upload README with model card
+                            logger.info("📝 Generating model card README...")
+                            readme_content = generate_model_readme(config, training_mode)
+                            upload_model_readme(config.output_name, readme_content, config.hf_token)
 
                             # Clean up
                             del upload_model
