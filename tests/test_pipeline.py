@@ -5,11 +5,17 @@ Quick test script for the dataset module
 
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+# Get the directory containing this test file
+TEST_DIR = os.path.dirname(os.path.abspath(__file__))
+FIXTURES_DIR = os.path.join(TEST_DIR, 'fixtures')
+TEST_DATASET_PATH = os.path.join(FIXTURES_DIR, 'test_dataset.json')
+
+sys.path.insert(0, os.path.join(TEST_DIR, '..'))
 
 from dataset_handlers import (
     DatasetPipeline,
-    HuggingFaceLoader,
+    LocalFileLoader,
     get_formatter
 )
 
@@ -17,20 +23,16 @@ print("=" * 60)
 print("Testing Merlina Dataset Module")
 print("=" * 60)
 
-# Test 1: HuggingFace Loader with ChatML Formatter
-print("\n1. Testing HuggingFace Loader...")
+# Test 1: Local File Loader with ChatML Formatter
+print("\n1. Testing Local File Loader...")
 try:
-    loader = HuggingFaceLoader(
-        repo_id="schneewolflabs/Athanor-DPO",
-        split="train"
-    )
+    loader = LocalFileLoader(TEST_DATASET_PATH)
     formatter = get_formatter("chatml")
 
     pipeline = DatasetPipeline(
         loader=loader,
         formatter=formatter,
-        max_samples=5,  # Just load 5 samples for testing
-        test_size=0.2
+        test_size=0.25
     )
 
     # Preview raw data
