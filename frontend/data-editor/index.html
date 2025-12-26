@@ -1,0 +1,447 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Merlina Data Editor - Transform Your Training Data</title>
+    <link rel="stylesheet" href="css/editor.css">
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <div class="header-content">
+            <h1>✨ Merlina Data Editor</h1>
+            <p>Transform raw data into ORPO or SFT training datasets</p>
+        </div>
+    </div>
+
+    <!-- Wizard Steps -->
+    <div class="wizard-container">
+        <div class="wizard-steps">
+            <div class="wizard-step active" data-step="1">
+                <div class="step-number">1</div>
+                <div class="step-label">Import</div>
+            </div>
+            <div class="wizard-step" data-step="2">
+                <div class="step-number">2</div>
+                <div class="step-label">Map Schema</div>
+            </div>
+            <div class="wizard-step" data-step="3">
+                <div class="step-number">3</div>
+                <div class="step-label">Edit Data</div>
+            </div>
+            <div class="wizard-step" data-step="4">
+                <div class="step-number">4</div>
+                <div class="step-label">Validate</div>
+            </div>
+            <div class="wizard-step" data-step="5">
+                <div class="step-number">5</div>
+                <div class="step-label">Export</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content">
+        <!-- Step 1: Import -->
+        <div class="step-content" id="step-1">
+            <div class="content-card">
+                <h2>Import Your Dataset</h2>
+
+                <!-- Training Mode Selector -->
+                <div class="mode-selector">
+                    <label class="mode-label">Training Mode:</label>
+                    <div class="mode-options">
+                        <label class="mode-option">
+                            <input type="radio" name="training_mode" value="orpo" checked>
+                            <span class="mode-button">
+                                <span class="mode-icon">🎯</span>
+                                <span class="mode-title">ORPO</span>
+                                <span class="mode-desc">Preference Optimization</span>
+                            </span>
+                        </label>
+                        <label class="mode-option">
+                            <input type="radio" name="training_mode" value="sft">
+                            <span class="mode-button">
+                                <span class="mode-icon">📚</span>
+                                <span class="mode-title">SFT</span>
+                                <span class="mode-desc">Supervised Fine-Tuning</span>
+                            </span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="mode-info" id="orpo-info">
+                    <strong>ORPO Mode</strong> - Requires prompt, chosen, and rejected responses<br>
+                    Perfect for: Alignment, RLHF, preference optimization
+                </div>
+                <div class="mode-info" id="sft-info" style="display: none;">
+                    <strong>SFT Mode</strong> - Requires only prompt and chosen responses<br>
+                    Perfect for: Instruction following, task adaptation, style transfer
+                </div>
+
+                <!-- Upload Area -->
+                <div class="upload-area" id="upload-area">
+                    <div class="upload-icon">📁</div>
+                    <h3>Drag & Drop your dataset here</h3>
+                    <p>or click to browse</p>
+                    <p class="upload-formats">Supported: JSON, JSONL, CSV, TSV, Parquet, Excel</p>
+                    <input type="file" id="file-input" accept=".json,.jsonl,.csv,.tsv,.parquet,.xlsx,.xls" hidden>
+                </div>
+
+                <!-- Session Name -->
+                <div class="session-name-input" style="display: none;" id="session-name-container">
+                    <label for="session-name">Session Name:</label>
+                    <input type="text" id="session-name" placeholder="My Training Dataset" value="My Training Dataset">
+                </div>
+
+                <!-- Progress -->
+                <div class="upload-progress" id="upload-progress" style="display: none;">
+                    <div class="progress-bar">
+                        <div class="progress-fill" id="progress-fill">0%</div>
+                    </div>
+                    <p id="progress-text">Importing...</p>
+                </div>
+
+                <!-- Import Result -->
+                <div class="import-result" id="import-result" style="display: none;">
+                    <div class="result-stats">
+                        <div class="stat-item">
+                            <div class="stat-value" id="import-rows">0</div>
+                            <div class="stat-label">Rows Imported</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value" id="import-schema">Unknown</div>
+                            <div class="stat-label">Detected Schema</div>
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" onclick="wizard.nextStep()">Continue to Mapping →</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 2: Map Schema -->
+        <div class="step-content" id="step-2" style="display: none;">
+            <div class="content-card">
+                <h2>Map Your Data Schema</h2>
+                <p>Map your dataset columns to the required fields</p>
+
+                <div class="schema-mapper">
+                    <div class="mapper-column">
+                        <h3>Source Columns</h3>
+                        <div id="source-columns" class="column-list"></div>
+                    </div>
+
+                    <div class="mapper-arrow">→</div>
+
+                    <div class="mapper-column">
+                        <h3>Required Fields</h3>
+                        <div id="target-fields" class="column-list">
+                            <div class="field-mapping">
+                                <label>Prompt <span class="required">*</span></label>
+                                <select id="map-prompt" class="field-select">
+                                    <option value="">Select column...</option>
+                                </select>
+                            </div>
+                            <div class="field-mapping">
+                                <label>Chosen <span class="required">*</span></label>
+                                <select id="map-chosen" class="field-select">
+                                    <option value="">Select column...</option>
+                                </select>
+                            </div>
+                            <div class="field-mapping" id="rejected-mapping">
+                                <label>Rejected <span class="required" id="rejected-required">*</span></label>
+                                <select id="map-rejected" class="field-select">
+                                    <option value="">Select column...</option>
+                                    <option value="__generate__">🔄 Auto-generate</option>
+                                </select>
+                            </div>
+                            <div class="field-mapping">
+                                <label>System <span class="optional">(optional)</span></label>
+                                <select id="map-system" class="field-select">
+                                    <option value="">Select column...</option>
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Generation Strategy -->
+                <div class="generation-strategy" id="generation-strategy" style="display: none;">
+                    <h4>Rejected Response Generation Strategy</h4>
+                    <select id="rejected-strategy" class="strategy-select">
+                        <option value="truncate_50">Truncate at 50% (Recommended)</option>
+                        <option value="truncate_30">Truncate at 30%</option>
+                        <option value="truncate_70">Truncate at 70%</option>
+                        <option value="degrade_formatting">Degrade Formatting</option>
+                        <option value="add_errors">Add Spelling Errors</option>
+                        <option value="shuffle_sentences">Shuffle Sentences</option>
+                        <option value="remove_details">Remove Details</option>
+                    </select>
+                </div>
+
+                <!-- Preview -->
+                <div class="mapping-preview" id="mapping-preview">
+                    <h4>Preview (first 3 rows)</h4>
+                    <div id="preview-table"></div>
+                </div>
+
+                <div class="step-actions">
+                    <button class="btn btn-secondary" onclick="wizard.prevStep()">← Back</button>
+                    <button class="btn btn-primary" onclick="wizard.applyMapping()">Apply Mapping & Continue →</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 3: Edit Data -->
+        <div class="step-content" id="step-3" style="display: none;">
+            <div class="content-card">
+                <h2>Edit Your Dataset</h2>
+
+                <!-- Toolbar -->
+                <div class="table-toolbar">
+                    <div class="toolbar-left">
+                        <button class="btn btn-sm" onclick="tableEditor.addRow()">➕ Add Row</button>
+                        <button class="btn btn-sm" onclick="tableEditor.generateRejected()" id="btn-generate-rejected">🔄 Generate Rejected</button>
+                        <button class="btn btn-sm" onclick="tableEditor.undo()">↩️ Undo</button>
+                        <button class="btn btn-sm" onclick="tableEditor.redo()">↪️ Redo</button>
+                    </div>
+                    <div class="toolbar-right">
+                        <input type="text" id="search-box" placeholder="🔍 Search..." class="search-box">
+                        <select id="filter-select" class="filter-select">
+                            <option value="all">All Rows</option>
+                            <option value="valid">Valid Only</option>
+                            <option value="errors">With Errors</option>
+                            <option value="warnings">With Warnings</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Stats Bar -->
+                <div class="stats-bar">
+                    <div class="stat-badge">
+                        <span class="stat-label">Total:</span>
+                        <span class="stat-value" id="stat-total">0</span>
+                    </div>
+                    <div class="stat-badge stat-success">
+                        <span class="stat-label">Valid:</span>
+                        <span class="stat-value" id="stat-valid">0</span>
+                    </div>
+                    <div class="stat-badge stat-error">
+                        <span class="stat-label">Errors:</span>
+                        <span class="stat-value" id="stat-errors">0</span>
+                    </div>
+                    <div class="stat-badge stat-warning">
+                        <span class="stat-label">Warnings:</span>
+                        <span class="stat-value" id="stat-warnings">0</span>
+                    </div>
+                </div>
+
+                <!-- Data Table -->
+                <div class="table-container">
+                    <table class="data-table" id="data-table">
+                        <thead>
+                            <tr>
+                                <th>Row</th>
+                                <th>Status</th>
+                                <th>Prompt</th>
+                                <th>Chosen</th>
+                                <th class="rejected-column">Rejected</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody id="table-body">
+                            <!-- Rows will be inserted here -->
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Pagination -->
+                <div class="pagination" id="pagination">
+                    <button class="btn btn-sm" onclick="tableEditor.prevPage()" id="btn-prev-page">← Previous</button>
+                    <span id="page-info">Page 1 of 1</span>
+                    <button class="btn btn-sm" onclick="tableEditor.nextPage()" id="btn-next-page">Next →</button>
+                </div>
+
+                <div class="step-actions">
+                    <button class="btn btn-secondary" onclick="wizard.prevStep()">← Back</button>
+                    <button class="btn btn-primary" onclick="wizard.nextStep()">Validate & Continue →</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 4: Validate -->
+        <div class="step-content" id="step-4" style="display: none;">
+            <div class="content-card">
+                <h2>Validate Your Dataset</h2>
+
+                <!-- Quality Score -->
+                <div class="quality-score">
+                    <h3>Dataset Quality Score</h3>
+                    <div class="score-circle" id="score-circle">
+                        <div class="score-value" id="score-value">0%</div>
+                    </div>
+                </div>
+
+                <!-- Validation Stats -->
+                <div class="validation-stats">
+                    <div class="validation-stat">
+                        <div class="validation-icon">📊</div>
+                        <div class="validation-info">
+                            <div class="validation-number" id="validation-total">0</div>
+                            <div class="validation-label">Total Rows</div>
+                        </div>
+                    </div>
+                    <div class="validation-stat success">
+                        <div class="validation-icon">✅</div>
+                        <div class="validation-info">
+                            <div class="validation-number" id="validation-valid">0</div>
+                            <div class="validation-label">Valid Rows</div>
+                        </div>
+                    </div>
+                    <div class="validation-stat error">
+                        <div class="validation-icon">❌</div>
+                        <div class="validation-info">
+                            <div class="validation-number" id="validation-errors">0</div>
+                            <div class="validation-label">Errors</div>
+                        </div>
+                    </div>
+                    <div class="validation-stat warning">
+                        <div class="validation-icon">⚠️</div>
+                        <div class="validation-info">
+                            <div class="validation-number" id="validation-warnings">0</div>
+                            <div class="validation-label">Warnings</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Issues List -->
+                <div class="issues-section" id="issues-section" style="display: none;">
+                    <h3>Issues Found</h3>
+                    <div class="issues-list" id="issues-list"></div>
+                </div>
+
+                <!-- Statistics -->
+                <div class="statistics-section">
+                    <h3>Dataset Statistics</h3>
+                    <div id="statistics-content"></div>
+                </div>
+
+                <div class="step-actions">
+                    <button class="btn btn-secondary" onclick="wizard.prevStep()">← Back to Editing</button>
+                    <button class="btn btn-primary" onclick="wizard.nextStep()">Export Dataset →</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 5: Export -->
+        <div class="step-content" id="step-5" style="display: none;">
+            <div class="content-card">
+                <h2>Export Your Dataset</h2>
+
+                <div class="export-options">
+                    <div class="export-option" onclick="exportHandler.selectOption('training')">
+                        <div class="export-icon">📤</div>
+                        <h3>Upload for Training</h3>
+                        <p>Directly upload to Merlina's training pipeline</p>
+                        <div class="export-recommended">Recommended</div>
+                    </div>
+
+                    <div class="export-option" onclick="exportHandler.selectOption('download')">
+                        <div class="export-icon">💾</div>
+                        <h3>Download File</h3>
+                        <p>Download as JSON, JSONL, or CSV</p>
+                    </div>
+
+                    <div class="export-option" onclick="exportHandler.selectOption('save')">
+                        <div class="export-icon">💾</div>
+                        <h3>Save Session</h3>
+                        <p>Continue editing later</p>
+                    </div>
+                </div>
+
+                <!-- Export Settings -->
+                <div class="export-settings" id="export-settings" style="display: none;">
+                    <h4>Export Settings</h4>
+                    <label>
+                        <input type="checkbox" id="export-valid-only" checked>
+                        Export only valid rows
+                    </label>
+                    <div id="format-selection" style="display: none;">
+                        <label>Format:</label>
+                        <select id="export-format">
+                            <option value="json">JSON</option>
+                            <option value="jsonl">JSONL</option>
+                            <option value="csv">CSV</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Export Preview -->
+                <div class="export-preview" id="export-preview">
+                    <h4>Export Summary</h4>
+                    <p id="export-summary"></p>
+                </div>
+
+                <div class="step-actions">
+                    <button class="btn btn-secondary" onclick="wizard.prevStep()">← Back</button>
+                    <button class="btn btn-success btn-lg" onclick="exportHandler.execute()" id="btn-export">
+                        Export Dataset
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Row Editor Modal -->
+    <div class="modal" id="row-editor-modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modal-title">Edit Row</h3>
+                <button class="modal-close" onclick="modal.close()">×</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Prompt <span class="required">*</span></label>
+                    <textarea id="edit-prompt" rows="4"></textarea>
+                    <div class="token-count">Tokens: <span id="prompt-tokens">0</span></div>
+                </div>
+                <div class="form-group">
+                    <label>Chosen Response <span class="required">*</span></label>
+                    <textarea id="edit-chosen" rows="6"></textarea>
+                    <div class="token-count">Tokens: <span id="chosen-tokens">0</span></div>
+                </div>
+                <div class="form-group" id="rejected-form-group">
+                    <label>Rejected Response <span class="required" id="edit-rejected-required">*</span></label>
+                    <textarea id="edit-rejected" rows="6"></textarea>
+                    <div class="token-count">Tokens: <span id="rejected-tokens">0</span></div>
+                    <div class="similarity-indicator" id="similarity-indicator" style="display: none;">
+                        Similarity: <span id="similarity-value">0%</span>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>System Message <span class="optional">(optional)</span></label>
+                    <textarea id="edit-system" rows="2"></textarea>
+                </div>
+                <div class="validation-feedback" id="modal-validation"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="modal.close()">Cancel</button>
+                <button class="btn btn-primary" onclick="modal.save()" id="btn-save-row">Save Row</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notifications -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- Scripts -->
+    <script src="js/api-client.js"></script>
+    <script src="js/wizard.js"></script>
+    <script src="js/table-editor.js"></script>
+    <script src="js/validation.js"></script>
+    <script src="js/export-handler.js"></script>
+    <script src="js/modal.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
