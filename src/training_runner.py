@@ -38,6 +38,23 @@ from src.preflight_checks import is_local_model_path
 logger = logging.getLogger(__name__)
 
 
+def get_num_gpus() -> int:
+    """Get the number of GPUs available for training."""
+    if torch.cuda.is_available():
+        return max(1, torch.cuda.device_count())
+    return 1
+
+
+def calculate_effective_batch_size(batch_size: int, gradient_accumulation_steps: int) -> int:
+    """
+    Calculate the effective batch size accounting for gradient accumulation and multiple GPUs.
+
+    Effective batch size = per_device_batch_size × gradient_accumulation_steps × num_gpus
+    """
+    num_gpus = get_num_gpus()
+    return batch_size * gradient_accumulation_steps * num_gpus
+
+
 def generate_model_readme(config: Any, training_mode: str) -> str:
     """
     Generate a README.md for the HuggingFace model card.
@@ -80,7 +97,7 @@ def generate_model_readme(config: Any, training_mode: str) -> str:
     frontmatter_lines.append("---")
 
     # Build configuration section
-    effective_batch = config.batch_size * config.gradient_accumulation_steps
+    effective_batch = calculate_effective_batch_size(config.batch_size, config.gradient_accumulation_steps)
 
     config_lines = [
         f"| Parameter | Value |",
@@ -204,7 +221,7 @@ def generate_wandb_run_name(config: Any) -> str:
         lr_str = f"{lr:.0e}".replace('e-0', 'e-')
 
     # Calculate effective batch size
-    effective_batch = config.batch_size * config.gradient_accumulation_steps
+    effective_batch = calculate_effective_batch_size(config.batch_size, config.gradient_accumulation_steps)
 
     # Simplify optimizer name
     opt = config.optimizer_type.replace('paged_', '').replace('_', '')
@@ -426,7 +443,7 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
                 "model": config.base_model,
                 "learning_rate": config.learning_rate,
                 "batch_size": config.batch_size,
-                "effective_batch_size": config.batch_size * config.gradient_accumulation_steps,
+                "effective_batch_size": calculate_effective_batch_size(config.batch_size, config.gradient_accumulation_steps),
                 "epochs": config.num_epochs,
                 "optimizer": config.optimizer_type,
                 "attention": config.attn_implementation,

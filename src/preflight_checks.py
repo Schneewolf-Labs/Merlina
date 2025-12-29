@@ -13,6 +13,23 @@ import psutil
 logger = logging.getLogger(__name__)
 
 
+def get_num_gpus() -> int:
+    """Get the number of GPUs available for training."""
+    if torch.cuda.is_available():
+        return max(1, torch.cuda.device_count())
+    return 1
+
+
+def calculate_effective_batch_size(batch_size: int, gradient_accumulation_steps: int) -> int:
+    """
+    Calculate the effective batch size accounting for gradient accumulation and multiple GPUs.
+
+    Effective batch size = per_device_batch_size × gradient_accumulation_steps × num_gpus
+    """
+    num_gpus = get_num_gpus()
+    return batch_size * gradient_accumulation_steps * num_gpus
+
+
 def is_local_model_path(model_path: str) -> bool:
     """
     Determine if model_path is a local directory or a HuggingFace model ID.
@@ -374,7 +391,7 @@ class PreflightValidator:
             )
 
         # Check batch size and gradient accumulation
-        effective_batch_size = config.batch_size * config.gradient_accumulation_steps
+        effective_batch_size = calculate_effective_batch_size(config.batch_size, config.gradient_accumulation_steps)
         if effective_batch_size < 4:
             self.warnings.append(
                 f"Effective batch size ({effective_batch_size}) is very small. "
