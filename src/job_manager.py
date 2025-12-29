@@ -56,9 +56,14 @@ class JobManager:
     @contextmanager
     def _get_connection(self):
         """Context manager for database connections"""
-        conn = sqlite3.connect(str(self.db_path))
+        # Use longer timeout to prevent lock contention during heavy operations
+        # and enable WAL mode for better concurrent read/write performance
+        conn = sqlite3.connect(str(self.db_path), timeout=30.0)
         conn.row_factory = sqlite3.Row  # Enable dict-like access
         try:
+            # Enable WAL mode for better concurrency (allows reads during writes)
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")  # 30 second timeout
             yield conn
             conn.commit()
         except Exception as e:
