@@ -117,6 +117,8 @@ class DatasetManager {
 
             const data = await MerlinaAPI.uploadDataset(file);
             this.uploadedDatasetId = data.dataset_id;
+            // Also expose on window for ConfigManager compatibility
+            window.uploadedDatasetId = data.dataset_id;
 
             uploadStatus.innerHTML = `
                 <div class="success-message">
