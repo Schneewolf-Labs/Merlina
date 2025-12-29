@@ -537,6 +537,24 @@ class MerlinaApp {
             if (!form) return;
 
             FormUI.setData(form, state);
+
+            // Dispatch change events for toggle elements to update visibility
+            const toggleElements = [
+                'use-lora',
+                'use-wandb',
+                'push-hub',
+                'training-mode',
+                'dataset-source-type',
+                'dataset-format-type'
+            ];
+
+            toggleElements.forEach(id => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.dispatchEvent(new Event('change'));
+                }
+            });
+
             console.log('📝 Form state restored from auto-save');
         } catch (error) {
             console.error('Failed to load form state:', error);

@@ -200,9 +200,31 @@ class ConnectionStatus {
 }
 
 /**
- * Modal manager
+ * Modal manager with shared escape key handler to prevent memory leaks
  */
 class Modal {
+    // Static set to track all modal instances
+    static instances = new Set();
+    static escapeHandlerInitialized = false;
+
+    static initGlobalEscapeHandler() {
+        if (Modal.escapeHandlerInitialized) return;
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                // Find the topmost visible modal and close it
+                for (const modal of Modal.instances) {
+                    if (modal.isVisible()) {
+                        modal.hide();
+                        break;
+                    }
+                }
+            }
+        });
+
+        Modal.escapeHandlerInitialized = true;
+    }
+
     constructor(modalId) {
         this.modal = document.getElementById(modalId);
         this.closeBtn = this.modal?.querySelector('.close');
@@ -211,19 +233,17 @@ class Modal {
             this.closeBtn.addEventListener('click', () => this.hide());
         }
 
-        // Close on outside click
-        window.addEventListener('click', (e) => {
+        // Close on outside click - use bound function for potential cleanup
+        this._outsideClickHandler = (e) => {
             if (e.target === this.modal) {
                 this.hide();
             }
-        });
+        };
+        window.addEventListener('click', this._outsideClickHandler);
 
-        // Close on Escape key
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape' && this.isVisible()) {
-                this.hide();
-            }
-        });
+        // Register with static set and initialize global escape handler
+        Modal.instances.add(this);
+        Modal.initGlobalEscapeHandler();
     }
 
     show() {
@@ -242,6 +262,16 @@ class Modal {
 
     isVisible() {
         return this.modal && this.modal.style.display !== 'none';
+    }
+
+    /**
+     * Cleanup method to remove event listeners and unregister instance
+     */
+    destroy() {
+        if (this._outsideClickHandler) {
+            window.removeEventListener('click', this._outsideClickHandler);
+        }
+        Modal.instances.delete(this);
     }
 }
 

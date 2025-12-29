@@ -300,17 +300,28 @@ function sanitizeHTML(str) {
 
 /**
  * Debounce function for input validation
+ * Returns a function with a cancel() method to stop pending execution
  */
 function debounce(func, wait) {
     let timeout;
-    return function executedFunction(...args) {
+    const executedFunction = function(...args) {
         const later = () => {
             clearTimeout(timeout);
+            timeout = null;
             func(...args);
         };
         clearTimeout(timeout);
         timeout = setTimeout(later, wait);
     };
+
+    executedFunction.cancel = function() {
+        if (timeout) {
+            clearTimeout(timeout);
+            timeout = null;
+        }
+    };
+
+    return executedFunction;
 }
 
 export { Validator, ValidationRules, sanitizeHTML, debounce };
