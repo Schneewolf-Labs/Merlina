@@ -22,6 +22,7 @@ class MockConfig:
         self.use_4bit = kwargs.get('use_4bit', True)
         self.gradient_checkpointing = kwargs.get('gradient_checkpointing', False)
         self.beta = kwargs.get('beta', 0.1)
+        self.training_mode = kwargs.get('training_mode', 'orpo')
         # LoRA settings
         self.use_lora = kwargs.get('use_lora', True)
         self.lora_r = kwargs.get('lora_r', 64)

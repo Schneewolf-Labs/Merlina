@@ -576,7 +576,7 @@ class TestDatasetManagement:
 
     def test_preview_dataset_local_file(self, client, mock_dataset_pipeline, mock_dataset_loader):
         """Test POST /dataset/preview for local file"""
-        with patch('merlina.LocalFileLoader', return_value=mock_dataset_loader), \
+        with patch('merlina.create_loader_from_config', return_value=mock_dataset_loader), \
              patch('merlina.DatasetPipeline', return_value=mock_dataset_pipeline):
             config = {
                 "source": {
@@ -666,7 +666,7 @@ class TestDatasetManagement:
 
     def test_get_dataset_columns(self, client, mock_dataset_loader):
         """Test POST /dataset/columns endpoint"""
-        with patch('merlina.HuggingFaceLoader', return_value=mock_dataset_loader), \
+        with patch('merlina.create_loader_from_config', return_value=mock_dataset_loader), \
              patch('merlina.get_formatter', return_value=Mock()):
             config = {
                 "source": {
