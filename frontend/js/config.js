@@ -106,10 +106,20 @@ class ConfigManager {
             };
         }
 
+        // Get training mode
+        const trainingMode = document.getElementById('training-mode')?.value || 'orpo';
+
+        // Get column mapping if configured
+        const columnMapping = this.getColumnMapping();
+        if (columnMapping && Object.keys(columnMapping).length > 0) {
+            datasetSource.column_mapping = columnMapping;
+        }
+
         // Build complete config
         const config = {
             base_model: document.getElementById('base-model')?.value || '',
             output_name: document.getElementById('output-name')?.value || '',
+            training_mode: trainingMode,
             use_lora: useLora,
             ...loraConfig,
             use_4bit: document.getElementById('use-4bit')?.checked ?? true,
@@ -392,6 +402,11 @@ class ConfigManager {
                 if (sourceTypeEl) {
                     sourceTypeEl.dispatchEvent(new Event('change'));
                 }
+
+                // Restore column mapping if present
+                if (source.column_mapping) {
+                    this.restoreColumnMapping(source.column_mapping);
+                }
             }
 
             if (config.dataset.format) {
@@ -465,6 +480,74 @@ class ConfigManager {
             // Trigger change event
             element.dispatchEvent(new Event('change'));
         }
+    }
+
+    /**
+     * Get column mapping from UI (mirrors DatasetManager.getColumnMapping)
+     */
+    getColumnMapping() {
+        const mapping = {};
+
+        const promptCol = document.getElementById('map-prompt')?.value;
+        const chosenCol = document.getElementById('map-chosen')?.value;
+        const rejectedCol = document.getElementById('map-rejected')?.value;
+        const systemCol = document.getElementById('map-system')?.value;
+        const reasoningCol = document.getElementById('map-reasoning')?.value;
+
+        if (promptCol) mapping[promptCol] = 'prompt';
+        if (chosenCol) mapping[chosenCol] = 'chosen';
+        if (rejectedCol) mapping[rejectedCol] = 'rejected';
+        if (systemCol) mapping[systemCol] = 'system';
+        if (reasoningCol) mapping[reasoningCol] = 'reasoning';
+
+        return mapping;
+    }
+
+    /**
+     * Restore column mapping to UI dropdowns
+     * @param {Object} columnMapping - Mapping like {"original_col": "prompt", "other_col": "chosen"}
+     */
+    restoreColumnMapping(columnMapping) {
+        // Reverse the mapping to find: standard_field -> original_column
+        const reverseMapping = {};
+        for (const [originalCol, standardField] of Object.entries(columnMapping)) {
+            reverseMapping[standardField] = originalCol;
+        }
+
+        // Show the column mapping config section
+        const columnMappingConfig = document.getElementById('column-mapping-config');
+        if (columnMappingConfig) {
+            columnMappingConfig.style.display = 'block';
+        }
+
+        // Get all original column names from the mapping
+        const columns = Object.keys(columnMapping);
+
+        // Populate the dropdowns with the saved column names
+        const selectIds = ['map-prompt', 'map-chosen', 'map-rejected', 'map-system', 'map-reasoning'];
+        selectIds.forEach(selectId => {
+            const select = document.getElementById(selectId);
+            if (!select) return;
+
+            // Clear existing options except first (empty option)
+            while (select.options.length > 1) {
+                select.remove(1);
+            }
+
+            // Add column options
+            columns.forEach(col => {
+                const option = document.createElement('option');
+                option.value = col;
+                option.textContent = col;
+                select.appendChild(option);
+            });
+
+            // Set the saved value
+            const standardField = selectId.replace('map-', '');
+            if (reverseMapping[standardField]) {
+                select.value = reverseMapping[standardField];
+            }
+        });
     }
 
     /**
