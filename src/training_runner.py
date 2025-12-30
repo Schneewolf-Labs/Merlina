@@ -209,6 +209,9 @@ def _run_background_upload(
     This allows the job queue worker to continue processing other jobs
     while the upload (which can take a long time for large models) runs.
 
+    Uses upload_folder() to upload files directly without loading the model
+    into GPU memory, avoiding OOM errors when another training job is running.
+
     Args:
         config: Training configuration
         final_output_dir: Path to saved model
@@ -230,27 +233,39 @@ def _run_background_upload(
             event_loop
         )
 
-        # Load tokenizer from disk (was saved during training)
-        tokenizer = AutoTokenizer.from_pretrained(final_output_dir)
+        api = HfApi()
+        repo_visibility = "private" if config.hf_hub_private else "public"
 
-        # Handle upload based on whether LoRA was used
-        if config.use_lora:
-            if config.merge_lora_before_upload:
-                logger.info(f"🔄 Merging LoRA adapter with base model for upload...")
+        # Create or get the repository
+        repo_url = api.create_repo(
+            repo_id=config.output_name,
+            token=config.hf_token,
+            private=config.hf_hub_private,
+            exist_ok=True
+        )
+        logger.info(f"📦 Repository ready: {repo_url}")
 
-                # Reload for merging
+        # Handle upload based on whether LoRA was used and merge preference
+        if config.use_lora and config.merge_lora_before_upload:
+            # For LoRA merge, we need to load the model - try CPU-only to avoid GPU conflicts
+            logger.info(f"🔄 Merging LoRA adapter with base model for upload (using CPU)...")
+
+            try:
+                # Force CPU-only loading to avoid GPU OOM when another job is training
                 base_model_reload = AutoModelForCausalLM.from_pretrained(
                     config.base_model,
                     low_cpu_mem_usage=True,
                     torch_dtype=torch.bfloat16,
-                    device_map="auto",
+                    device_map="cpu",  # Force CPU to avoid GPU conflicts
                 )
 
-                model_merged = PeftModel.from_pretrained(base_model_reload, final_output_dir)
+                model_merged = PeftModel.from_pretrained(
+                    base_model_reload,
+                    final_output_dir,
+                    device_map="cpu"
+                )
                 model_merged = model_merged.merge_and_unload()
 
-                # Push to hub
-                repo_visibility = "private" if config.hf_hub_private else "public"
                 logger.info(f"📤 Pushing merged model to HuggingFace Hub as {repo_visibility} repository...")
                 logger.info(f"   Repository: {config.output_name}")
 
@@ -261,106 +276,66 @@ def _run_background_upload(
                 )
                 logger.info(f"✅ Merged model uploaded successfully!")
 
+                # Upload tokenizer separately
+                tokenizer = AutoTokenizer.from_pretrained(final_output_dir)
                 tokenizer.push_to_hub(
                     config.output_name,
                     token=config.hf_token,
                     private=config.hf_hub_private
                 )
                 logger.info(f"✅ Tokenizer uploaded successfully!")
-
-                hub_url = f"https://huggingface.co/{config.output_name}"
-                logger.info(f"🎉 Merged model published at: {hub_url}")
-
-                # Generate and upload README
-                logger.info("📝 Generating model card README...")
-                readme_content = generate_model_readme(config, training_mode)
-                upload_model_readme(config.output_name, readme_content, config.hf_token)
 
                 # Clean up
                 del model_merged, base_model_reload
                 gc.collect()
-                torch.cuda.empty_cache()
-            else:
-                # Upload LoRA adapter only
-                logger.info(f"📤 Uploading LoRA adapter only (not merged)...")
 
-                repo_visibility = "private" if config.hf_hub_private else "public"
-                logger.info(f"📤 Pushing LoRA adapter to HuggingFace Hub as {repo_visibility} repository...")
-                logger.info(f"   Repository: {config.output_name}")
+            except Exception as merge_error:
+                # If CPU merge fails (e.g., not enough RAM), fall back to uploading adapter only
+                logger.warning(f"⚠️ Could not merge LoRA on CPU: {merge_error}")
+                logger.info("📤 Falling back to uploading LoRA adapter only...")
 
-                adapter_model = AutoPeftModelForCausalLM.from_pretrained(
-                    final_output_dir,
-                    low_cpu_mem_usage=True,
-                    torch_dtype=torch.bfloat16,
-                    device_map="auto",
-                )
-
-                adapter_model.push_to_hub(
-                    config.output_name,
+                # Upload the saved model directory directly (contains adapter files)
+                api.upload_folder(
+                    folder_path=final_output_dir,
+                    repo_id=config.output_name,
                     token=config.hf_token,
-                    private=config.hf_hub_private
+                    commit_message=f"Upload LoRA adapter trained with Merlina ({training_mode})"
                 )
                 logger.info(f"✅ LoRA adapter uploaded successfully!")
-
-                tokenizer.push_to_hub(
-                    config.output_name,
-                    token=config.hf_token,
-                    private=config.hf_hub_private
-                )
-                logger.info(f"✅ Tokenizer uploaded successfully!")
-
-                hub_url = f"https://huggingface.co/{config.output_name}"
-                logger.info(f"🎉 LoRA adapter published at: {hub_url}")
                 logger.info(f"💡 To use: PeftModel.from_pretrained('{config.base_model}', '{config.output_name}')")
 
-                # Generate and upload README
-                logger.info("📝 Generating model card README...")
-                readme_content = generate_model_readme(config, training_mode)
-                upload_model_readme(config.output_name, readme_content, config.hf_token)
-
-                del adapter_model
-                gc.collect()
-                torch.cuda.empty_cache()
         else:
-            # Full model upload
-            logger.info(f"📤 Uploading full model to HuggingFace Hub...")
+            # For adapter-only or full model uploads, use upload_folder() directly
+            # This doesn't require loading the model into memory at all
+            if config.use_lora:
+                logger.info(f"📤 Uploading LoRA adapter to HuggingFace Hub as {repo_visibility} repository...")
+                commit_msg = f"Upload LoRA adapter trained with Merlina ({training_mode})"
+            else:
+                logger.info(f"📤 Uploading full model to HuggingFace Hub as {repo_visibility} repository...")
+                commit_msg = f"Upload model trained with Merlina ({training_mode})"
 
-            upload_model = AutoModelForCausalLM.from_pretrained(
-                final_output_dir,
-                low_cpu_mem_usage=True,
-                torch_dtype=torch.bfloat16,
-                device_map="auto",
-            )
-
-            repo_visibility = "private" if config.hf_hub_private else "public"
-            logger.info(f"📤 Pushing to HuggingFace Hub as {repo_visibility} repository...")
             logger.info(f"   Repository: {config.output_name}")
 
-            upload_model.push_to_hub(
-                config.output_name,
+            # Upload the entire model directory directly - no model loading needed!
+            api.upload_folder(
+                folder_path=final_output_dir,
+                repo_id=config.output_name,
                 token=config.hf_token,
-                private=config.hf_hub_private
+                commit_message=commit_msg
             )
-            logger.info(f"✅ Model uploaded successfully!")
 
-            tokenizer.push_to_hub(
-                config.output_name,
-                token=config.hf_token,
-                private=config.hf_hub_private
-            )
-            logger.info(f"✅ Tokenizer uploaded successfully!")
+            if config.use_lora:
+                logger.info(f"✅ LoRA adapter uploaded successfully!")
+                logger.info(f"💡 To use: PeftModel.from_pretrained('{config.base_model}', '{config.output_name}')")
+            else:
+                logger.info(f"✅ Model uploaded successfully!")
 
-            hub_url = f"https://huggingface.co/{config.output_name}"
-            logger.info(f"🎉 Model published at: {hub_url}")
-
-            # Generate and upload README
-            logger.info("📝 Generating model card README...")
-            readme_content = generate_model_readme(config, training_mode)
-            upload_model_readme(config.output_name, readme_content, config.hf_token)
-
-            del upload_model
-            gc.collect()
-            torch.cuda.empty_cache()
+        # Generate and upload README with model card
+        hub_url = f"https://huggingface.co/{config.output_name}"
+        logger.info(f"🎉 Model published at: {hub_url}")
+        logger.info("📝 Generating model card README...")
+        readme_content = generate_model_readme(config, training_mode)
+        upload_model_readme(config.output_name, readme_content, config.hf_token)
 
         # Update job status after successful upload
         logger.info(f"✅ Background upload completed for job {job_id}")
