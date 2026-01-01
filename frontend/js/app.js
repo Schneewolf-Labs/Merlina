@@ -182,6 +182,11 @@ class MerlinaApp {
             max_length: parseInt(document.getElementById('max-length')?.value || 2048),
             max_prompt_length: parseInt(document.getElementById('max-prompt-length')?.value || 1024),
             beta: parseFloat(document.getElementById('beta')?.value || 0.1),
+
+            // Distillation settings
+            teacher_model: document.getElementById('teacher-model')?.value || null,
+            distillation_alpha: parseFloat(document.getElementById('distillation-alpha')?.value || 0.5),
+            distillation_temperature: parseFloat(document.getElementById('distillation-temperature')?.value || 2.0),
             seed: parseInt(document.getElementById('seed')?.value || 42),
             max_grad_norm: parseFloat(document.getElementById('max-grad-norm')?.value || 0.3),
             warmup_ratio: parseFloat(document.getElementById('warmup-ratio')?.value || 0.05),
@@ -297,23 +302,35 @@ class MerlinaApp {
     }
 
     /**
-     * Setup training mode toggle (show/hide ORPO beta field)
+     * Setup training mode toggle (show/hide ORPO beta field and distillation config)
      */
     setupTrainingModeToggle() {
         const trainingMode = document.getElementById('training-mode');
         const betaField = document.getElementById('beta-field');
+        const distillationConfig = document.getElementById('distillation-config');
 
-        if (!trainingMode || !betaField) return;
+        if (!trainingMode) return;
 
         trainingMode.addEventListener('change', (e) => {
             const mode = e.target.value;
             // Show beta field only for ORPO mode
-            betaField.style.display = mode === 'orpo' ? 'block' : 'none';
+            if (betaField) {
+                betaField.style.display = mode === 'orpo' ? 'block' : 'none';
+            }
+            // Show distillation config only for distillation mode
+            if (distillationConfig) {
+                distillationConfig.style.display = mode === 'distillation' ? 'block' : 'none';
+            }
         });
 
         // Initialize based on current value
         const currentMode = trainingMode.value;
-        betaField.style.display = currentMode === 'orpo' ? 'block' : 'none';
+        if (betaField) {
+            betaField.style.display = currentMode === 'orpo' ? 'block' : 'none';
+        }
+        if (distillationConfig) {
+            distillationConfig.style.display = currentMode === 'distillation' ? 'block' : 'none';
+        }
     }
 
     /**

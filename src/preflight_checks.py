@@ -115,6 +115,7 @@ class PreflightValidator:
             ("VRAM", lambda: self._check_vram(config)),
             ("Disk Space", lambda: self._check_disk_space(config)),
             ("Model Access", lambda: self._check_model_access(config)),
+            ("Teacher Model", lambda: self._check_teacher_model(config)),
             ("Dataset Config", lambda: self._check_dataset_config(config)),
             ("Training Config", lambda: self._check_training_config(config)),
             ("Tokens", lambda: self._check_tokens(config)),
@@ -215,20 +216,60 @@ class PreflightValidator:
                 "Consider enabling 4-bit quantization to reduce memory usage."
             )
 
+        # For distillation, we need to estimate teacher model VRAM too
+        training_mode = getattr(config, 'training_mode', 'orpo').lower()
+        teacher_vram = 0
+
+        if training_mode == "distillation":
+            teacher_model = getattr(config, 'teacher_model', None)
+            if teacher_model:
+                teacher_name = teacher_model.lower()
+                for size_key, vram_needed in size_estimates.items():
+                    if size_key in teacher_name:
+                        teacher_vram = vram_needed
+                        break
+
+                if teacher_vram == 0:
+                    # If we can't estimate, assume same size as student
+                    teacher_vram = estimated_vram
+                    self.warnings.append(
+                        f"Could not estimate VRAM for teacher model '{teacher_model}'. "
+                        "Assuming same size as student model."
+                    )
+
+                # Adjust teacher VRAM for quantization
+                if not config.use_4bit:
+                    teacher_vram *= 3.5
+
+                estimated_vram += teacher_vram
+                self.warnings.append(
+                    f"Distillation mode requires loading both student and teacher models. "
+                    f"Estimated total VRAM: ~{estimated_vram:.1f}GB "
+                    f"(student: ~{estimated_vram - teacher_vram:.1f}GB, teacher: ~{teacher_vram:.1f}GB)"
+                )
+
         # Check available VRAM
         gpu = torch.cuda.get_device_properties(0)
         available_vram = gpu.total_memory / (1024**3)
 
         if available_vram < estimated_vram:
-            self.errors.append(
-                f"Insufficient VRAM: Model requires ~{estimated_vram}GB, "
-                f"but only {available_vram:.1f}GB available. "
-                f"{'Enable 4-bit quantization to reduce memory usage.' if not config.use_4bit else 'Consider using a smaller model or reducing batch size/sequence length.'}"
-            )
+            if training_mode == "distillation":
+                self.errors.append(
+                    f"Insufficient VRAM for distillation: Both models require ~{estimated_vram}GB total, "
+                    f"but only {available_vram:.1f}GB available. "
+                    "Consider using 4-bit quantization, smaller models, or reducing batch size."
+                )
+            else:
+                self.errors.append(
+                    f"Insufficient VRAM: Model requires ~{estimated_vram}GB, "
+                    f"but only {available_vram:.1f}GB available. "
+                    f"{'Enable 4-bit quantization to reduce memory usage.' if not config.use_4bit else 'Consider using a smaller model or reducing batch size/sequence length.'}"
+                )
 
         return {
             "available_gb": available_vram,
             "estimated_required_gb": estimated_vram,
+            "teacher_vram_gb": teacher_vram if training_mode == "distillation" else None,
             "sufficient": available_vram >= estimated_vram
         }
 
@@ -338,6 +379,100 @@ class PreflightValidator:
 
             return {
                 "model": model_path,
+                "is_local": False,
+                "is_gated": is_gated,
+                "has_token": bool(config.hf_token or os.getenv("HF_TOKEN"))
+            }
+
+    def _check_teacher_model(self, config: Any) -> Dict[str, Any]:
+        """Check teacher model access for distillation mode"""
+        training_mode = getattr(config, 'training_mode', 'orpo').lower()
+
+        # Only validate if distillation mode is selected
+        if training_mode != "distillation":
+            return {"skipped": "Not using distillation mode"}
+
+        teacher_model = getattr(config, 'teacher_model', None)
+
+        # Check if teacher model is provided
+        if not teacher_model:
+            self.errors.append(
+                "Distillation mode requires a teacher model. "
+                "Please provide 'teacher_model' in the configuration."
+            )
+            return {
+                "required": True,
+                "provided": False
+            }
+
+        is_local = is_local_model_path(teacher_model)
+
+        if is_local:
+            # Validate local teacher model path
+            model_dir = Path(teacher_model)
+
+            if not model_dir.exists():
+                self.errors.append(
+                    f"Teacher model path '{teacher_model}' does not exist. "
+                    "Please provide a valid directory path."
+                )
+                return {
+                    "model": teacher_model,
+                    "is_local": True,
+                    "exists": False,
+                    "has_config": False
+                }
+
+            if not model_dir.is_dir():
+                self.errors.append(
+                    f"Teacher model path '{teacher_model}' is not a directory."
+                )
+                return {
+                    "model": teacher_model,
+                    "is_local": True,
+                    "exists": True,
+                    "has_config": False
+                }
+
+            # Check for required model files
+            config_file = model_dir / "config.json"
+            if not config_file.exists():
+                self.warnings.append(
+                    f"Teacher model path '{teacher_model}' does not contain config.json. "
+                    "This may cause loading issues."
+                )
+
+            return {
+                "model": teacher_model,
+                "is_local": True,
+                "exists": True,
+                "has_config": config_file.exists()
+            }
+        else:
+            # HuggingFace model - check for gated models
+            gated_models = [
+                "meta-llama/Llama-2",
+                "meta-llama/Meta-Llama-3",
+                "mistralai/Mixtral",
+            ]
+
+            is_gated = any(gated in teacher_model for gated in gated_models)
+
+            if is_gated and not config.hf_token:
+                self.errors.append(
+                    f"Teacher model '{teacher_model}' is gated and requires a HuggingFace token. "
+                    "Please provide hf_token in the configuration or set HF_TOKEN environment variable."
+                )
+
+            # Check if teacher is same as base model
+            if teacher_model == config.base_model:
+                self.warnings.append(
+                    f"Teacher model is the same as the base (student) model. "
+                    "This is unusual - typically the teacher should be a larger or more capable model."
+                )
+
+            return {
+                "model": teacher_model,
                 "is_local": False,
                 "is_gated": is_gated,
                 "has_token": bool(config.hf_token or os.getenv("HF_TOKEN"))

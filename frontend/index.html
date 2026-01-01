@@ -415,11 +415,35 @@
                             <select id="training-mode" class="magic-select">
                                 <option value="orpo">ORPO - Preference Optimization (requires chosen + rejected)</option>
                                 <option value="sft">SFT - Supervised Fine-Tuning (only uses chosen)</option>
+                                <option value="distillation">Distillation - Learn from Teacher Model (only uses chosen)</option>
                             </select>
                             <small style="color: #888; font-size: 0.85em; display: block; margin-top: 8px;">
                                 <strong>ORPO:</strong> Trains model to prefer "chosen" responses over "rejected" responses<br>
-                                <strong>SFT:</strong> Traditional fine-tuning on "chosen" responses only (rejected field not needed)
+                                <strong>SFT:</strong> Traditional fine-tuning on "chosen" responses only (rejected field not needed)<br>
+                                <strong>Distillation:</strong> Student model learns from a larger teacher model's knowledge
                             </small>
+                        </div>
+
+                        <!-- Distillation Configuration (shown only when distillation mode selected) -->
+                        <div id="distillation-config" style="display: none; margin-top: 16px; padding: 16px; background: rgba(147, 112, 219, 0.1); border-radius: 8px; border: 1px solid rgba(147, 112, 219, 0.3);">
+                            <h4 style="margin: 0 0 12px 0; color: #9370db;">🎓 Distillation Settings</h4>
+                            <div class="form-group">
+                                <label>Teacher Model</label>
+                                <input type="text" id="teacher-model" class="magic-input" placeholder="e.g., meta-llama/Meta-Llama-3-70B-Instruct or /path/to/local/model">
+                                <small style="color: #888; font-size: 0.85em;">The larger model to distill knowledge from (HuggingFace ID or local path)</small>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Distillation Alpha</label>
+                                    <input type="number" id="distillation-alpha" value="0.5" min="0" max="1" step="0.1" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">Weight for distillation loss (0=only SFT, 1=only distillation)</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>Temperature</label>
+                                    <input type="number" id="distillation-temperature" value="2.0" min="1" max="20" step="0.5" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">Softmax temperature (higher=softer probabilities)</small>
+                                </div>
+                            </div>
                         </div>
                     </div>
 

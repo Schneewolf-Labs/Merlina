@@ -109,6 +109,16 @@ class ConfigManager {
         // Get training mode
         const trainingMode = document.getElementById('training-mode')?.value || 'orpo';
 
+        // Get distillation settings if in distillation mode
+        let distillationConfig = {};
+        if (trainingMode === 'distillation') {
+            distillationConfig = {
+                teacher_model: document.getElementById('teacher-model')?.value || '',
+                distillation_alpha: parseFloat(document.getElementById('distillation-alpha')?.value || 0.5),
+                distillation_temperature: parseFloat(document.getElementById('distillation-temperature')?.value || 2.0)
+            };
+        }
+
         // Get column mapping if configured
         const columnMapping = this.getColumnMapping();
         if (columnMapping && Object.keys(columnMapping).length > 0) {
@@ -122,6 +132,7 @@ class ConfigManager {
             training_mode: trainingMode,
             use_lora: useLora,
             ...loraConfig,
+            ...distillationConfig,
             use_4bit: document.getElementById('use-4bit')?.checked ?? true,
             max_length: parseInt(document.getElementById('max-length')?.value || 2048),
             max_prompt_length: parseInt(document.getElementById('max-prompt-length')?.value || 1024),
@@ -359,6 +370,18 @@ class ConfigManager {
 
         // Training settings
         this.setInputValue('training-mode', config.training_mode || 'orpo');
+
+        // Distillation settings (if present)
+        if (config.teacher_model) {
+            this.setInputValue('teacher-model', config.teacher_model);
+        }
+        if (config.distillation_alpha !== undefined) {
+            this.setInputValue('distillation-alpha', config.distillation_alpha);
+        }
+        if (config.distillation_temperature !== undefined) {
+            this.setInputValue('distillation-temperature', config.distillation_temperature);
+        }
+
         this.setInputValue('max-length', config.max_length || 2048);
         this.setInputValue('max-prompt-length', config.max_prompt_length || 1024);
         this.setInputValue('epochs', config.num_train_epochs || 2);

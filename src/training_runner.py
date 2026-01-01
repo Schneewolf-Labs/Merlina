@@ -20,6 +20,7 @@ from transformers import (
 )
 from peft import LoraConfig, PeftModel, prepare_model_for_kbit_training, AutoPeftModelForCausalLM
 from trl import ORPOConfig, ORPOTrainer, SFTTrainer, SFTConfig
+import torch.nn.functional as F
 from accelerate import Accelerator
 
 from huggingface_hub import HfApi
@@ -549,6 +550,105 @@ class WebSocketCallback(TrainerCallback):
                 )
 
 
+class DistillationTrainer(SFTTrainer):
+    """
+    Custom trainer for knowledge distillation from a teacher model to a student model.
+
+    Combines standard SFT loss with KL divergence loss between teacher and student distributions.
+    """
+
+    def __init__(
+        self,
+        teacher_model=None,
+        distillation_alpha: float = 0.5,
+        distillation_temperature: float = 2.0,
+        *args,
+        **kwargs
+    ):
+        super().__init__(*args, **kwargs)
+        self.teacher_model = teacher_model
+        self.distillation_alpha = distillation_alpha
+        self.distillation_temperature = distillation_temperature
+
+        # Ensure teacher model is in eval mode and frozen
+        if self.teacher_model is not None:
+            self.teacher_model.eval()
+            for param in self.teacher_model.parameters():
+                param.requires_grad = False
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        """
+        Compute combined loss: (1-alpha) * SFT_loss + alpha * distillation_loss
+
+        The distillation loss uses KL divergence between softened teacher and student distributions.
+        """
+        # Get student outputs
+        outputs = model(**inputs)
+        student_logits = outputs.logits
+
+        # Standard cross-entropy loss (SFT loss)
+        labels = inputs.get("labels")
+        if labels is not None:
+            # Shift logits and labels for next-token prediction
+            shift_logits = student_logits[..., :-1, :].contiguous()
+            shift_labels = labels[..., 1:].contiguous()
+
+            # Flatten for cross-entropy
+            loss_fct = torch.nn.CrossEntropyLoss(ignore_index=-100)
+            sft_loss = loss_fct(
+                shift_logits.view(-1, shift_logits.size(-1)),
+                shift_labels.view(-1)
+            )
+        else:
+            sft_loss = outputs.loss
+
+        # Compute distillation loss if teacher is available
+        if self.teacher_model is not None and self.distillation_alpha > 0:
+            with torch.no_grad():
+                teacher_outputs = self.teacher_model(**inputs)
+                teacher_logits = teacher_outputs.logits
+
+            # Apply temperature scaling
+            T = self.distillation_temperature
+            student_soft = F.log_softmax(student_logits / T, dim=-1)
+            teacher_soft = F.softmax(teacher_logits / T, dim=-1)
+
+            # KL divergence loss (scaled by T^2 as per Hinton et al.)
+            # Only compute on non-padding tokens
+            if labels is not None:
+                # Create mask for valid tokens (not -100)
+                mask = (labels != -100).unsqueeze(-1).float()
+                # Shift to align with predictions
+                mask = mask[..., 1:, :]
+                student_soft_shifted = student_soft[..., :-1, :]
+                teacher_soft_shifted = teacher_soft[..., :-1, :]
+
+                # KL divergence with masking
+                kl_div = F.kl_div(
+                    student_soft_shifted,
+                    teacher_soft_shifted,
+                    reduction='none',
+                    log_target=False
+                )
+                # Apply mask and compute mean
+                masked_kl = (kl_div * mask).sum() / (mask.sum() + 1e-8)
+                distillation_loss = masked_kl * (T ** 2)
+            else:
+                distillation_loss = F.kl_div(
+                    student_soft,
+                    teacher_soft,
+                    reduction='batchmean',
+                    log_target=False
+                ) * (T ** 2)
+
+            # Combine losses
+            loss = (1 - self.distillation_alpha) * sft_loss + self.distillation_alpha * distillation_loss
+        else:
+            loss = sft_loss
+
+        return (loss, outputs) if return_outputs else loss
+
+
 async def run_training_async(job_id: str, config: Any, job_manager: JobManager, uploaded_datasets: dict):
     """Async wrapper for training to enable WebSocket updates"""
     loop = asyncio.get_running_loop()
@@ -861,6 +961,100 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
                 processing_class=tokenizer,
                 callbacks=[WebSocketCallback(job_id, job_manager, event_loop)]
             )
+        elif training_mode == "distillation":
+            # Distillation Configuration
+            logger.info("Configuring Distillation trainer (knowledge distillation from teacher model)")
+
+            # Validate teacher model is provided
+            if not config.teacher_model:
+                raise ValueError("Teacher model is required for distillation training. Please provide 'teacher_model' in the configuration.")
+
+            # Load teacher model
+            logger.info(f"Loading teacher model: {config.teacher_model}")
+            send_websocket_update(
+                websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="loading_teacher_model",
+                    progress=0.25,
+                    message=f"Loading teacher model: {config.teacher_model}"
+                ),
+                event_loop
+            )
+
+            # Determine if teacher is local or from HuggingFace
+            teacher_is_local = is_local_model_path(config.teacher_model)
+            teacher_source = "local directory" if teacher_is_local else "HuggingFace Hub"
+            logger.info(f"Loading teacher from {teacher_source}: {config.teacher_model}")
+
+            # Load teacher model (without LoRA, in eval mode)
+            teacher_model = AutoModelForCausalLM.from_pretrained(
+                config.teacher_model,
+                quantization_config=bnb_config,  # Use same quantization as student
+                attn_implementation=attn_implementation,
+                torch_dtype=torch_dtype if not bnb_config else None,
+                device_map="auto",
+                trust_remote_code=True,
+            )
+            teacher_model.eval()
+            logger.info("Teacher model loaded successfully")
+
+            # For distillation, we format dataset similar to SFT
+            def format_for_sft(example):
+                """Format dataset entry for distillation training"""
+                return {
+                    'text': example['prompt'] + example['chosen']
+                }
+
+            train_dataset = train_dataset.map(format_for_sft, remove_columns=train_dataset.column_names)
+            eval_dataset = eval_dataset.map(format_for_sft, remove_columns=eval_dataset.column_names)
+
+            distill_args = SFTConfig(
+                run_name=wandb_run_name if config.use_wandb else config.output_name,
+                learning_rate=config.learning_rate,
+                lr_scheduler_type=config.lr_scheduler_type,
+                per_device_train_batch_size=config.batch_size,
+                per_device_eval_batch_size=config.batch_size,
+                gradient_accumulation_steps=config.gradient_accumulation_steps,
+                optim=config.optimizer_type,
+                num_train_epochs=config.num_epochs,
+                eval_strategy="steps",
+                eval_steps=config.eval_steps,
+                logging_steps=config.logging_steps,
+                warmup_ratio=config.warmup_ratio,
+                max_grad_norm=config.max_grad_norm,
+                weight_decay=config.weight_decay,
+                adam_beta1=config.adam_beta1,
+                adam_beta2=config.adam_beta2,
+                adam_epsilon=config.adam_epsilon,
+                report_to=["wandb"] if config.use_wandb else [],
+                output_dir=output_dir,
+                bf16=torch_dtype == torch.bfloat16,
+                fp16=torch_dtype == torch.float16,
+                save_strategy="steps",
+                save_steps=config.eval_steps,
+                save_total_limit=2,
+                seed=config.seed,
+                gradient_checkpointing=config.gradient_checkpointing,
+                max_length=config.max_length,
+                dataset_text_field="text",
+                packing=False,
+            )
+
+            logger.info(f"Distillation parameters: alpha={config.distillation_alpha}, temperature={config.distillation_temperature}")
+
+            # Create Distillation trainer
+            trainer = DistillationTrainer(
+                teacher_model=teacher_model,
+                distillation_alpha=config.distillation_alpha,
+                distillation_temperature=config.distillation_temperature,
+                model=model,
+                args=distill_args,
+                train_dataset=train_dataset,
+                eval_dataset=eval_dataset,
+                peft_config=peft_config,
+                processing_class=tokenizer,
+                callbacks=[WebSocketCallback(job_id, job_manager, event_loop)]
+            )
         else:
             # ORPO Configuration (default)
             logger.info("Configuring ORPO (Odds Ratio Preference Optimization) trainer")
@@ -938,6 +1132,13 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
         # This prevents OOM when loading the model again for merging
         logger.info("🧹 Cleaning up training resources to free VRAM...")
         del trainer, model
+        # Also clean up teacher model if distillation was used
+        if training_mode == "distillation":
+            try:
+                del teacher_model
+                logger.info("🧹 Teacher model cleaned up")
+            except NameError:
+                pass  # teacher_model wasn't defined (shouldn't happen)
         gc.collect()
         torch.cuda.empty_cache()
         logger.info("✅ VRAM freed successfully")
