@@ -202,7 +202,7 @@ class DatasetConfig(BaseModel):
     max_samples: Optional[int] = Field(None, description="Limit dataset size (for testing)")
 
     # Training mode (affects schema validation)
-    training_mode: str = Field("orpo", description="Training mode: 'sft' or 'orpo'. For SFT, rejected column is optional.")
+    training_mode: str = Field("orpo", description="Training mode: 'sft', 'orpo', or 'distillation'. For SFT/distillation, rejected column is optional.")
 
 
 # Pydantic models
@@ -232,10 +232,15 @@ class TrainingConfig(BaseModel):
     max_prompt_length: int = Field(1024, ge=256, le=4096)
 
     # Training mode
-    training_mode: str = Field("orpo", description="Training mode: 'sft' or 'orpo'")
+    training_mode: str = Field("orpo", description="Training mode: 'sft', 'orpo', or 'distillation'")
 
     # ORPO specific
     beta: float = Field(0.1, ge=0.01, le=1.0, description="ORPO beta parameter (only used when training_mode='orpo')")
+
+    # Distillation specific
+    teacher_model: Optional[str] = Field(None, description="Teacher model for distillation (HuggingFace model ID or local path). Required when training_mode='distillation'")
+    distillation_alpha: float = Field(0.5, ge=0.0, le=1.0, description="Weight for distillation loss vs standard loss (0=only standard, 1=only distillation)")
+    distillation_temperature: float = Field(2.0, ge=1.0, le=20.0, description="Temperature for softmax in distillation (higher=softer probability distribution)")
 
     # Dataset configuration
     dataset: DatasetConfig = Field(

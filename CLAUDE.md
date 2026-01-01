@@ -6,6 +6,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Merlina is a magical LLM training system with support for both ORPO (Odds Ratio Preference Optimization) and SFT (Supervised Fine-Tuning). It provides a delightful wizard-themed web interface for fine-tuning language models with LoRA adapters. The system supports flexible dataset loading from multiple sources and automatic chat template formatting.
 
+**New in v1.3:**
+- **Distillation Mode**: Train a smaller student model using knowledge from a larger teacher model
+- Configurable distillation temperature and loss weight (alpha)
+- Pre-flight validation for teacher model access and VRAM estimation
+
 **New in v1.2:**
 - **SFT Mode**: Train with only chosen responses (rejected field not required)
 - Dynamic UI that adapts based on selected training mode
@@ -126,6 +131,7 @@ Formatters transform these into chat-formatted strings with proper special token
 **Training Mode Requirements**:
 - **ORPO Mode**: Requires all three fields (`prompt`, `chosen`, `rejected`) for preference optimization
 - **SFT Mode**: Only uses `prompt` and `chosen` fields. The `rejected` field is ignored if present.
+- **Distillation Mode**: Only uses `prompt` and `chosen` fields, plus requires a `teacher_model` configuration
 
 **Reasoning Field**: When using the Qwen3 format, if a `reasoning` column is present, it will be wrapped in `<think>` tags and prepended to both the chosen and rejected responses. This allows training models with explicit reasoning steps.
 
@@ -189,7 +195,7 @@ Jobs are managed through a priority queue system with configurable concurrency:
 
 ### Training Modes
 
-Merlina supports two training modes, selectable via the `training_mode` configuration parameter:
+Merlina supports three training modes, selectable via the `training_mode` configuration parameter:
 
 **1. ORPO (Odds Ratio Preference Optimization)** - Default
 - Requires: `prompt`, `chosen`, and `rejected` fields
@@ -207,9 +213,21 @@ Merlina supports two training modes, selectable via the `training_mode` configur
 - Trainer: `SFTTrainer` from TRL library
 - Parameters: Does not use `beta` parameter
 
+**3. Distillation (Knowledge Distillation)**
+- Requires: `prompt` and `chosen` fields, plus a `teacher_model`
+- Student model learns from teacher model's output probability distributions
+- Combines SFT loss with KL divergence loss between student and teacher distributions
+- Best for: Compressing large models, transferring capabilities to smaller models
+- Trainer: Custom `DistillationTrainer` (extends SFTTrainer)
+- Parameters:
+  - `teacher_model`: Path or HuggingFace ID of the teacher model (required)
+  - `distillation_alpha`: Weight for distillation loss (0-1, default 0.5)
+  - `distillation_temperature`: Softmax temperature (1-20, default 2.0)
+
 **Choosing a Mode**:
 - Use **ORPO** when you have paired chosen/rejected responses and want to optimize for preference
 - Use **SFT** when you only have good examples or want traditional fine-tuning
+- Use **Distillation** when you want to transfer knowledge from a larger model to a smaller one
 
 ### Training Flow
 
@@ -224,6 +242,7 @@ Merlina supports two training modes, selectable via the `training_mode` configur
    - Choose trainer based on `training_mode`:
      - **ORPO Mode**: Setup ORPOTrainer and train with preference optimization (uses chosen vs rejected)
      - **SFT Mode**: Setup SFTTrainer and train with supervised fine-tuning (uses only chosen)
+     - **Distillation Mode**: Load teacher model, setup DistillationTrainer with KL divergence loss
    - Save to ./models/{output_name}
    - Optionally merge and push to HuggingFace Hub
 4. Frontend polls GET /status/{job_id} for progress updates
