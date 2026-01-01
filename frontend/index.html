@@ -396,12 +396,81 @@
                                 </div>
                             </div>
 
-                            <!-- Advanced LoRA Settings -->
-                            <div class="advanced-section" style="display: none;">
-                                <div class="form-group">
-                                    <label>Target Modules (comma-separated)</label>
-                                    <input type="text" id="target-modules" value="up_proj,down_proj,gate_proj,k_proj,q_proj,v_proj,o_proj" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Which layers to apply LoRA to</small>
+                            <!-- Target Modules / Layer Selection -->
+                            <div class="form-group" style="margin-top: 15px;">
+                                <label style="display: flex; align-items: center; justify-content: space-between;">
+                                    <span>Target Modules</span>
+                                    <button type="button" id="detect-layers-btn" class="detect-layers-btn">
+                                        <span class="detect-layers-icon">🔍</span>
+                                        <span class="detect-layers-text">Detect Layers</span>
+                                    </button>
+                                </label>
+
+                                <!-- Hidden input for storing selected modules -->
+                                <input type="hidden" id="target-modules" value="up_proj,down_proj,gate_proj,k_proj,q_proj,v_proj,o_proj">
+
+                                <!-- Layer Detection Status -->
+                                <div id="layer-detection-status" class="layer-detection-status" style="display: none;">
+                                    <div class="detection-loading">
+                                        <span class="spinner-small"></span>
+                                        <span>Detecting layers...</span>
+                                    </div>
+                                </div>
+
+                                <!-- Detected Layers Container -->
+                                <div id="detected-layers-container" class="detected-layers-container" style="display: none;">
+                                    <div class="layer-category" id="category-attention">
+                                        <div class="category-header" data-category="attention">
+                                            <span class="category-toggle">▼</span>
+                                            <span class="category-icon">🎯</span>
+                                            <span class="category-name">Attention Layers</span>
+                                            <span class="category-count"></span>
+                                        </div>
+                                        <div class="category-layers"></div>
+                                    </div>
+                                    <div class="layer-category" id="category-mlp">
+                                        <div class="category-header" data-category="mlp">
+                                            <span class="category-toggle">▼</span>
+                                            <span class="category-icon">⚡</span>
+                                            <span class="category-name">MLP Layers</span>
+                                            <span class="category-count"></span>
+                                        </div>
+                                        <div class="category-layers"></div>
+                                    </div>
+                                    <div class="layer-category" id="category-embedding">
+                                        <div class="category-header" data-category="embedding">
+                                            <span class="category-toggle">▼</span>
+                                            <span class="category-icon">📚</span>
+                                            <span class="category-name">Embedding Layers</span>
+                                            <span class="category-count"></span>
+                                        </div>
+                                        <div class="category-layers"></div>
+                                    </div>
+                                    <div class="layer-category" id="category-other" style="display: none;">
+                                        <div class="category-header" data-category="other">
+                                            <span class="category-toggle">▼</span>
+                                            <span class="category-icon">📦</span>
+                                            <span class="category-name">Other Layers</span>
+                                            <span class="category-count"></span>
+                                        </div>
+                                        <div class="category-layers"></div>
+                                    </div>
+
+                                    <!-- Layer Selection Summary -->
+                                    <div class="layer-selection-summary">
+                                        <span id="selected-layers-count">7 layers selected</span>
+                                        <div class="layer-actions">
+                                            <button type="button" id="select-all-layers" class="layer-action-btn">Select All</button>
+                                            <button type="button" id="select-recommended-layers" class="layer-action-btn recommended">Recommended</button>
+                                            <button type="button" id="clear-layers" class="layer-action-btn">Clear</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Fallback: Manual input when layers not detected -->
+                                <div id="manual-layers-input" class="manual-layers-input">
+                                    <input type="text" id="target-modules-manual" value="up_proj,down_proj,gate_proj,k_proj,q_proj,v_proj,o_proj" class="magic-input" placeholder="e.g., q_proj,v_proj,k_proj">
+                                    <small style="color: #888; font-size: 0.85em;">Enter a model name above and click "Detect Layers" to see available layers, or enter comma-separated layer names manually.</small>
                                 </div>
                             </div>
                         </div>
