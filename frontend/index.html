@@ -403,6 +403,11 @@
                                     <input type="text" id="target-modules" value="up_proj,down_proj,gate_proj,k_proj,q_proj,v_proj,o_proj" class="magic-input">
                                     <small style="color: #888; font-size: 0.85em;">Which layers to apply LoRA to</small>
                                 </div>
+                                <div class="form-group">
+                                    <label>Modules to Save (comma-separated, optional)</label>
+                                    <input type="text" id="modules-to-save" value="" class="magic-input" placeholder="e.g., embed_tokens,lm_head">
+                                    <small style="color: #888; font-size: 0.85em;">Modules to fully fine-tune (not LoRA-adapted) and save with adapter</small>
+                                </div>
                             </div>
                         </div>
                     </div>

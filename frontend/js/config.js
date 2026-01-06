@@ -102,7 +102,8 @@ class ConfigManager {
                 lora_r: parseInt(document.getElementById('lora-r')?.value || 64),
                 lora_alpha: parseInt(document.getElementById('lora-alpha')?.value || 32),
                 lora_dropout: parseFloat(document.getElementById('lora-dropout')?.value || 0.05),
-                target_modules: document.getElementById('target-modules')?.value || ''
+                target_modules: document.getElementById('target-modules')?.value || '',
+                modules_to_save: document.getElementById('modules-to-save')?.value || ''
             };
         }
 
@@ -356,6 +357,7 @@ class ConfigManager {
         if (config.lora_alpha) this.setInputValue('lora-alpha', config.lora_alpha);
         if (config.lora_dropout) this.setInputValue('lora-dropout', config.lora_dropout);
         if (config.target_modules) this.setInputValue('target-modules', config.target_modules);
+        if (config.modules_to_save) this.setInputValue('modules-to-save', config.modules_to_save);
 
         // Training settings
         this.setInputValue('training-mode', config.training_mode || 'orpo');

@@ -149,6 +149,10 @@ class MerlinaApp {
         const targetModulesStr = document.getElementById('target-modules')?.value || '';
         const targetModules = targetModulesStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
 
+        // Parse modules to save
+        const modulesToSaveStr = document.getElementById('modules-to-save')?.value || '';
+        const modulesToSave = modulesToSaveStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
+
         // Get dataset configuration
         let datasetConfig;
         try {
@@ -172,6 +176,7 @@ class MerlinaApp {
             lora_alpha: parseInt(document.getElementById('lora-alpha')?.value || 32),
             lora_dropout: parseFloat(document.getElementById('lora-dropout')?.value || 0.05),
             target_modules: targetModules,
+            modules_to_save: modulesToSave,
 
             // Training
             training_mode: document.getElementById('training-mode')?.value || 'orpo',
