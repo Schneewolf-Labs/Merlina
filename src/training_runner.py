@@ -737,7 +737,8 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
                 lora_dropout=config.lora_dropout,
                 bias="none",
                 task_type="CAUSAL_LM",
-                target_modules=config.target_modules
+                target_modules=config.target_modules,
+                modules_to_save=config.modules_to_save if config.modules_to_save else None
             )
             logger.info(f"LoRA enabled with rank={config.lora_r}, alpha={config.lora_alpha}")
         else:

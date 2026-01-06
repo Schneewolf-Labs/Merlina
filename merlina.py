@@ -222,7 +222,11 @@ class TrainingConfig(BaseModel):
     target_modules: list[str] = Field(
         default=['up_proj', 'down_proj', 'gate_proj', 'k_proj', 'q_proj', 'v_proj', 'o_proj']
     )
-    
+    modules_to_save: list[str] = Field(
+        default=[],
+        description="Modules to fully fine-tune (e.g., embed_tokens, lm_head). Not LoRA-adapted, but saved with adapter."
+    )
+
     # Training hyperparameters
     learning_rate: float = Field(5e-6, ge=1e-8, le=1e-3)
     num_epochs: int = Field(2, ge=1, le=10)
@@ -1294,6 +1298,153 @@ async def list_cached_models():
         "cached_models": list(tokenizer_cache.keys()),
         "count": len(tokenizer_cache)
     }
+
+
+class ModelLayersRequest(BaseModel):
+    """Request to detect LoRA-compatible layers in a model"""
+    model_name: str = Field(..., description="HuggingFace model ID or local path")
+    hf_token: Optional[str] = Field(None, description="HuggingFace API token (for gated models)")
+
+
+# Cache for model layer detection results
+_layer_cache: Dict[str, dict] = {}
+_layer_cache_lock = threading.Lock()
+
+
+@app.post("/model/layers")
+async def detect_model_layers(request: ModelLayersRequest):
+    """
+    Detect LoRA-compatible layers in a model.
+    Returns all Linear layer names that can be targeted by LoRA.
+    """
+    import torch.nn as nn
+
+    try:
+        model_name = request.model_name
+
+        # Check cache first
+        with _layer_cache_lock:
+            if model_name in _layer_cache:
+                logger.info(f"Using cached layer info for {model_name}")
+                return _layer_cache[model_name]
+
+        logger.info(f"Detecting layers for {model_name}...")
+
+        # Set HF token if provided
+        if request.hf_token:
+            os.environ["HF_TOKEN"] = request.hf_token
+
+        # Load model with minimal memory footprint for layer detection
+        model = AutoModelForCausalLM.from_pretrained(
+            model_name,
+            torch_dtype=torch.float16,
+            device_map="cpu",  # Load on CPU to minimize GPU memory
+            trust_remote_code=True,
+            token=request.hf_token,
+            low_cpu_mem_usage=True,
+        )
+
+        # Find all unique layer name patterns (Linear and Embedding)
+        linear_layer_names = set()
+        embedding_layer_names = set()
+        layer_details = []
+
+        for name, module in model.named_modules():
+            # Check for nn.Linear or any linear-like layer (quantized, custom, etc.)
+            # Linear layers have in_features and out_features attributes
+            is_linear = isinstance(module, nn.Linear) or (
+                hasattr(module, 'in_features') and
+                hasattr(module, 'out_features') and
+                hasattr(module, 'weight')
+            )
+
+            # Check for nn.Embedding layers
+            is_embedding = isinstance(module, nn.Embedding) or (
+                hasattr(module, 'num_embeddings') and
+                hasattr(module, 'embedding_dim') and
+                hasattr(module, 'weight')
+            )
+
+            if is_linear:
+                # Extract the layer type name (e.g., "q_proj" from "model.layers.0.self_attn.q_proj")
+                layer_type = name.split(".")[-1]
+                linear_layer_names.add(layer_type)
+
+                # Collect detailed info for first occurrence of each type
+                if not any(d["name"] == layer_type for d in layer_details):
+                    layer_details.append({
+                        "name": layer_type,
+                        "full_path_example": name,
+                        "in_features": module.in_features,
+                        "out_features": module.out_features,
+                        "layer_class": "linear",
+                    })
+
+            elif is_embedding:
+                layer_type = name.split(".")[-1]
+                embedding_layer_names.add(layer_type)
+
+                if not any(d["name"] == layer_type for d in layer_details):
+                    layer_details.append({
+                        "name": layer_type,
+                        "full_path_example": name,
+                        "in_features": module.num_embeddings,
+                        "out_features": module.embedding_dim,
+                        "layer_class": "embedding",
+                    })
+
+        # Combine all trainable layers
+        all_layer_names = linear_layer_names | embedding_layer_names
+        sorted_layers = sorted(all_layer_names)
+
+        # Categorize layers into common groups
+        attention_layers = [l for l in sorted_layers if any(x in l for x in ["q_proj", "k_proj", "v_proj", "o_proj", "qkv", "attn"])]
+        mlp_layers = [l for l in sorted_layers if any(x in l for x in ["up_proj", "down_proj", "gate_proj", "fc1", "fc2", "mlp", "dense"])]
+        # Embedding category: actual nn.Embedding layers + lm_head (output projection)
+        embedding_layers = sorted(embedding_layer_names | {l for l in linear_layer_names if "lm_head" in l})
+        other_layers = [l for l in sorted_layers if l not in attention_layers + mlp_layers + embedding_layers]
+
+        # Default recommended layers (common LoRA targets - excluding embeddings)
+        default_targets = ["q_proj", "k_proj", "v_proj", "o_proj", "up_proj", "down_proj", "gate_proj"]
+        recommended = [l for l in sorted_layers if l in default_targets]
+
+        # If no standard layers found, recommend attention-like layers
+        if not recommended:
+            recommended = attention_layers[:4] if attention_layers else sorted_layers[:4]
+
+        result = {
+            "status": "success",
+            "model_name": model_name,
+            "layers": sorted_layers,
+            "layer_details": sorted(layer_details, key=lambda x: x["name"]),
+            "categories": {
+                "attention": attention_layers,
+                "mlp": mlp_layers,
+                "embedding": embedding_layers,
+                "other": other_layers,
+            },
+            "recommended": recommended,
+            "total_layers": len(sorted_layers),
+            "total_linear": len(linear_layer_names),
+            "total_embedding": len(embedding_layer_names),
+        }
+
+        # Cache the result
+        with _layer_cache_lock:
+            _layer_cache[model_name] = result
+
+        # Clean up model to free memory
+        del model
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        logger.info(f"Detected {len(linear_layer_names)} linear + {len(embedding_layer_names)} embedding layers in {model_name}")
+        return result
+
+    except Exception as e:
+        logger.error(f"Failed to detect model layers: {e}")
+        raise HTTPException(status_code=400, detail=f"Failed to detect layers: {str(e)}")
 
 
 if __name__ == "__main__":

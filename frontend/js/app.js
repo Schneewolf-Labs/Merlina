@@ -53,6 +53,9 @@ class MerlinaApp {
         // Setup LoRA toggle
         this.setupLoRAToggle();
 
+        // Setup layer detection
+        this.setupLayerDetection();
+
         // Setup training mode toggle
         this.setupTrainingModeToggle();
 
@@ -145,9 +148,17 @@ class MerlinaApp {
      * Collect training configuration from form
      */
     collectTrainingConfig() {
-        // Parse target modules
-        const targetModulesStr = document.getElementById('target-modules')?.value || '';
+        // Parse target modules - check hidden field first, then manual input
+        let targetModulesStr = document.getElementById('target-modules')?.value || '';
+        // Fallback to manual input if hidden field is empty
+        if (!targetModulesStr) {
+            targetModulesStr = document.getElementById('target-modules-manual')?.value || '';
+        }
         const targetModules = targetModulesStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
+
+        // Parse modules to save
+        const modulesToSaveStr = document.getElementById('modules-to-save')?.value || '';
+        const modulesToSave = modulesToSaveStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
 
         // Get dataset configuration
         let datasetConfig;
@@ -172,6 +183,7 @@ class MerlinaApp {
             lora_alpha: parseInt(document.getElementById('lora-alpha')?.value || 32),
             lora_dropout: parseFloat(document.getElementById('lora-dropout')?.value || 0.05),
             target_modules: targetModules,
+            modules_to_save: modulesToSave,
 
             // Training
             training_mode: document.getElementById('training-mode')?.value || 'orpo',
@@ -294,6 +306,274 @@ class MerlinaApp {
             if (loraSettings) loraSettings.style.display = 'block';
             if (mergeLoraConfig) mergeLoraConfig.style.display = 'block';
         }
+    }
+
+    /**
+     * Setup layer detection for LoRA target modules
+     */
+    setupLayerDetection() {
+        const detectBtn = document.getElementById('detect-layers-btn');
+        const statusDiv = document.getElementById('layer-detection-status');
+        const layersContainer = document.getElementById('detected-layers-container');
+        const manualInput = document.getElementById('manual-layers-input');
+        const targetModulesHidden = document.getElementById('target-modules');
+        const targetModulesManual = document.getElementById('target-modules-manual');
+
+        if (!detectBtn) return;
+
+        // Store detected layers data
+        this.detectedLayers = null;
+        this.recommendedLayers = [];
+
+        // Detect layers button click
+        detectBtn.addEventListener('click', async () => {
+            await this.detectModelLayers();
+        });
+
+        // Setup action buttons
+        const selectAllBtn = document.getElementById('select-all-layers');
+        const selectRecommendedBtn = document.getElementById('select-recommended-layers');
+        const clearBtn = document.getElementById('clear-layers');
+
+        if (selectAllBtn) {
+            selectAllBtn.addEventListener('click', () => this.selectAllLayers());
+        }
+        if (selectRecommendedBtn) {
+            selectRecommendedBtn.addEventListener('click', () => this.selectRecommendedLayers());
+        }
+        if (clearBtn) {
+            clearBtn.addEventListener('click', () => this.clearLayerSelection());
+        }
+
+        // Setup category toggle (collapse/expand)
+        document.querySelectorAll('.category-header').forEach(header => {
+            header.addEventListener('click', (e) => {
+                const category = header.closest('.layer-category');
+                const layersDiv = category.querySelector('.category-layers');
+                const toggle = header.querySelector('.category-toggle');
+
+                if (layersDiv.style.display === 'none') {
+                    layersDiv.style.display = 'block';
+                    toggle.textContent = '▼';
+                } else {
+                    layersDiv.style.display = 'none';
+                    toggle.textContent = '▶';
+                }
+            });
+        });
+
+        // Sync manual input to hidden field
+        if (targetModulesManual) {
+            targetModulesManual.addEventListener('input', () => {
+                if (targetModulesHidden) {
+                    targetModulesHidden.value = targetModulesManual.value;
+                }
+            });
+        }
+    }
+
+    /**
+     * Detect model layers via API
+     */
+    async detectModelLayers() {
+        const modelName = document.getElementById('base-model')?.value?.trim();
+        const hfToken = document.getElementById('hf-token')?.value || document.getElementById('hf-token-preload')?.value;
+
+        if (!modelName) {
+            this.toast.error('Please enter a model name first');
+            return;
+        }
+
+        const detectBtn = document.getElementById('detect-layers-btn');
+        const statusDiv = document.getElementById('layer-detection-status');
+        const layersContainer = document.getElementById('detected-layers-container');
+        const manualInput = document.getElementById('manual-layers-input');
+
+        // Show loading state
+        detectBtn.disabled = true;
+        detectBtn.querySelector('.detect-layers-text').textContent = 'Detecting...';
+        statusDiv.style.display = 'block';
+        layersContainer.style.display = 'none';
+
+        try {
+            const response = await fetch('/model/layers', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    model_name: modelName,
+                    hf_token: hfToken || null
+                })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail || 'Failed to detect layers');
+            }
+
+            const data = await response.json();
+            this.detectedLayers = data;
+            this.recommendedLayers = data.recommended || [];
+
+            // Populate the UI
+            this.populateLayerCategories(data);
+
+            // Show layers container, hide manual input
+            layersContainer.style.display = 'block';
+            manualInput.style.display = 'none';
+            statusDiv.style.display = 'none';
+
+            // Select recommended layers by default
+            this.selectRecommendedLayers();
+
+            const linearCount = data.total_linear || data.total_layers || 0;
+            const embeddingCount = data.total_embedding || 0;
+            const msg = embeddingCount > 0
+                ? `Detected ${linearCount} linear + ${embeddingCount} embedding layers`
+                : `Detected ${linearCount} layer types`;
+            this.toast.success(msg);
+
+        } catch (error) {
+            console.error('Layer detection failed:', error);
+            this.toast.error(`Layer detection failed: ${error.message}`);
+            statusDiv.style.display = 'none';
+        } finally {
+            detectBtn.disabled = false;
+            detectBtn.querySelector('.detect-layers-text').textContent = 'Detect Layers';
+        }
+    }
+
+    /**
+     * Populate layer categories in the UI
+     */
+    populateLayerCategories(data) {
+        const categories = {
+            attention: document.querySelector('#category-attention .category-layers'),
+            mlp: document.querySelector('#category-mlp .category-layers'),
+            embedding: document.querySelector('#category-embedding .category-layers'),
+            other: document.querySelector('#category-other .category-layers')
+        };
+
+        const categoryContainers = {
+            attention: document.getElementById('category-attention'),
+            mlp: document.getElementById('category-mlp'),
+            embedding: document.getElementById('category-embedding'),
+            other: document.getElementById('category-other')
+        };
+
+        // Clear existing layers
+        Object.values(categories).forEach(cat => {
+            if (cat) cat.innerHTML = '';
+        });
+
+        // Populate each category
+        for (const [catName, layers] of Object.entries(data.categories)) {
+            const container = categories[catName];
+            const categoryContainer = categoryContainers[catName];
+
+            if (!container || !categoryContainer) continue;
+
+            if (layers.length === 0) {
+                categoryContainer.style.display = 'none';
+                continue;
+            }
+
+            categoryContainer.style.display = 'block';
+
+            // Update count
+            const countSpan = categoryContainer.querySelector('.category-count');
+            if (countSpan) {
+                countSpan.textContent = `(${layers.length})`;
+            }
+
+            // Create checkboxes for each layer
+            layers.forEach(layerName => {
+                const layerDiv = document.createElement('div');
+                layerDiv.className = 'layer-item';
+
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.id = `layer-${layerName}`;
+                checkbox.value = layerName;
+                checkbox.className = 'layer-checkbox';
+                checkbox.addEventListener('change', () => this.updateSelectedLayers());
+
+                const label = document.createElement('label');
+                label.htmlFor = `layer-${layerName}`;
+                label.textContent = layerName;
+
+                // Get layer details
+                const detail = data.layer_details.find(d => d.name === layerName);
+                if (detail) {
+                    const info = document.createElement('span');
+                    info.className = 'layer-info';
+                    const layerClass = detail.layer_class === 'embedding' ? '📦' : '';
+                    info.textContent = `${layerClass}${detail.in_features}→${detail.out_features}`;
+                    info.title = detail.layer_class === 'embedding'
+                        ? 'Embedding layer (vocab_size→hidden_dim)'
+                        : 'Linear layer (in→out)';
+                    label.appendChild(info);
+                }
+
+                // Mark recommended layers
+                if (this.recommendedLayers.includes(layerName)) {
+                    layerDiv.classList.add('recommended');
+                }
+
+                layerDiv.appendChild(checkbox);
+                layerDiv.appendChild(label);
+                container.appendChild(layerDiv);
+            });
+        }
+    }
+
+    /**
+     * Update selected layers and sync to hidden input
+     */
+    updateSelectedLayers() {
+        const checkboxes = document.querySelectorAll('.layer-checkbox:checked');
+        const selectedLayers = Array.from(checkboxes).map(cb => cb.value);
+
+        // Update hidden input
+        const targetModulesHidden = document.getElementById('target-modules');
+        if (targetModulesHidden) {
+            targetModulesHidden.value = selectedLayers.join(',');
+        }
+
+        // Update count display
+        const countSpan = document.getElementById('selected-layers-count');
+        if (countSpan) {
+            countSpan.textContent = `${selectedLayers.length} layer${selectedLayers.length !== 1 ? 's' : ''} selected`;
+        }
+    }
+
+    /**
+     * Select all detected layers
+     */
+    selectAllLayers() {
+        document.querySelectorAll('.layer-checkbox').forEach(cb => {
+            cb.checked = true;
+        });
+        this.updateSelectedLayers();
+    }
+
+    /**
+     * Select only recommended layers
+     */
+    selectRecommendedLayers() {
+        document.querySelectorAll('.layer-checkbox').forEach(cb => {
+            cb.checked = this.recommendedLayers.includes(cb.value);
+        });
+        this.updateSelectedLayers();
+    }
+
+    /**
+     * Clear all layer selections
+     */
+    clearLayerSelection() {
+        document.querySelectorAll('.layer-checkbox').forEach(cb => {
+            cb.checked = false;
+        });
+        this.updateSelectedLayers();
     }
 
     /**
