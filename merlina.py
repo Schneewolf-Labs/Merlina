@@ -1344,8 +1344,9 @@ async def detect_model_layers(request: ModelLayersRequest):
             low_cpu_mem_usage=True,
         )
 
-        # Find all unique Linear layer name patterns
+        # Find all unique layer name patterns (Linear and Embedding)
         linear_layer_names = set()
+        embedding_layer_names = set()
         layer_details = []
 
         for name, module in model.named_modules():
@@ -1354,6 +1355,13 @@ async def detect_model_layers(request: ModelLayersRequest):
             is_linear = isinstance(module, nn.Linear) or (
                 hasattr(module, 'in_features') and
                 hasattr(module, 'out_features') and
+                hasattr(module, 'weight')
+            )
+
+            # Check for nn.Embedding layers
+            is_embedding = isinstance(module, nn.Embedding) or (
+                hasattr(module, 'num_embeddings') and
+                hasattr(module, 'embedding_dim') and
                 hasattr(module, 'weight')
             )
 
@@ -1369,18 +1377,34 @@ async def detect_model_layers(request: ModelLayersRequest):
                         "full_path_example": name,
                         "in_features": module.in_features,
                         "out_features": module.out_features,
+                        "layer_class": "linear",
                     })
 
-        # Sort layer names for consistent display
-        sorted_layers = sorted(linear_layer_names)
+            elif is_embedding:
+                layer_type = name.split(".")[-1]
+                embedding_layer_names.add(layer_type)
+
+                if not any(d["name"] == layer_type for d in layer_details):
+                    layer_details.append({
+                        "name": layer_type,
+                        "full_path_example": name,
+                        "in_features": module.num_embeddings,
+                        "out_features": module.embedding_dim,
+                        "layer_class": "embedding",
+                    })
+
+        # Combine all trainable layers
+        all_layer_names = linear_layer_names | embedding_layer_names
+        sorted_layers = sorted(all_layer_names)
 
         # Categorize layers into common groups
         attention_layers = [l for l in sorted_layers if any(x in l for x in ["q_proj", "k_proj", "v_proj", "o_proj", "qkv", "attn"])]
         mlp_layers = [l for l in sorted_layers if any(x in l for x in ["up_proj", "down_proj", "gate_proj", "fc1", "fc2", "mlp", "dense"])]
-        embedding_layers = [l for l in sorted_layers if any(x in l for x in ["embed", "lm_head", "wte", "wpe"])]
+        # Embedding category: actual nn.Embedding layers + lm_head (output projection)
+        embedding_layers = sorted(embedding_layer_names | {l for l in linear_layer_names if "lm_head" in l})
         other_layers = [l for l in sorted_layers if l not in attention_layers + mlp_layers + embedding_layers]
 
-        # Default recommended layers (common LoRA targets)
+        # Default recommended layers (common LoRA targets - excluding embeddings)
         default_targets = ["q_proj", "k_proj", "v_proj", "o_proj", "up_proj", "down_proj", "gate_proj"]
         recommended = [l for l in sorted_layers if l in default_targets]
 
@@ -1400,7 +1424,9 @@ async def detect_model_layers(request: ModelLayersRequest):
                 "other": other_layers,
             },
             "recommended": recommended,
-            "total_linear_layers": len(sorted_layers),
+            "total_layers": len(sorted_layers),
+            "total_linear": len(linear_layer_names),
+            "total_embedding": len(embedding_layer_names),
         }
 
         # Cache the result
@@ -1413,7 +1439,7 @@ async def detect_model_layers(request: ModelLayersRequest):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-        logger.info(f"Detected {len(sorted_layers)} unique linear layer types in {model_name}")
+        logger.info(f"Detected {len(linear_layer_names)} linear + {len(embedding_layer_names)} embedding layers in {model_name}")
         return result
 
     except Exception as e:

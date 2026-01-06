@@ -425,7 +425,12 @@ class MerlinaApp {
             // Select recommended layers by default
             this.selectRecommendedLayers();
 
-            this.toast.success(`Detected ${data.total_linear_layers} layer types`);
+            const linearCount = data.total_linear || data.total_layers || 0;
+            const embeddingCount = data.total_embedding || 0;
+            const msg = embeddingCount > 0
+                ? `Detected ${linearCount} linear + ${embeddingCount} embedding layers`
+                : `Detected ${linearCount} layer types`;
+            this.toast.success(msg);
 
         } catch (error) {
             console.error('Layer detection failed:', error);
@@ -501,7 +506,11 @@ class MerlinaApp {
                 if (detail) {
                     const info = document.createElement('span');
                     info.className = 'layer-info';
-                    info.textContent = `${detail.in_features}→${detail.out_features}`;
+                    const layerClass = detail.layer_class === 'embedding' ? '📦' : '';
+                    info.textContent = `${layerClass}${detail.in_features}→${detail.out_features}`;
+                    info.title = detail.layer_class === 'embedding'
+                        ? 'Embedding layer (vocab_size→hidden_dim)'
+                        : 'Linear layer (in→out)';
                     label.appendChild(info);
                 }
 
