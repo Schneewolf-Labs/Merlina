@@ -955,15 +955,17 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
                     logger.warning("⚠️ push_to_hub enabled but no HF token provided - skipping upload")
                     logger.info("💡 Provide HF_TOKEN in .env or via hf_token parameter to enable uploads")
                 else:
-                    # Start upload in a background daemon thread
+                    # Start upload in a background thread
                     # This allows the job queue worker to continue processing other jobs
                     # while the upload (which can take a long time) runs in the background
+                    # Note: Using daemon=False so uploads can complete even during shutdown
+                    # The thread handles its own error cases gracefully
                     logger.info("📤 Starting background upload thread...")
                     upload_thread = threading.Thread(
                         target=_run_background_upload,
                         args=(config, final_output_dir, training_mode, job_id, job_manager, event_loop),
                         name=f"UploadThread-{job_id}",
-                        daemon=True  # Daemon thread won't prevent process exit
+                        daemon=False  # Non-daemon to allow upload completion
                     )
                     upload_thread.start()
                     upload_thread_started = True
@@ -1024,5 +1026,26 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
             if config.use_wandb and wandb.run is not None:
                 wandb.finish(exit_code=1)
                 logger.info("W&B run finished (marked as failed)")
-        except Exception:
-            pass  # Ignore errors when finishing wandb on failure
+        except Exception as wandb_error:
+            logger.debug(f"Could not finish W&B run on failure: {wandb_error}")
+
+    finally:
+        # Ensure GPU memory is freed even on error
+        # This prevents OOM errors in subsequent training jobs
+        try:
+            # Clean up trainer if it exists in local scope
+            local_vars = locals()
+            if 'trainer' in local_vars and local_vars['trainer'] is not None:
+                del trainer
+            # Clean up model if it exists in local scope
+            if 'model' in local_vars and local_vars['model'] is not None:
+                del model
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+                logger.debug("GPU memory cleaned up in finally block")
+        except NameError:
+            # Variables weren't defined yet, nothing to clean up
+            pass
+        except Exception as cleanup_error:
+            logger.debug(f"Error during cleanup: {cleanup_error}")

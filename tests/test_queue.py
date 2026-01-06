@@ -24,7 +24,7 @@ from src.job_manager import JobManager
 
 
 def simple_task(job_id: str, config: dict):
-    """Simple test task that sleeps for a bit"""
+    """Simple test task that sleeps for a bit."""
     print(f"[{job_id}] Starting task with config: {config}")
     duration = config.get("duration", 2)
 
@@ -33,6 +33,28 @@ def simple_task(job_id: str, config: dict):
         time.sleep(1)
 
     print(f"[{job_id}] Task completed!")
+
+
+def wait_for_job_start(queue, max_wait: float = 2.0, poll_interval: float = 0.1) -> bool:
+    """
+    Wait for at least one job to start running.
+
+    Args:
+        queue: JobQueue instance
+        max_wait: Maximum time to wait in seconds
+        poll_interval: Time between checks in seconds
+
+    Returns:
+        True if a job started, False if timeout reached
+    """
+    elapsed = 0.0
+    while elapsed < max_wait:
+        running = queue.list_running_jobs()
+        if running:
+            return True
+        time.sleep(poll_interval)
+        elapsed += poll_interval
+    return False
 
 
 def test_basic_queue():
@@ -82,8 +104,8 @@ def test_priority_queue():
     queue.submit("high-1", {"duration": 1}, simple_task, JobPriority.HIGH)
     queue.submit("low-2", {"duration": 1}, simple_task, JobPriority.LOW)
 
-    # Give first job time to start
-    time.sleep(0.5)
+    # Wait for first job to start (with timeout instead of fixed sleep)
+    wait_for_job_start(queue)
 
     # Check queued jobs order
     queued = queue.list_queued_jobs()
@@ -111,8 +133,8 @@ def test_job_cancellation():
     queue.submit("cancel-2", {"duration": 3}, simple_task, JobPriority.NORMAL)
     queue.submit("cancel-3", {"duration": 3}, simple_task, JobPriority.NORMAL)
 
-    # Wait a bit
-    time.sleep(0.5)
+    # Wait for first job to start
+    wait_for_job_start(queue)
 
     # Cancel queued job
     print("\nCancelling cancel-2 (should be queued)...")
@@ -142,8 +164,8 @@ def test_concurrent_execution():
     for i in range(4):
         queue.submit(f"concurrent-{i+1}", {"duration": 2}, simple_task, JobPriority.NORMAL)
 
-    # Wait a bit for jobs to start
-    time.sleep(0.5)
+    # Wait for jobs to start
+    wait_for_job_start(queue)
 
     # Check running jobs
     running = queue.list_running_jobs()
@@ -176,8 +198,8 @@ def test_with_job_manager():
     job_manager.create_job(job_id, {"test": "config"})
     queue.submit(job_id, {"duration": 2}, simple_task, JobPriority.NORMAL)
 
-    # Check job status
-    time.sleep(0.5)
+    # Wait for job to start running
+    wait_for_job_start(queue)
     job = job_manager.get_job(job_id)
     print(f"\nJob status from database: {job.status}")
 

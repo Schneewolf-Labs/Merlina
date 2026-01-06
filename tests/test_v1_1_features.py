@@ -126,14 +126,9 @@ def test_websocket_manager():
         except Exception as e:
             print(f"⚠️  No connections to send to (expected): {type(e).__name__}")
 
-    # Run async tests
-    try:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(test_messages())
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(test_messages())
+    # Run async tests using asyncio.run() (Python 3.7+)
+    # This is the recommended way to run async code from sync context
+    asyncio.run(test_messages())
 
     print("\n✅ WebSocket Manager tests passed!\n")
     return True
