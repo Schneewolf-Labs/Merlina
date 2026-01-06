@@ -222,7 +222,11 @@ class TrainingConfig(BaseModel):
     target_modules: list[str] = Field(
         default=['up_proj', 'down_proj', 'gate_proj', 'k_proj', 'q_proj', 'v_proj', 'o_proj']
     )
-    
+    modules_to_save: list[str] = Field(
+        default=[],
+        description="Modules to fully fine-tune (e.g., embed_tokens, lm_head). Not LoRA-adapted, but saved with adapter."
+    )
+
     # Training hyperparameters
     learning_rate: float = Field(5e-6, ge=1e-8, le=1e-3)
     num_epochs: int = Field(2, ge=1, le=10)
