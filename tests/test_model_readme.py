@@ -286,6 +286,50 @@ def test_readme_merlina_badge():
     print()
 
 
+def test_readme_keyword_tags_orpo():
+    """Test that README includes keyword tags for ORPO mode"""
+    print("=" * 70)
+    print("Test 10a: Keyword tags for ORPO mode")
+    print("=" * 70)
+
+    config = MockTrainingConfig()
+    readme = generate_model_readme(config, "orpo")
+
+    assert "tags:" in readme, "README should have tags field"
+    assert "- merlina" in readme, "Should include merlina tag"
+    assert "- text-generation" in readme, "Should include text-generation tag"
+    assert "- orpo" in readme, "Should include orpo tag for ORPO mode"
+
+    print("  ✓ tags field present in frontmatter")
+    print("  ✓ merlina tag present")
+    print("  ✓ text-generation tag present")
+    print("  ✓ orpo tag present")
+    print()
+
+
+def test_readme_keyword_tags_sft():
+    """Test that README includes keyword tags for SFT mode"""
+    print("=" * 70)
+    print("Test 10b: Keyword tags for SFT mode")
+    print("=" * 70)
+
+    config = MockTrainingConfig()
+    readme = generate_model_readme(config, "sft")
+
+    assert "tags:" in readme, "README should have tags field"
+    assert "- merlina" in readme, "Should include merlina tag"
+    assert "- text-generation" in readme, "Should include text-generation tag"
+    assert "- sft" in readme, "Should include sft tag for SFT mode"
+    assert "- orpo" not in readme, "Should not include orpo tag for SFT mode"
+
+    print("  ✓ tags field present in frontmatter")
+    print("  ✓ merlina tag present")
+    print("  ✓ text-generation tag present")
+    print("  ✓ sft tag present")
+    print("  ✓ orpo tag correctly excluded")
+    print()
+
+
 def test_readme_quantization():
     """Test that quantization info is included when enabled"""
     print("=" * 70)
@@ -367,6 +411,8 @@ if __name__ == "__main__":
         test_readme_sft_mode()
         test_readme_orpo_mode()
         test_readme_merlina_badge()
+        test_readme_keyword_tags_orpo()
+        test_readme_keyword_tags_sft()
         test_readme_quantization()
         test_readme_gpu_info()
 
