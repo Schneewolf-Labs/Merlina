@@ -84,6 +84,12 @@ def generate_model_readme(config: Any, training_mode: str) -> str:
         "library_name: transformers",
     ]
 
+    # Add keyword tags for discoverability
+    frontmatter_lines.append("tags:")
+    frontmatter_lines.append("- merlina")
+    frontmatter_lines.append("- text-generation")
+    frontmatter_lines.append(f"- {training_mode.lower()}")  # sft or orpo
+
     # Add dataset info if using HuggingFace dataset
     if hasattr(config, 'dataset') and hasattr(config.dataset, 'source'):
         source = config.dataset.source
