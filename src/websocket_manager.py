@@ -5,6 +5,7 @@ Broadcasts training progress, metrics, and status to connected clients
 
 import asyncio
 import logging
+import time
 from typing import Set, Dict, Any, Optional
 from fastapi import WebSocket
 import json
@@ -15,6 +16,7 @@ logger = logging.getLogger(__name__)
 class WebSocketManager:
     """
     Manages WebSocket connections and broadcasts updates to clients.
+    Thread-safe implementation using asyncio.Lock for collection access.
     """
 
     def __init__(self):
@@ -23,6 +25,9 @@ class WebSocketManager:
 
         # Job-specific connections (job_id -> set of websockets)
         self.job_connections: Dict[str, Set[WebSocket]] = {}
+
+        # Lock for thread-safe access to connection collections
+        self._lock: asyncio.Lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket, job_id: Optional[str] = None):
         """
@@ -33,17 +38,18 @@ class WebSocketManager:
             job_id: Optional job ID to subscribe to specific job updates
         """
         await websocket.accept()
-        self.active_connections.add(websocket)
+        async with self._lock:
+            self.active_connections.add(websocket)
 
-        if job_id:
-            if job_id not in self.job_connections:
-                self.job_connections[job_id] = set()
-            self.job_connections[job_id].add(websocket)
-            logger.info(f"WebSocket connected for job {job_id}")
-        else:
-            logger.info("WebSocket connected (global)")
+            if job_id:
+                if job_id not in self.job_connections:
+                    self.job_connections[job_id] = set()
+                self.job_connections[job_id].add(websocket)
+                logger.info(f"WebSocket connected for job {job_id}")
+            else:
+                logger.info("WebSocket connected (global)")
 
-    def disconnect(self, websocket: WebSocket, job_id: Optional[str] = None):
+    async def disconnect(self, websocket: WebSocket, job_id: Optional[str] = None):
         """
         Remove a WebSocket connection.
 
@@ -51,18 +57,19 @@ class WebSocketManager:
             websocket: WebSocket connection
             job_id: Optional job ID if subscribed to specific job
         """
-        self.active_connections.discard(websocket)
+        async with self._lock:
+            self.active_connections.discard(websocket)
 
-        if job_id and job_id in self.job_connections:
-            self.job_connections[job_id].discard(websocket)
+            if job_id and job_id in self.job_connections:
+                self.job_connections[job_id].discard(websocket)
 
-            # Clean up empty job connection sets
-            if not self.job_connections[job_id]:
-                del self.job_connections[job_id]
+                # Clean up empty job connection sets
+                if not self.job_connections[job_id]:
+                    del self.job_connections[job_id]
 
-            logger.info(f"WebSocket disconnected from job {job_id}")
-        else:
-            logger.info("WebSocket disconnected (global)")
+                logger.info(f"WebSocket disconnected from job {job_id}")
+            else:
+                logger.info("WebSocket disconnected (global)")
 
     async def broadcast(self, message: Dict[str, Any]):
         """
@@ -71,15 +78,19 @@ class WebSocketManager:
         Args:
             message: Dictionary to send as JSON
         """
-        if not self.active_connections:
-            return
+        async with self._lock:
+            if not self.active_connections:
+                return
 
-        # Convert to JSON
-        json_message = json.dumps(message)
+            # Convert to JSON
+            json_message = json.dumps(message)
 
-        # Send to all connections
+            # Send to all connections - copy set to avoid modification during iteration
+            connections = set(self.active_connections)
+
+        # Send outside of lock to avoid holding lock during I/O
         disconnected = set()
-        for connection in self.active_connections:
+        for connection in connections:
             try:
                 await connection.send_text(json_message)
             except Exception as e:
@@ -88,7 +99,7 @@ class WebSocketManager:
 
         # Clean up disconnected clients
         for connection in disconnected:
-            self.disconnect(connection)
+            await self.disconnect(connection)
 
     async def broadcast_to_job(self, job_id: str, message: Dict[str, Any]):
         """
@@ -98,21 +109,25 @@ class WebSocketManager:
             job_id: Job identifier
             message: Dictionary to send as JSON
         """
-        if job_id not in self.job_connections:
-            return
+        async with self._lock:
+            if job_id not in self.job_connections:
+                return
 
-        connections = self.job_connections[job_id]
-        if not connections:
-            return
+            connections = self.job_connections[job_id]
+            if not connections:
+                return
 
-        # Add job_id to message if not present
-        if "job_id" not in message:
-            message["job_id"] = job_id
+            # Add job_id to message if not present
+            if "job_id" not in message:
+                message["job_id"] = job_id
 
-        # Convert to JSON
-        json_message = json.dumps(message)
+            # Convert to JSON
+            json_message = json.dumps(message)
 
-        # Send to job-specific connections
+            # Copy set to avoid modification during iteration
+            connections = set(connections)
+
+        # Send outside of lock to avoid holding lock during I/O
         disconnected = set()
         for connection in connections:
             try:
@@ -123,7 +138,7 @@ class WebSocketManager:
 
         # Clean up disconnected clients
         for connection in disconnected:
-            self.disconnect(connection, job_id)
+            await self.disconnect(connection, job_id)
 
     async def send_status_update(
         self,
@@ -158,7 +173,7 @@ class WebSocketManager:
             "job_id": job_id,
             "status": status,
             "progress": progress,
-            "timestamp": asyncio.get_event_loop().time()
+            "timestamp": time.time()
         }
 
         if current_step is not None:
@@ -203,7 +218,7 @@ class WebSocketManager:
             "job_id": job_id,
             "step": step,
             "metrics": metrics,
-            "timestamp": asyncio.get_event_loop().time()
+            "timestamp": time.time()
         }
 
         await self.broadcast_to_job(job_id, message)
@@ -220,7 +235,7 @@ class WebSocketManager:
             "type": "error",
             "job_id": job_id,
             "error": error,
-            "timestamp": asyncio.get_event_loop().time()
+            "timestamp": time.time()
         }
 
         await self.broadcast_to_job(job_id, message)
@@ -243,7 +258,7 @@ class WebSocketManager:
             "type": "completed",
             "job_id": job_id,
             "output_dir": output_dir,
-            "timestamp": asyncio.get_event_loop().time()
+            "timestamp": time.time()
         }
 
         if final_metrics:
@@ -254,6 +269,9 @@ class WebSocketManager:
     def get_connection_count(self, job_id: Optional[str] = None) -> int:
         """
         Get number of active connections.
+
+        Note: This is a non-locking read for performance. The count may be
+        slightly stale in high-concurrency scenarios but is safe to call.
 
         Args:
             job_id: Optional job ID to get job-specific count

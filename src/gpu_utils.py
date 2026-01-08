@@ -90,9 +90,11 @@ class GPUManager:
         if self.nvml_initialized:
             try:
                 pynvml.nvmlShutdown()
-            except Exception:
-                # Silently ignore cleanup errors in destructor
-                pass
+            except Exception as e:
+                # Log cleanup errors at debug level (don't raise in destructor)
+                # Using print since logger may not be available during shutdown
+                import sys
+                print(f"[DEBUG] NVML shutdown error (safe to ignore): {e}", file=sys.stderr)
 
     def is_cuda_available(self) -> bool:
         """Check if CUDA is available."""

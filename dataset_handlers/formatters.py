@@ -9,6 +9,22 @@ from .base import DatasetFormatter
 logger = logging.getLogger(__name__)
 
 
+def _safe_str(value: Any, default: str = '') -> str:
+    """
+    Safely convert a value to string, handling None and other edge cases.
+
+    Args:
+        value: The value to convert
+        default: Default value if value is None or empty
+
+    Returns:
+        String representation or default
+    """
+    if value is None:
+        return default
+    return str(value)
+
+
 class ChatMLFormatter(DatasetFormatter):
     """
     Format dataset using ChatML template.
@@ -22,10 +38,10 @@ class ChatMLFormatter(DatasetFormatter):
         Expected input columns: system (optional), prompt, chosen, rejected, reasoning (optional - ignored)
         Output columns: prompt, chosen, rejected
         """
-        system = str(row.get('system', ''))
-        prompt = str(row.get('prompt', ''))
-        chosen = str(row.get('chosen', ''))
-        rejected = str(row.get('rejected', ''))
+        system = _safe_str(row.get('system'))
+        prompt = _safe_str(row.get('prompt'))
+        chosen = _safe_str(row.get('chosen'))
+        rejected = _safe_str(row.get('rejected'))
         # Note: reasoning column is ignored in ChatML format
 
         # ChatML format
@@ -59,10 +75,10 @@ class Llama3Formatter(DatasetFormatter):
         Expected input columns: system (optional), prompt, chosen, rejected, reasoning (optional - ignored)
         Output columns: prompt, chosen, rejected
         """
-        system = str(row.get('system', ''))
-        prompt = str(row.get('prompt', ''))
-        chosen = str(row.get('chosen', ''))
-        rejected = str(row.get('rejected', ''))
+        system = _safe_str(row.get('system'))
+        prompt = _safe_str(row.get('prompt'))
+        chosen = _safe_str(row.get('chosen'))
+        rejected = _safe_str(row.get('rejected'))
 
         # Llama 3 format
         system_part = ""
@@ -103,10 +119,10 @@ class MistralFormatter(DatasetFormatter):
         Expected input columns: system (optional), prompt, chosen, rejected, reasoning (optional - ignored)
         Output columns: prompt, chosen, rejected
         """
-        system = str(row.get('system', ''))
-        prompt = str(row.get('prompt', ''))
-        chosen = str(row.get('chosen', ''))
-        rejected = str(row.get('rejected', ''))
+        system = _safe_str(row.get('system'))
+        prompt = _safe_str(row.get('prompt'))
+        chosen = _safe_str(row.get('chosen'))
+        rejected = _safe_str(row.get('rejected'))
 
         # Combine system and prompt if system exists
         full_prompt = f"{system}\n\n{prompt}" if system.strip() else prompt
@@ -157,11 +173,11 @@ class Qwen3Formatter(DatasetFormatter):
 
         If reasoning is provided, it will be wrapped in <think> tags in the responses.
         """
-        system = str(row.get('system', ''))
-        prompt = str(row.get('prompt', ''))
-        chosen = str(row.get('chosen', ''))
-        rejected = str(row.get('rejected', ''))
-        reasoning = str(row.get('reasoning', ''))
+        system = _safe_str(row.get('system'))
+        prompt = _safe_str(row.get('prompt'))
+        chosen = _safe_str(row.get('chosen'))
+        rejected = _safe_str(row.get('rejected'))
+        reasoning = _safe_str(row.get('reasoning'))
 
         # Qwen3 format (based on ChatML)
         system_prefix = f"<|im_start|>system\n{system}<|im_end|>\n" if system.strip() else ""
@@ -234,10 +250,10 @@ class CustomFormatter(DatasetFormatter):
         Expected input columns: system (optional), prompt, chosen, rejected
         Output columns: prompt, chosen, rejected
         """
-        system = str(row.get('system', ''))
-        prompt = str(row.get('prompt', ''))
-        chosen = str(row.get('chosen', ''))
-        rejected = str(row.get('rejected', ''))
+        system = _safe_str(row.get('system'))
+        prompt = _safe_str(row.get('prompt'))
+        chosen = _safe_str(row.get('chosen'))
+        rejected = _safe_str(row.get('rejected'))
 
         # Replace variables in templates
         formatted_prompt = self.prompt_template.format(
@@ -297,10 +313,10 @@ class TokenizerFormatter(DatasetFormatter):
         Expected input columns: system (optional), prompt, chosen, rejected
         Output columns: prompt, chosen, rejected
         """
-        system = str(row.get('system', ''))
-        prompt = str(row.get('prompt', ''))
-        chosen = str(row.get('chosen', ''))
-        rejected = str(row.get('rejected', ''))
+        system = _safe_str(row.get('system'))
+        prompt = _safe_str(row.get('prompt'))
+        chosen = _safe_str(row.get('chosen'))
+        rejected = _safe_str(row.get('rejected'))
 
         if not self.has_chat_template:
             # Fallback: simple concatenation
