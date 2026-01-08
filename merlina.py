@@ -52,6 +52,9 @@ from src.gpu_utils import get_gpu_manager
 # Import configuration
 from config import settings
 
+# Import version information
+from version import __version__, get_version_info, get_version_string
+
 # Setup logging
 logging.basicConfig(level=getattr(logging, settings.log_level.upper()))
 logger = logging.getLogger(__name__)
@@ -60,7 +63,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title=settings.app_name,
     description="Train LLMs with ORPO, powered by magic ✨",
-    version="1.1.0",
+    version=__version__,
     docs_url="/api/docs",
     redoc_url="/api/redoc"
 )
@@ -362,15 +365,21 @@ else:
 async def api_info():
     return {
         "name": "Merlina",
-        "version": "1.0.0",
+        "version": __version__,
         "description": "Magical Model Training Backend",
         "endpoints": {
             "POST /train": "Start a new training job",
             "GET /status/{job_id}": "Get job status",
             "GET /jobs": "List all jobs",
+            "GET /version": "Get version information",
             "GET /api/docs": "API documentation"
         }
     }
+
+@app.get("/version")
+async def get_version():
+    """Get detailed version information"""
+    return get_version_info()
 
 @app.post("/validate", response_model=dict)
 async def validate_training_config(config: TrainingConfig):

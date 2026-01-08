@@ -296,6 +296,11 @@ class MerlinaAPI {
     static async deleteConfig(name) {
         return this.fetch(`/configs/${name}`, { method: 'DELETE' });
     }
+
+    // Version endpoint
+    static async getVersion() {
+        return this.fetch('/version');
+    }
 }
 
 /**
