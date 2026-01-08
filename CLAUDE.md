@@ -61,6 +61,63 @@ python tests/test_api_endpoints.py
 pip install -r requirements.txt
 ```
 
+### Version Management
+
+Merlina uses [Semantic Versioning](https://semver.org/) (SemVer) for version control: `MAJOR.MINOR.PATCH`
+
+**Version Files:**
+- `version.py` - Single source of truth for version information
+- `CHANGELOG.md` - Detailed change history following [Keep a Changelog](https://keepachangelog.com/)
+
+**Bumping Versions:**
+```bash
+# Preview changes without applying
+python bump_version.py [major|minor|patch] --dry-run
+
+# Bump patch version (1.2.0 -> 1.2.1) for bug fixes
+python bump_version.py patch
+
+# Bump minor version (1.2.0 -> 1.3.0) for new features
+python bump_version.py minor
+
+# Bump major version (1.2.0 -> 2.0.0) for breaking changes
+python bump_version.py major
+
+# Add a release name
+python bump_version.py minor --release-name "Feature Name"
+```
+
+**What the bump script does:**
+1. Updates `version.py` with new version and release date
+2. Adds new version section to `CHANGELOG.md`
+3. Creates git tag (e.g., `v1.3.0`)
+4. Provides next steps for committing and pushing
+
+**Semantic Versioning Rules:**
+- **MAJOR (X.0.0)**: Breaking changes, incompatible API changes
+  - Example: Removing endpoints, changing data formats, incompatible config changes
+- **MINOR (1.X.0)**: New features, backwards-compatible additions
+  - Example: New training modes, additional API endpoints, new UI features
+- **PATCH (1.2.X)**: Bug fixes, backwards-compatible fixes
+  - Example: Bug fixes, performance improvements, documentation updates
+
+**Version Visibility:**
+- API exposes version at `GET /version` endpoint
+- Frontend displays version in footer (auto-loaded on page load)
+- FastAPI docs show version in OpenAPI spec
+- Logs include version on startup
+
+**Release Process:**
+1. Ensure all changes are committed
+2. Run `python bump_version.py [type]` to bump version
+3. Edit `CHANGELOG.md` to fill in the changes for the new version
+4. Commit: `git commit -am "Bump version to X.Y.Z"`
+5. Push: `git push origin <branch>`
+6. Push tag: `git push origin vX.Y.Z`
+7. Create GitHub release from tag with CHANGELOG excerpt
+
+**Current Version:** See `version.py` or run `python -c "from version import __version__; print(__version__)"`
+
 ## Code Architecture
 
 ### Core Components

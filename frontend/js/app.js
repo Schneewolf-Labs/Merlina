@@ -80,6 +80,9 @@ class MerlinaApp {
         // Setup keyboard shortcuts
         this.setupKeyboardShortcuts();
 
+        // Load version information
+        this.loadVersion();
+
         console.log('✨ Merlina initialized successfully!');
     }
 
@@ -875,6 +878,36 @@ class MerlinaApp {
                 }
             }
         });
+    }
+
+    /**
+     * Load and display version information
+     */
+    async loadVersion() {
+        try {
+            // Import MerlinaAPI from api.js
+            const { MerlinaAPI } = await import('./api.js');
+
+            const versionInfo = await MerlinaAPI.getVersion();
+            const versionElement = document.getElementById('version-info');
+
+            if (versionElement && versionInfo) {
+                const versionText = versionInfo.release_name
+                    ? `Merlina v${versionInfo.version} - ${versionInfo.release_name}`
+                    : `Merlina v${versionInfo.version}`;
+
+                versionElement.textContent = versionText;
+                versionElement.title = `Released: ${versionInfo.release_date}`;
+
+                console.log(`📦 ${versionText}`);
+            }
+        } catch (error) {
+            console.warn('Failed to load version information:', error);
+            const versionElement = document.getElementById('version-info');
+            if (versionElement) {
+                versionElement.textContent = 'Merlina';
+            }
+        }
     }
 }
 
