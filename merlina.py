@@ -6,6 +6,7 @@ ORPO training for LLMs with a delightful interface
 
 import os
 import gc
+import json
 import torch
 import wandb
 import logging
@@ -14,7 +15,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -48,6 +49,13 @@ from src.preflight_checks import validate_config
 from src.config_manager import ConfigManager
 from src.job_queue import JobQueue, JobPriority
 from src.gpu_utils import get_gpu_manager
+
+# Import data editor modules
+from src.data_editor import EditorRow, EditorSession, ValidationResult, TransformationConfig
+from src.data_editor.import_engine import ImportEngine
+from src.data_editor.session_manager import SessionManager
+from src.data_editor.validation import ValidationEngine
+from src.data_editor.transformations import TransformationEngine
 
 # Import configuration
 from config import settings
@@ -1011,10 +1019,8 @@ async def upload_dataset(file: bytes = None, filename: str = None):
 
 
 # Proper upload endpoint with FastAPI's UploadFile
-from fastapi import File, UploadFile as FastAPIUploadFile
-
 @app.post("/dataset/upload-file")
-async def upload_dataset_file(file: FastAPIUploadFile = File(...)):
+async def upload_dataset_file(file: UploadFile = File(...)):
     """Upload a dataset file and return dataset ID"""
     try:
         # Read file content
@@ -1057,6 +1063,603 @@ async def list_uploaded_datasets():
             for dataset_id, (content, filename) in uploaded_datasets.items()
         ]
     }
+
+
+# ===== Data Editor Endpoints =====
+
+# Initialize data editor components
+editor_session_manager = SessionManager(db_path=str(settings.data_dir / "editor_sessions.db"))
+editor_import_engine = ImportEngine()
+editor_validation_engine = ValidationEngine()
+editor_transformation_engine = TransformationEngine()
+
+
+# Pydantic models for data editor
+class EditorImportRequest(BaseModel):
+    """Request to import a file into the editor"""
+    source_type: str = Field(..., description="Source type: upload, local_file")
+    dataset_id: Optional[str] = Field(None, description="For uploaded datasets")
+    file_path: Optional[str] = Field(None, description="For local files")
+    session_name: str = Field(..., description="Name for the editing session")
+
+
+class EditorRowUpdate(BaseModel):
+    """Request to update a row"""
+    prompt: Optional[str] = None
+    chosen: Optional[str] = None
+    rejected: Optional[str] = None
+    system: Optional[str] = None
+    reasoning: Optional[str] = None
+
+
+class EditorRowCreate(BaseModel):
+    """Request to create a new row"""
+    prompt: str
+    chosen: str
+    rejected: Optional[str] = None  # Optional for SFT mode
+    system: Optional[str] = None
+    reasoning: Optional[str] = None
+
+
+class EditorTransformRequest(BaseModel):
+    """Request to transform data"""
+    session_id: str
+    column_mapping: Dict[str, Any]
+    generate_rejected: bool = False
+    rejected_strategy: Optional[str] = None
+    add_system_message: Optional[str] = None
+
+
+class EditorExportRequest(BaseModel):
+    """Request to export session data"""
+    session_id: str
+    format: str = Field("json", description="Export format: json, jsonl, csv")
+    only_valid: bool = Field(True, description="Export only valid rows")
+    direct_upload: bool = Field(False, description="Upload directly for training")
+
+
+@app.post("/editor/import")
+async def editor_import_file(
+    file: UploadFile = File(...),
+    session_name: str = Form(...),
+    training_mode: str = Form("orpo")
+):
+    """
+    Import a file into the data editor
+
+    Args:
+        file: Dataset file to import
+        session_name: Name for the editing session
+        training_mode: Training mode ("orpo" or "sft"), defaults to "orpo"
+
+    Returns: session_id and import metadata
+    """
+    try:
+        # Validate training mode
+        training_mode = training_mode.lower()
+        if training_mode not in ["orpo", "sft"]:
+            raise HTTPException(status_code=400, detail="training_mode must be 'orpo' or 'sft'")
+
+        # Read file content
+        content = await file.read()
+
+        # Import file
+        rows_data, metadata = editor_import_engine.import_file(file.filename, content)
+
+        # Detect schema and suggest column mapping
+        suggested_mapping = editor_import_engine.suggest_column_mapping(rows_data)
+
+        # Create editor session with training mode
+        session_id = editor_session_manager.create_session(
+            name=session_name,
+            source_file=file.filename,
+            training_mode=training_mode
+        )
+
+        # Convert raw rows to EditorRow objects (without transformation yet)
+        editor_rows = []
+        for idx, row_data in enumerate(rows_data):
+            editor_row = EditorRow(
+                idx=idx,
+                metadata={'original': row_data}
+            )
+            editor_rows.append(editor_row)
+
+        # Add rows to session
+        editor_session_manager.add_rows(session_id, editor_rows, record_operation=False)
+
+        # Update session with metadata
+        editor_session_manager.update_session(
+            session_id,
+            statistics=metadata
+        )
+
+        logger.info(f"Imported {len(rows_data)} rows into editor session {session_id} (mode: {training_mode})")
+
+        return {
+            "status": "success",
+            "session_id": session_id,
+            "training_mode": training_mode,
+            "num_rows": len(rows_data),
+            "metadata": metadata,
+            "suggested_mapping": suggested_mapping,
+            "schema_type": editor_import_engine.detect_schema_type(rows_data)
+        }
+
+    except Exception as e:
+        logger.error(f"Editor import failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/editor/session/create")
+async def editor_create_session(
+    name: str,
+    source_file: Optional[str] = None,
+    training_mode: str = "orpo"
+):
+    """
+    Create a new empty editing session
+
+    Args:
+        name: Name for the session
+        source_file: Optional source filename
+        training_mode: Training mode ("orpo" or "sft"), defaults to "orpo"
+    """
+    try:
+        # Validate training mode
+        training_mode = training_mode.lower()
+        if training_mode not in ["orpo", "sft"]:
+            raise HTTPException(status_code=400, detail="training_mode must be 'orpo' or 'sft'")
+
+        session_id = editor_session_manager.create_session(name, source_file, training_mode)
+
+        return {
+            "status": "success",
+            "session_id": session_id,
+            "training_mode": training_mode
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to create editor session: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/editor/session/{session_id}")
+async def editor_get_session(session_id: str, limit: int = 100, offset: int = 0):
+    """Get an editing session with pagination"""
+    try:
+        session = editor_session_manager.get_session(session_id)
+
+        if not session:
+            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+        # Paginate rows
+        total_rows = len(session.rows)
+        paginated_rows = session.rows[offset:offset + limit]
+
+        return {
+            "status": "success",
+            "session": {
+                "session_id": session.session_id,
+                "name": session.name,
+                "source_file": session.source_file,
+                "column_mapping": session.column_mapping,
+                "training_mode": session.training_mode,
+                "statistics": session.statistics,
+                "created_at": session.created_at.isoformat(),
+                "updated_at": session.updated_at.isoformat(),
+                "total_rows": total_rows
+            },
+            "rows": [row.to_dict() for row in paginated_rows],
+            "pagination": {
+                "limit": limit,
+                "offset": offset,
+                "total": total_rows,
+                "has_more": offset + limit < total_rows
+            }
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get editor session: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/editor/sessions")
+async def editor_list_sessions(limit: int = 50, offset: int = 0):
+    """List all editing sessions"""
+    try:
+        sessions = editor_session_manager.list_sessions(limit, offset)
+
+        return {
+            "status": "success",
+            "sessions": sessions,
+            "count": len(sessions)
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to list editor sessions: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/editor/session/{session_id}")
+async def editor_delete_session(session_id: str):
+    """Delete an editing session"""
+    try:
+        success = editor_session_manager.delete_session(session_id)
+
+        if not success:
+            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+        return {
+            "status": "success",
+            "message": f"Session {session_id} deleted"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete editor session: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/editor/session/{session_id}/row")
+async def editor_add_row(session_id: str, row: EditorRowCreate):
+    """Add a new row to the session"""
+    try:
+        session = editor_session_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+        # Create new row with next index
+        new_idx = max([r.idx for r in session.rows], default=-1) + 1
+
+        editor_row = EditorRow(
+            idx=new_idx,
+            prompt=row.prompt,
+            chosen=row.chosen,
+            rejected=row.rejected,
+            system=row.system,
+            reasoning=row.reasoning
+        )
+
+        # Validate the row using session's training mode
+        validation_result = editor_validation_engine.validate_row(editor_row, training_mode=session.training_mode)
+        editor_row.validation_errors = validation_result.errors
+        editor_row.validation_warnings = validation_result.warnings
+
+        # Add row
+        editor_session_manager.add_rows(session_id, [editor_row], record_operation=True)
+
+        return {
+            "status": "success",
+            "row": editor_row.to_dict()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to add row: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.put("/editor/session/{session_id}/row/{idx}")
+async def editor_update_row(session_id: str, idx: int, updates: EditorRowUpdate):
+    """Update a row in the session"""
+    try:
+        # Get update dict
+        update_dict = {k: v for k, v in updates.dict().items() if v is not None}
+
+        if not update_dict:
+            raise HTTPException(status_code=400, detail="No updates provided")
+
+        # Update row
+        success = editor_session_manager.update_row(session_id, idx, update_dict, record_operation=True)
+
+        if not success:
+            raise HTTPException(status_code=404, detail=f"Row {idx} not found in session {session_id}")
+
+        # Re-validate the row
+        session = editor_session_manager.get_session(session_id)
+        row = session.get_row(idx)
+
+        if row:
+            validation_result = editor_validation_engine.validate_row(row, training_mode=session.training_mode)
+            editor_session_manager.update_row(
+                session_id, idx,
+                {
+                    "validation_errors": validation_result.errors,
+                    "validation_warnings": validation_result.warnings
+                },
+                record_operation=False
+            )
+
+        return {
+            "status": "success",
+            "message": f"Row {idx} updated"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update row: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.delete("/editor/session/{session_id}/row/{idx}")
+async def editor_delete_row(session_id: str, idx: int):
+    """Delete a row from the session"""
+    try:
+        success = editor_session_manager.delete_row(session_id, idx, record_operation=True)
+
+        if not success:
+            raise HTTPException(status_code=404, detail=f"Row {idx} not found in session {session_id}")
+
+        return {
+            "status": "success",
+            "message": f"Row {idx} deleted"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to delete row: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/editor/transform")
+async def editor_transform_data(request: EditorTransformRequest):
+    """Apply transformations to session data"""
+    try:
+        session = editor_session_manager.get_session(request.session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail=f"Session {request.session_id} not found")
+
+        # Create transformation config
+        transform_config = TransformationConfig(
+            column_mapping=request.column_mapping,
+            generate_rejected=request.generate_rejected,
+            rejected_strategy=request.rejected_strategy,
+            add_system_message=request.add_system_message
+        )
+
+        # Apply transformations to each row
+        transformed_count = 0
+        for row in session.rows:
+            if row.metadata and 'original' in row.metadata:
+                # Transform the original data
+                transformed_row = editor_transformation_engine.transform_row(
+                    row.metadata['original'],
+                    transform_config
+                )
+
+                # Update the row
+                editor_session_manager.update_row(
+                    request.session_id,
+                    row.idx,
+                    {
+                        'prompt': transformed_row.prompt,
+                        'chosen': transformed_row.chosen,
+                        'rejected': transformed_row.rejected,
+                        'system': transformed_row.system,
+                        'reasoning': transformed_row.reasoning
+                    },
+                    record_operation=False
+                )
+                transformed_count += 1
+
+        # Update session column mapping
+        editor_session_manager.update_session(
+            request.session_id,
+            column_mapping=request.column_mapping
+        )
+
+        # Validate all rows using session's training mode
+        session = editor_session_manager.get_session(request.session_id)
+        validation_result = editor_validation_engine.validate_session(session, training_mode=session.training_mode)
+
+        logger.info(f"Transformed {transformed_count} rows in session {request.session_id}")
+
+        return {
+            "status": "success",
+            "transformed_rows": transformed_count,
+            "validation": validation_result.to_dict()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Transformation failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/editor/validate/{session_id}")
+async def editor_validate_session(session_id: str):
+    """Validate all rows in a session"""
+    try:
+        session = editor_session_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+        # Run validation using session's training mode
+        validation_result = editor_validation_engine.validate_session(session, training_mode=session.training_mode)
+
+        # Update validation results for each row
+        for row in session.rows:
+            row_result = editor_validation_engine.validate_row(row, training_mode=session.training_mode)
+            editor_session_manager.update_row(
+                session_id,
+                row.idx,
+                {
+                    "validation_errors": row_result.errors,
+                    "validation_warnings": row_result.warnings
+                },
+                record_operation=False
+            )
+
+        # Update session statistics
+        editor_session_manager.update_session(
+            session_id,
+            statistics=validation_result.statistics
+        )
+
+        return {
+            "status": "success",
+            "validation": validation_result.to_dict()
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Validation failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/editor/session/{session_id}/undo")
+async def editor_undo(session_id: str):
+    """Undo the last operation"""
+    try:
+        success = editor_session_manager.undo(session_id)
+
+        if not success:
+            raise HTTPException(status_code=400, detail="Nothing to undo")
+
+        return {
+            "status": "success",
+            "message": "Undo successful"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Undo failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/editor/session/{session_id}/redo")
+async def editor_redo(session_id: str):
+    """Redo the next operation"""
+    try:
+        success = editor_session_manager.redo(session_id)
+
+        if not success:
+            raise HTTPException(status_code=400, detail="Nothing to redo")
+
+        return {
+            "status": "success",
+            "message": "Redo successful"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Redo failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/editor/export")
+async def editor_export_data(request: EditorExportRequest):
+    """Export session data"""
+    try:
+        session = editor_session_manager.get_session(request.session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail=f"Session {request.session_id} not found")
+
+        # Get rows to export
+        if request.only_valid:
+            rows_to_export = session.get_valid_rows()
+        else:
+            rows_to_export = session.rows
+
+        if not rows_to_export:
+            raise HTTPException(status_code=400, detail="No rows to export")
+
+        # Convert to export format
+        export_data = []
+        for row in rows_to_export:
+            row_dict = row.get_all_fields()
+            # Remove None values
+            row_dict = {k: v for k, v in row_dict.items() if v is not None}
+            export_data.append(row_dict)
+
+        # If direct upload, add to uploaded_datasets
+        if request.direct_upload:
+            import hashlib
+            from datetime import datetime
+
+            # Convert to JSON
+            content_str = json.dumps(export_data, indent=2)
+            content_bytes = content_str.encode('utf-8')
+
+            # Generate dataset ID
+            dataset_id = f"editor_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{hashlib.md5(content_bytes).hexdigest()[:8]}"
+            filename = f"{session.name.replace(' ', '_')}.json"
+
+            # Store in uploaded_datasets
+            uploaded_datasets[dataset_id] = (content_bytes, filename)
+
+            logger.info(f"Exported editor session {request.session_id} to dataset {dataset_id}")
+
+            return {
+                "status": "success",
+                "dataset_id": dataset_id,
+                "filename": filename,
+                "num_rows": len(export_data)
+            }
+        else:
+            # Return data for download
+            return {
+                "status": "success",
+                "data": export_data,
+                "num_rows": len(export_data),
+                "format": request.format
+            }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Export failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/editor/generate-pairs/{session_id}")
+async def editor_generate_preference_pairs(session_id: str, strategy: str = "truncate_50"):
+    """Generate rejected responses for rows that only have chosen"""
+    try:
+        session = editor_session_manager.get_session(session_id)
+        if not session:
+            raise HTTPException(status_code=404, detail=f"Session {session_id} not found")
+
+        # Generate rejected responses
+        generated_count = 0
+        for row in session.rows:
+            if row.chosen and not row.rejected:
+                rejected = editor_transformation_engine.generate_rejected_response(
+                    row.chosen,
+                    strategy
+                )
+                editor_session_manager.update_row(
+                    session_id,
+                    row.idx,
+                    {"rejected": rejected},
+                    record_operation=False
+                )
+                generated_count += 1
+
+        logger.info(f"Generated {generated_count} rejected responses in session {session_id}")
+
+        return {
+            "status": "success",
+            "generated_count": generated_count,
+            "strategy": strategy
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Preference pair generation failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # ===== Config Management Endpoints =====
