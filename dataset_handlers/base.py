@@ -7,6 +7,7 @@ from abc import ABC, abstractmethod
 from typing import Optional, Callable
 from datasets import Dataset
 import logging
+from .messages_converter import has_messages_format, convert_messages_dataset
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,11 @@ class DatasetPipeline:
 
         logger.info(f"Dataset loaded with {len(dataset)} samples")
 
+        # Convert messages format if detected
+        if has_messages_format(dataset):
+            logger.info("Detected messages format, converting to standard format...")
+            dataset = convert_messages_dataset(dataset)
+
         # Apply column mapping if provided
         if self.column_mapping:
             logger.info(f"Applying column mapping: {self.column_mapping}")
@@ -144,6 +150,11 @@ class DatasetPipeline:
         """
         dataset = self.loader.load()
 
+        # Convert messages format if detected
+        if has_messages_format(dataset):
+            logger.info("Detected messages format, converting to standard format...")
+            dataset = convert_messages_dataset(dataset)
+
         # Apply column mapping if provided
         if self.column_mapping:
             dataset = self._apply_column_mapping(dataset)
@@ -164,6 +175,11 @@ class DatasetPipeline:
             List of formatted dataset rows
         """
         dataset = self.loader.load()
+
+        # Convert messages format if detected
+        if has_messages_format(dataset):
+            logger.info("Detected messages format, converting to standard format...")
+            dataset = convert_messages_dataset(dataset)
 
         # Apply column mapping if provided
         if self.column_mapping:
