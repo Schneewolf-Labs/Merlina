@@ -6,6 +6,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Merlina is a magical LLM training system with support for both ORPO (Odds Ratio Preference Optimization) and SFT (Supervised Fine-Tuning). It provides a delightful wizard-themed web interface for fine-tuning language models with LoRA adapters. The system supports flexible dataset loading from multiple sources and automatic chat template formatting.
 
+**New in v1.3:**
+- **Messages Format Support**: Automatic detection and conversion of common chat dataset format with multi-turn conversation support
+
 **New in v1.2:**
 - **SFT Mode**: Train with only chosen responses (rejected field not required)
 - Dynamic UI that adapts based on selected training mode
@@ -154,7 +157,14 @@ The dataset system uses a modular strategy pattern with three main abstractions:
    - Orchestrates loading, validation, formatting, and train/test splitting
    - Provides `preview()` for raw data and `preview_formatted()` for formatted samples
    - Handles column mapping to standardize dataset schemas
+   - Automatically detects and converts "messages" format datasets (see messages_converter.py)
    - Main interface: `prepare()` returns (train_dataset, eval_dataset)
+
+4. **Messages Format Converter** (messages_converter.py) - New in v1.3
+   - Utilities for converting common "messages" format to standard Merlina format
+   - Functions: `has_messages_format()`, `convert_messages_to_standard()`, `convert_messages_dataset()`
+   - Automatically invoked by DatasetPipeline when messages format is detected and `convert_messages_format=True`
+   - Can be toggled on/off via UI checkbox or API parameter
 
 **Frontend (frontend/)**
 - Pure HTML/CSS/JS interface (no build step)
@@ -185,6 +195,67 @@ Formatters transform these into chat-formatted strings with proper special token
 - **SFT Mode**: Only uses `prompt` and `chosen` fields. The `rejected` field is ignored if present.
 
 **Reasoning Field**: When using the Qwen3 format, if a `reasoning` column is present, it will be wrapped in `<think>` tags and prepended to both the chosen and rejected responses. This allows training models with explicit reasoning steps.
+
+**Messages Format Support** (New in v1.3):
+
+Merlina now automatically detects and converts datasets in the common "messages" format used by many chat datasets:
+
+```json
+{
+  "messages": [
+    {"role": "system", "content": "You are a helpful assistant"},
+    {"role": "user", "content": "Hello"},
+    {"role": "assistant", "content": "Hi there!"},
+    {"role": "user", "content": "How are you?"},
+    {"role": "assistant", "content": "I'm doing well!"}
+  ]
+}
+```
+
+**Conversion Logic**:
+- System messages are extracted into the `system` field
+- All user messages are combined into the `prompt` field (multi-turn conversations separated by double newlines)
+- All assistant messages are combined into the `chosen` field (multi-turn responses separated by double newlines)
+- The conversion happens automatically after loading and before column mapping (when enabled)
+- Best suited for **SFT mode** since the format doesn't include rejected responses
+- **Can be toggled on/off**: In the UI, when inspecting dataset columns, if a "messages" column is detected, a toggle checkbox appears to enable/disable automatic conversion
+- API parameter: `convert_messages_format` (default: `true`) in DatasetConfig
+
+**Example Conversion**:
+```python
+# Input (messages format)
+{"messages": [
+    {"role": "user", "content": "Who developed you?"},
+    {"role": "assistant", "content": "I'm a language model finetuned by Schneewolf Labs."}
+]}
+
+# Output (standard format)
+{
+    "prompt": "Who developed you?",
+    "chosen": "I'm a language model finetuined by Schneewolf Labs.",
+    "system": ""
+}
+```
+
+**Multi-turn Example**:
+```python
+# Input (multi-turn messages)
+{"messages": [
+    {"role": "user", "content": "Hello"},
+    {"role": "assistant", "content": "Hi!"},
+    {"role": "user", "content": "How are you?"},
+    {"role": "assistant", "content": "Great!"}
+]}
+
+# Output (combined)
+{
+    "prompt": "Hello\n\nHow are you?",
+    "chosen": "Hi!\n\nGreat!",
+    "system": ""
+}
+```
+
+The messages format is automatically detected and converted with no additional configuration required. Simply load your dataset and Merlina will handle the conversion transparently.
 
 ### Model Loading
 

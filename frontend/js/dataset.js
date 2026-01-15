@@ -166,6 +166,16 @@ class DatasetManager {
                 availableColumnsEl.textContent = data.columns.join(', ');
             }
 
+            // Check for messages format
+            const messagesFormatNotice = document.getElementById('messages-format-notice');
+            if (messagesFormatNotice) {
+                if (data.columns.includes('messages')) {
+                    messagesFormatNotice.style.display = 'block';
+                } else {
+                    messagesFormatNotice.style.display = 'none';
+                }
+            }
+
             // Show sample data
             if (data.samples && data.samples.length > 0) {
                 const samplePreview = document.getElementById('column-sample-preview');
@@ -425,6 +435,14 @@ class DatasetManager {
         const columnMapping = this.getColumnMapping();
         if (columnMapping && Object.keys(columnMapping).length > 0) {
             config.column_mapping = columnMapping;
+        }
+
+        // Add messages format conversion setting
+        const convertMessagesCheckbox = document.getElementById('convert-messages-checkbox');
+        if (convertMessagesCheckbox) {
+            config.convert_messages_format = convertMessagesCheckbox.checked;
+        } else {
+            config.convert_messages_format = true;  // Default to true
         }
 
         // Get training mode for validation and include in config

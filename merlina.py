@@ -200,6 +200,12 @@ class DatasetConfig(BaseModel):
         description="Map dataset columns to expected names (system, prompt, chosen, rejected)"
     )
 
+    # Messages format conversion
+    convert_messages_format: bool = Field(
+        True,
+        description="Automatically detect and convert messages format to standard format"
+    )
+
     # Additional options
     test_size: float = Field(0.01, ge=0.001, le=0.5, description="Fraction of data for evaluation")
     max_samples: Optional[int] = Field(None, description="Limit dataset size (for testing)")
@@ -871,7 +877,8 @@ async def preview_dataset(config: DatasetConfig):
             column_mapping=config.column_mapping,
             test_size=config.test_size,
             max_samples=config.max_samples,
-            training_mode=config.training_mode
+            training_mode=config.training_mode,
+            convert_messages_format=config.convert_messages_format
         )
 
         # Preview raw data
@@ -942,7 +949,8 @@ async def preview_formatted_dataset(config: DatasetConfig):
             column_mapping=config.column_mapping,
             test_size=config.test_size,
             max_samples=config.max_samples,
-            training_mode=config.training_mode
+            training_mode=config.training_mode,
+            convert_messages_format=config.convert_messages_format
         )
 
         # Preview formatted data
