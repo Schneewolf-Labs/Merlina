@@ -298,17 +298,50 @@
                         </button>
                     </div>
 
+                    <!-- Preview Controls -->
+                    <div style="display: flex; gap: 10px; margin-bottom: 15px; align-items: center; flex-wrap: wrap;">
+                        <div style="display: flex; gap: 5px; align-items: center;">
+                            <label for="preview-limit" style="font-size: 0.9em; color: var(--primary-purple); white-space: nowrap;">Samples:</label>
+                            <select id="preview-limit" class="magic-input" style="width: 80px; padding: 5px;">
+                                <option value="1">1</option>
+                                <option value="3">3</option>
+                                <option value="5" selected>5</option>
+                                <option value="10">10</option>
+                                <option value="20">20</option>
+                                <option value="50">50</option>
+                            </select>
+                        </div>
+                        <div style="display: flex; gap: 5px; align-items: center; flex: 1;">
+                            <label for="preview-index" style="font-size: 0.9em; color: var(--primary-purple); white-space: nowrap;">Jump to:</label>
+                            <input type="number" id="preview-index" min="1" value="1" class="magic-input" style="width: 100px; padding: 5px;">
+                            <button type="button" id="jump-to-index-button" class="action-button" style="padding: 5px 15px; font-size: 0.9em;">Go</button>
+                        </div>
+                        <div style="display: flex; gap: 5px;">
+                            <button type="button" id="preview-prev-button" class="action-button" style="padding: 5px 15px; font-size: 0.9em;">← Prev</button>
+                            <button type="button" id="preview-next-button" class="action-button" style="padding: 5px 15px; font-size: 0.9em;">Next →</button>
+                        </div>
+                    </div>
+
                     <!-- Raw Preview -->
                     <div id="dataset-preview" style="margin-top: 15px; display: none;">
-                        <h4 style="color: var(--secondary-purple); margin-bottom: 10px;">Raw Dataset (First 3 Samples)</h4>
+                        <h4 style="color: var(--secondary-purple); margin-bottom: 10px;">
+                            Raw Dataset
+                            <span id="raw-preview-info" style="font-weight: normal; font-size: 0.85em; color: #888;"></span>
+                        </h4>
                         <div style="max-height: 400px; overflow-y: auto; background: white; padding: 15px; border-radius: 10px; border: 1px solid var(--light-purple);">
                             <pre id="dataset-preview-content" style="margin: 0; font-size: 0.85em; white-space: pre-wrap;"></pre>
+                        </div>
+                        <div style="margin-top: 10px; padding: 8px; background: #f5f7fa; border-radius: 5px; text-align: center; font-size: 0.85em; color: #666;">
+                            <span id="raw-preview-position"></span>
                         </div>
                     </div>
 
                     <!-- Formatted Preview -->
                     <div id="formatted-preview" style="margin-top: 15px; display: none;">
-                        <h4 style="color: var(--secondary-purple); margin-bottom: 10px;">Formatted for Training (Sample 1)</h4>
+                        <h4 style="color: var(--secondary-purple); margin-bottom: 10px;">
+                            Formatted for Training
+                            <span id="formatted-preview-info" style="font-weight: normal; font-size: 0.85em; color: #888;"></span>
+                        </h4>
                         <div style="background: white; padding: 15px; border-radius: 10px; border: 1px solid var(--light-purple);">
                             <div style="margin-bottom: 20px;">
                                 <div style="font-weight: bold; color: var(--primary-purple); margin-bottom: 5px;">Prompt:</div>
@@ -327,6 +360,9 @@
                             <div style="margin-top: 15px; padding: 10px; background: #e6d0ff; border-radius: 5px; font-size: 0.85em;">
                                 <strong>📝 Format Type:</strong> <span id="format-type-display"></span>
                             </div>
+                        </div>
+                        <div style="margin-top: 10px; padding: 8px; background: #f5f7fa; border-radius: 5px; text-align: center; font-size: 0.85em; color: #666;">
+                            <span id="formatted-preview-position"></span>
                         </div>
                     </div>
                 </div>
