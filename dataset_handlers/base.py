@@ -141,17 +141,19 @@ class DatasetPipeline:
 
         return train_dataset, eval_dataset
 
-    def preview(self, num_samples: int = 5) -> list[dict]:
+    def preview(self, num_samples: int = 5, offset: int = 0) -> tuple[list[dict], int]:
         """
         Load and preview raw dataset samples without formatting.
 
         Args:
             num_samples: Number of samples to preview
+            offset: Starting index for preview
 
         Returns:
-            List of raw dataset rows
+            Tuple of (list of raw dataset rows, total dataset length)
         """
         dataset = self.loader.load()
+        total_length = len(dataset)
 
         # Convert messages format if detected and enabled
         if self.convert_messages_format and has_messages_format(dataset):
@@ -162,22 +164,32 @@ class DatasetPipeline:
         if self.column_mapping:
             dataset = self._apply_column_mapping(dataset)
 
-        # Get first N samples
-        preview_dataset = dataset.select(range(min(num_samples, len(dataset))))
+        # Calculate valid range
+        start_idx = min(offset, len(dataset))
+        end_idx = min(start_idx + num_samples, len(dataset))
 
-        return [dict(row) for row in preview_dataset]
+        # Get samples from offset
+        if start_idx < end_idx:
+            preview_dataset = dataset.select(range(start_idx, end_idx))
+            samples = [dict(row) for row in preview_dataset]
+        else:
+            samples = []
 
-    def preview_formatted(self, num_samples: int = 5) -> list[dict]:
+        return samples, total_length
+
+    def preview_formatted(self, num_samples: int = 5, offset: int = 0) -> tuple[list[dict], int]:
         """
         Load and preview formatted dataset samples.
 
         Args:
             num_samples: Number of samples to preview
+            offset: Starting index for preview
 
         Returns:
-            List of formatted dataset rows
+            Tuple of (list of formatted dataset rows, total dataset length)
         """
         dataset = self.loader.load()
+        total_length = len(dataset)
 
         # Convert messages format if detected and enabled
         if self.convert_messages_format and has_messages_format(dataset):
@@ -191,11 +203,19 @@ class DatasetPipeline:
         # Validate schema
         self._validate_schema(dataset)
 
-        # Get first N samples and format
-        preview_dataset = dataset.select(range(min(num_samples, len(dataset))))
-        formatted = preview_dataset.map(self.formatter.format)
+        # Calculate valid range
+        start_idx = min(offset, len(dataset))
+        end_idx = min(start_idx + num_samples, len(dataset))
 
-        return [dict(row) for row in formatted]
+        # Get samples from offset and format
+        if start_idx < end_idx:
+            preview_dataset = dataset.select(range(start_idx, end_idx))
+            formatted = preview_dataset.map(self.formatter.format)
+            samples = [dict(row) for row in formatted]
+        else:
+            samples = []
+
+        return samples, total_length
 
     def _apply_column_mapping(self, dataset: Dataset) -> Dataset:
         """Apply column name mapping to dataset"""
