@@ -63,7 +63,8 @@ class DatasetPipeline:
         max_samples: Optional[int] = None,
         seed: int = 42,
         shuffle: bool = True,
-        training_mode: str = "orpo"
+        training_mode: str = "orpo",
+        convert_messages_format: bool = True
     ):
         """
         Initialize dataset pipeline.
@@ -78,6 +79,7 @@ class DatasetPipeline:
             seed: Random seed for train/test split
             shuffle: Whether to shuffle the dataset before splitting
             training_mode: Training mode ('sft' or 'orpo'). For SFT, rejected is optional.
+            convert_messages_format: Whether to automatically detect and convert messages format
         """
         self.loader = loader
         self.formatter = formatter
@@ -87,6 +89,7 @@ class DatasetPipeline:
         self.seed = seed
         self.shuffle = shuffle
         self.training_mode = training_mode
+        self.convert_messages_format = convert_messages_format
 
     def prepare(self) -> tuple[Dataset, Dataset]:
         """
@@ -100,8 +103,8 @@ class DatasetPipeline:
 
         logger.info(f"Dataset loaded with {len(dataset)} samples")
 
-        # Convert messages format if detected
-        if has_messages_format(dataset):
+        # Convert messages format if detected and enabled
+        if self.convert_messages_format and has_messages_format(dataset):
             logger.info("Detected messages format, converting to standard format...")
             dataset = convert_messages_dataset(dataset)
 
@@ -150,8 +153,8 @@ class DatasetPipeline:
         """
         dataset = self.loader.load()
 
-        # Convert messages format if detected
-        if has_messages_format(dataset):
+        # Convert messages format if detected and enabled
+        if self.convert_messages_format and has_messages_format(dataset):
             logger.info("Detected messages format, converting to standard format...")
             dataset = convert_messages_dataset(dataset)
 
@@ -176,8 +179,8 @@ class DatasetPipeline:
         """
         dataset = self.loader.load()
 
-        # Convert messages format if detected
-        if has_messages_format(dataset):
+        # Convert messages format if detected and enabled
+        if self.convert_messages_format and has_messages_format(dataset):
             logger.info("Detected messages format, converting to standard format...")
             dataset = convert_messages_dataset(dataset)
 

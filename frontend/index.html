@@ -167,6 +167,23 @@
                             </div>
                         </div>
 
+                        <!-- Messages Format Detection -->
+                        <div id="messages-format-notice" style="display: none; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 15px; border-radius: 10px; margin-bottom: 15px; color: white;">
+                            <div style="font-weight: bold; margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
+                                ✨ Messages Format Detected!
+                            </div>
+                            <div style="font-size: 0.9em; margin-bottom: 12px; opacity: 0.95;">
+                                This dataset uses the common "messages" format. Enable auto-convert to transform it into standard format (prompt, chosen, system).
+                            </div>
+                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.95em;">
+                                <input type="checkbox" id="convert-messages-checkbox" checked style="width: 18px; height: 18px; cursor: pointer;">
+                                <span>Auto-convert messages format</span>
+                            </label>
+                            <div id="messages-format-info" style="margin-top: 10px; font-size: 0.85em; opacity: 0.9; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.3);">
+                                When enabled: user → prompt, assistant → chosen, system → system
+                            </div>
+                        </div>
+
                         <div class="form-row">
                             <div class="form-group">
                                 <label>Prompt Column</label>

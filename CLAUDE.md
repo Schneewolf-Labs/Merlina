@@ -163,7 +163,8 @@ The dataset system uses a modular strategy pattern with three main abstractions:
 4. **Messages Format Converter** (messages_converter.py) - New in v1.3
    - Utilities for converting common "messages" format to standard Merlina format
    - Functions: `has_messages_format()`, `convert_messages_to_standard()`, `convert_messages_dataset()`
-   - Automatically invoked by DatasetPipeline when messages format is detected
+   - Automatically invoked by DatasetPipeline when messages format is detected and `convert_messages_format=True`
+   - Can be toggled on/off via UI checkbox or API parameter
 
 **Frontend (frontend/)**
 - Pure HTML/CSS/JS interface (no build step)
@@ -215,8 +216,10 @@ Merlina now automatically detects and converts datasets in the common "messages"
 - System messages are extracted into the `system` field
 - All user messages are combined into the `prompt` field (multi-turn conversations separated by double newlines)
 - All assistant messages are combined into the `chosen` field (multi-turn responses separated by double newlines)
-- The conversion happens automatically after loading and before column mapping
+- The conversion happens automatically after loading and before column mapping (when enabled)
 - Best suited for **SFT mode** since the format doesn't include rejected responses
+- **Can be toggled on/off**: In the UI, when inspecting dataset columns, if a "messages" column is detected, a toggle checkbox appears to enable/disable automatic conversion
+- API parameter: `convert_messages_format` (default: `true`) in DatasetConfig
 
 **Example Conversion**:
 ```python

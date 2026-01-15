@@ -787,7 +787,8 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
             max_samples=config.dataset.max_samples,
             seed=config.seed,  # Use config seed instead of hardcoded 42
             shuffle=config.shuffle_dataset,  # Use config shuffle setting
-            training_mode=config.training_mode
+            training_mode=config.training_mode,
+            convert_messages_format=config.dataset.convert_messages_format
         )
 
         train_dataset, eval_dataset = pipeline.prepare()
