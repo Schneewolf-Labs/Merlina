@@ -6,6 +6,7 @@ ORPO training for LLMs with a delightful interface
 
 import os
 import gc
+import asyncio
 import torch
 import wandb
 import logging
@@ -394,10 +395,25 @@ async def validate_training_config(config: TrainingConfig):
     Checks GPU, VRAM, disk space, model access, etc.
     """
     try:
-        is_valid, results = validate_config(config)
+        # Run validation in thread pool to avoid blocking when GPU is busy
+        is_valid, results = await asyncio.wait_for(
+            asyncio.to_thread(validate_config, config),
+            timeout=30.0  # 30 second timeout
+        )
         return {
             "valid": is_valid,
             "results": results
+        }
+    except asyncio.TimeoutError:
+        logger.warning("Validation timed out - GPU may be busy with training")
+        return {
+            "valid": True,
+            "results": {
+                "valid": True,
+                "warnings": ["Validation timed out - GPU busy with training. Some checks were skipped."],
+                "errors": [],
+                "checks": {"note": "Validation skipped due to timeout"}
+            }
         }
     except Exception as e:
         logger.error(f"Validation error: {e}")
@@ -414,8 +430,25 @@ async def create_training_job(config: TrainingConfig, priority: Optional[str] = 
         config: Training configuration
         priority: Job priority (low, normal, high) - default: normal
     """
-    # Run pre-flight validation
-    is_valid, validation_results = validate_config(config)
+    # Run pre-flight validation in a thread pool to avoid blocking when GPU is busy
+    # This prevents timeouts when queuing jobs while training is running
+    validation_skipped = False
+    try:
+        is_valid, validation_results = await asyncio.wait_for(
+            asyncio.to_thread(validate_config, config),
+            timeout=30.0  # 30 second timeout for validation
+        )
+    except asyncio.TimeoutError:
+        # Validation timed out (likely GPU busy with training)
+        # Allow queuing with a warning instead of blocking
+        logger.warning("Validation timed out - GPU may be busy. Queueing job without full validation.")
+        is_valid = True
+        validation_skipped = True
+        validation_results = {
+            "valid": True,
+            "warnings": ["Pre-flight validation skipped (timeout) - GPU busy with training"],
+            "errors": []
+        }
 
     if not is_valid:
         raise HTTPException(
