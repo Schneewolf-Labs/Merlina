@@ -243,3 +243,144 @@
 .hover-glow:hover {
     animation: glow 1.5s ease-in-out infinite;
 }
+
+/* ===== Miracle Effect ===== */
+@keyframes miracleStar {
+    0% {
+        transform: translate(0, 0) rotate(0deg) scale(0);
+        opacity: 1;
+    }
+    100% {
+        transform: translate(var(--tx), var(--ty)) rotate(720deg) scale(1.5);
+        opacity: 0;
+    }
+}
+
+@keyframes miracleGlow {
+    0% {
+        transform: scale(1);
+        filter: hue-rotate(0deg);
+    }
+    50% {
+        transform: scale(1.2);
+        filter: hue-rotate(180deg);
+    }
+    100% {
+        transform: scale(1);
+        filter: hue-rotate(360deg);
+    }
+}
+
+@keyframes miracleRainbow {
+    0% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+    100% { background-position: 0% 50%; }
+}
+
+@keyframes miracleRise {
+    0% {
+        transform: translateY(100vh) scale(0);
+        opacity: 0;
+    }
+    10% {
+        opacity: 1;
+    }
+    90% {
+        opacity: 1;
+    }
+    100% {
+        transform: translateY(-100px) scale(1);
+        opacity: 0;
+    }
+}
+
+@keyframes miracleSparkle {
+    0%, 100% {
+        transform: scale(0) rotate(0deg);
+        opacity: 0;
+    }
+    50% {
+        transform: scale(1) rotate(180deg);
+        opacity: 1;
+    }
+}
+
+.miracle-star {
+    position: fixed;
+    pointer-events: none;
+    z-index: 10000;
+    font-size: 24px;
+    animation: miracleStar 2s ease-out forwards;
+}
+
+.miracle-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(
+        45deg,
+        rgba(192, 66, 255, 0.1),
+        rgba(255, 107, 179, 0.1),
+        rgba(255, 215, 0, 0.1),
+        rgba(0, 255, 255, 0.1)
+    );
+    background-size: 400% 400%;
+    animation: miracleRainbow 3s ease infinite;
+    pointer-events: none;
+    z-index: 9998;
+    opacity: 0;
+    transition: opacity 0.5s ease;
+}
+
+.miracle-overlay.active {
+    opacity: 1;
+}
+
+.miracle-text {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 3rem;
+    font-weight: bold;
+    background: linear-gradient(90deg, #c042ff, #ff6bb3, #ffd700, #00ffff, #c042ff);
+    background-size: 200% auto;
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: miracleRainbow 2s linear infinite;
+    z-index: 10001;
+    text-shadow: 0 0 30px rgba(192, 66, 255, 0.5);
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.3s ease;
+}
+
+.miracle-text.active {
+    opacity: 1;
+}
+
+.miracle-particle {
+    position: fixed;
+    bottom: -50px;
+    pointer-events: none;
+    z-index: 9999;
+    animation: miracleRise 4s ease-out forwards;
+}
+
+.wizard-hat.miracle-active {
+    animation: miracleGlow 0.5s ease-in-out infinite;
+}
+
+.miracle-sparkle {
+    position: fixed;
+    pointer-events: none;
+    z-index: 10000;
+    width: 20px;
+    height: 20px;
+    background: radial-gradient(circle, #ffd700 0%, transparent 70%);
+    border-radius: 50%;
+    animation: miracleSparkle 1s ease-in-out forwards;
+}

@@ -8,6 +8,7 @@ import { ModelManager } from './model.js';
 import { Toast, FormUI, Tooltip, createSparkle } from './ui.js';
 import { Validator, debounce } from './validation.js';
 import { ThemeManager } from './theme.js';
+import { initMiracle } from './miracle.js';
 
 /**
  * Main Application Class
@@ -723,6 +724,9 @@ class MerlinaApp {
 
         // Easter egg: Konami code
         this.setupKonamiCode();
+
+        // Easter egg: Miracle effect (click logo 7 times or type "miracle")
+        initMiracle();
     }
 
     /**
