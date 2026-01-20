@@ -12,6 +12,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Version tracking and changelog management
 - Automated version bumping tools
 
+## [1.3.0] - 2026-01-20 "Message Magic"
+
+### Added
+- **Messages Format Support**: Automatic detection and conversion of common chat dataset format
+  - Detects datasets with `messages` column containing conversation lists
+  - Converts multi-turn conversations to standard Merlina format (`prompt`, `chosen`, `system`)
+  - Supports system messages extraction
+  - Multi-turn user/assistant messages combined with double newline separators
+- **Messages Format Converter Module** (`dataset_handlers/messages_converter.py`)
+  - `has_messages_format()` - Detect if dataset uses messages format
+  - `convert_messages_to_standard()` - Convert single row from messages to standard format
+  - `convert_messages_dataset()` - Convert entire dataset with progress indicator
+- **UI Toggle Control**: Checkbox in dataset inspector to enable/disable automatic messages format conversion
+- **API Parameter**: `convert_messages_format` in DatasetConfig (default: `true`)
+- Comprehensive example for messages format toggle control
+
+### Changed
+- `DatasetPipeline` now automatically invokes messages converter when format is detected and enabled
+- Dataset preview endpoints support messages format detection and conversion
+
+### Documentation
+- Updated CLAUDE.md with messages format documentation and examples
+- Added conversion logic examples for single and multi-turn conversations
+
 ## [1.2.0] - 2024-12-15 "Magical Memories"
 
 ### Added
