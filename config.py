@@ -9,9 +9,12 @@ Configuration can be set via:
 """
 
 import os
+import logging
 from pathlib import Path
 from typing import Optional, List
 from pydantic_settings import BaseSettings
+
+logger = logging.getLogger(__name__)
 
 
 class Settings(BaseSettings):
@@ -87,9 +90,89 @@ class Settings(BaseSettings):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # Apply CUDA_VISIBLE_DEVICES if set
+        # Apply and validate CUDA_VISIBLE_DEVICES if set
         if self.cuda_visible_devices:
-            os.environ['CUDA_VISIBLE_DEVICES'] = self.cuda_visible_devices
+            validation_result = validate_cuda_visible_devices(self.cuda_visible_devices)
+            if validation_result["valid"]:
+                os.environ['CUDA_VISIBLE_DEVICES'] = self.cuda_visible_devices
+                if validation_result.get("warnings"):
+                    for warning in validation_result["warnings"]:
+                        logger.warning(warning)
+            else:
+                # Log error but don't crash - let training fail later with better context
+                for error in validation_result.get("errors", []):
+                    logger.error(error)
+
+
+def validate_cuda_visible_devices(cuda_str: str) -> dict:
+    """
+    Validate CUDA_VISIBLE_DEVICES string before applying it.
+
+    Args:
+        cuda_str: The CUDA_VISIBLE_DEVICES value (e.g., "0", "0,1", "GPU-uuid")
+
+    Returns:
+        dict with "valid" bool, and optional "errors" and "warnings" lists
+    """
+    result = {"valid": True, "errors": [], "warnings": []}
+
+    if not cuda_str or cuda_str.strip() == "":
+        return result
+
+    # Check if CUDA is even available before validating device IDs
+    try:
+        import torch
+        if not torch.cuda.is_available():
+            result["warnings"].append(
+                f"CUDA_VISIBLE_DEVICES='{cuda_str}' is set but CUDA is not available. "
+                "This setting will have no effect."
+            )
+            return result
+
+        actual_gpu_count = torch.cuda.device_count()
+    except ImportError:
+        result["warnings"].append(
+            "PyTorch not available for CUDA validation. Skipping GPU index validation."
+        )
+        return result
+    except Exception as e:
+        result["warnings"].append(f"Could not check CUDA availability: {e}")
+        return result
+
+    # Parse the CUDA_VISIBLE_DEVICES value
+    # It can be: "0", "0,1,2", "GPU-<uuid>", etc.
+    devices = [d.strip() for d in cuda_str.split(",")]
+
+    for device in devices:
+        # Skip UUID-based device specifications
+        if device.startswith("GPU-") or device.startswith("MIG-"):
+            continue
+
+        # Try to parse as integer
+        try:
+            device_id = int(device)
+
+            # Note: We validate against actual_gpu_count BEFORE setting CUDA_VISIBLE_DEVICES
+            # because once it's set, torch.cuda.device_count() returns the filtered count
+            if device_id < 0:
+                result["valid"] = False
+                result["errors"].append(
+                    f"Invalid GPU index '{device_id}': GPU indices must be non-negative."
+                )
+            elif device_id >= actual_gpu_count:
+                result["valid"] = False
+                result["errors"].append(
+                    f"Invalid GPU index '{device_id}': Only {actual_gpu_count} GPU(s) available (indices 0-{actual_gpu_count - 1})."
+                )
+
+        except ValueError:
+            result["valid"] = False
+            result["errors"].append(
+                f"Invalid CUDA_VISIBLE_DEVICES value '{device}': "
+                "Expected integer GPU index or GPU-<uuid> format."
+            )
+
+    return result
 
 
 # Global settings instance

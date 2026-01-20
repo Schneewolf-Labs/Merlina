@@ -88,8 +88,12 @@ config_manager = ConfigManager(config_dir=str(settings.data_dir / "configs"))
 
 # Global storage for uploaded datasets (still in-memory, could be persisted later)
 # Thread-safe access via lock
-uploaded_datasets = {}  # dataset_id -> (bytes content, filename)
+# Structure: dataset_id -> {"content": bytes, "filename": str, "uploaded_at": datetime, "size": int}
+uploaded_datasets = {}
 _uploaded_datasets_lock = threading.Lock()
+
+# Default TTL for uploaded datasets (24 hours)
+UPLOAD_TTL_HOURS = 24
 
 # Global cache for preloaded tokenizers (for preview functionality)
 # Thread-safe access via lock
@@ -368,6 +372,77 @@ else:
         }
 
 # API Endpoints
+@app.get("/health")
+async def health_check():
+    """
+    Health check endpoint for load balancers and monitoring.
+
+    Returns:
+        - status: "healthy" or "degraded"
+        - cuda_available: Whether CUDA/GPU is available
+        - database: Database connection status
+        - queue: Job queue status
+        - uptime_seconds: Approximate uptime (if tracked)
+    """
+    health_status = "healthy"
+    checks = {}
+
+    # Check CUDA availability
+    try:
+        cuda_available = torch.cuda.is_available()
+        gpu_count = torch.cuda.device_count() if cuda_available else 0
+        checks["cuda"] = {
+            "available": cuda_available,
+            "gpu_count": gpu_count
+        }
+    except Exception as e:
+        checks["cuda"] = {"available": False, "error": str(e)}
+        health_status = "degraded"
+
+    # Check database connectivity
+    try:
+        db_stats = job_manager.get_stats()
+        checks["database"] = {
+            "connected": True,
+            "total_jobs": db_stats.get("total_jobs", 0)
+        }
+    except Exception as e:
+        checks["database"] = {"connected": False, "error": str(e)}
+        health_status = "degraded"
+
+    # Check job queue
+    try:
+        queue_stats = job_queue.get_queue_stats()
+        checks["queue"] = {
+            "running": True,
+            "queued_jobs": queue_stats.get("queued", 0),
+            "running_jobs": queue_stats.get("running", 0)
+        }
+    except Exception as e:
+        checks["queue"] = {"running": False, "error": str(e)}
+        health_status = "degraded"
+
+    # Check disk space (warn if low)
+    try:
+        import psutil
+        disk = psutil.disk_usage(str(settings.models_dir.parent))
+        free_gb = disk.free / (1024**3)
+        checks["disk"] = {
+            "free_gb": round(free_gb, 2),
+            "warning": free_gb < 10
+        }
+        if free_gb < 5:
+            health_status = "degraded"
+    except Exception as e:
+        checks["disk"] = {"error": str(e)}
+
+    return {
+        "status": health_status,
+        "version": __version__,
+        "checks": checks
+    }
+
+
 @app.get("/api")
 async def api_info():
     return {
@@ -379,6 +454,7 @@ async def api_info():
             "GET /status/{job_id}": "Get job status",
             "GET /jobs": "List all jobs",
             "GET /version": "Get version information",
+            "GET /health": "Health check for monitoring",
             "GET /api/docs": "API documentation"
         }
     }
@@ -1062,13 +1138,17 @@ async def upload_dataset_file(file: FastAPIUploadFile = File(...)):
 
         # Generate dataset ID
         import hashlib
-        from datetime import datetime
 
         dataset_id = f"upload_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{hashlib.md5(content).hexdigest()[:8]}"
 
-        # Store in memory (in production, save to disk/S3)
+        # Store in memory with metadata (in production, save to disk/S3)
         with _uploaded_datasets_lock:
-            uploaded_datasets[dataset_id] = (content, file.filename)
+            uploaded_datasets[dataset_id] = {
+                "content": content,
+                "filename": file.filename,
+                "uploaded_at": datetime.now(),
+                "size": len(content)
+            }
 
         logger.info(f"Uploaded dataset: {file.filename} -> {dataset_id}")
 
@@ -1086,16 +1166,210 @@ async def upload_dataset_file(file: FastAPIUploadFile = File(...)):
 
 @app.get("/dataset/uploads")
 async def list_uploaded_datasets():
-    """List all uploaded datasets"""
+    """List all uploaded datasets with TTL information"""
+    from datetime import timedelta
+
+    now = datetime.now()
+    datasets_list = []
+
+    with _uploaded_datasets_lock:
+        for dataset_id, entry in uploaded_datasets.items():
+            # Handle both old and new format
+            if isinstance(entry, dict):
+                uploaded_at = entry.get("uploaded_at", now)
+                expires_at = uploaded_at + timedelta(hours=UPLOAD_TTL_HOURS)
+                ttl_remaining = max(0, (expires_at - now).total_seconds())
+
+                datasets_list.append({
+                    "dataset_id": dataset_id,
+                    "filename": entry["filename"],
+                    "size": entry["size"],
+                    "uploaded_at": uploaded_at.isoformat(),
+                    "expires_at": expires_at.isoformat(),
+                    "ttl_remaining_seconds": int(ttl_remaining)
+                })
+            else:
+                # Legacy tuple format
+                content, filename = entry
+                datasets_list.append({
+                    "dataset_id": dataset_id,
+                    "filename": filename,
+                    "size": len(content),
+                    "uploaded_at": None,
+                    "expires_at": None,
+                    "ttl_remaining_seconds": None
+                })
+
+    return {"datasets": datasets_list}
+
+
+@app.post("/dataset/cleanup")
+async def cleanup_expired_uploads():
+    """
+    Clean up expired uploaded datasets based on TTL.
+    Removes datasets older than UPLOAD_TTL_HOURS (default: 24 hours).
+    """
+    from datetime import timedelta
+
+    now = datetime.now()
+    expired_ids = []
+    freed_bytes = 0
+
+    with _uploaded_datasets_lock:
+        for dataset_id, entry in list(uploaded_datasets.items()):
+            if isinstance(entry, dict):
+                uploaded_at = entry.get("uploaded_at")
+                if uploaded_at:
+                    age = now - uploaded_at
+                    if age > timedelta(hours=UPLOAD_TTL_HOURS):
+                        expired_ids.append(dataset_id)
+                        freed_bytes += entry.get("size", 0)
+
+        # Remove expired datasets
+        for dataset_id in expired_ids:
+            del uploaded_datasets[dataset_id]
+            logger.info(f"Cleaned up expired upload: {dataset_id}")
+
     return {
-        "datasets": [
-            {
-                "dataset_id": dataset_id,
-                "filename": filename,
-                "size": len(content)
-            }
-            for dataset_id, (content, filename) in uploaded_datasets.items()
-        ]
+        "status": "success",
+        "cleaned_count": len(expired_ids),
+        "cleaned_ids": expired_ids,
+        "freed_bytes": freed_bytes,
+        "freed_mb": round(freed_bytes / (1024 * 1024), 2)
+    }
+
+
+@app.delete("/dataset/uploads/{dataset_id}")
+async def delete_uploaded_dataset(dataset_id: str):
+    """Delete a specific uploaded dataset"""
+    with _uploaded_datasets_lock:
+        if dataset_id not in uploaded_datasets:
+            raise HTTPException(status_code=404, detail=f"Dataset '{dataset_id}' not found")
+
+        entry = uploaded_datasets[dataset_id]
+        size = entry.get("size", 0) if isinstance(entry, dict) else len(entry[0])
+        del uploaded_datasets[dataset_id]
+
+    logger.info(f"Deleted uploaded dataset: {dataset_id}")
+    return {
+        "status": "success",
+        "message": f"Dataset '{dataset_id}' deleted",
+        "freed_bytes": size
+    }
+
+
+@app.post("/cleanup/artifacts")
+async def cleanup_failed_job_artifacts(max_age_hours: int = 72):
+    """
+    Clean up training artifacts from failed jobs.
+
+    Args:
+        max_age_hours: Delete artifacts from failed jobs older than this (default: 72 hours)
+
+    This removes:
+    - Results directories for failed/stopped jobs
+    - Incomplete model checkpoints
+    """
+    import shutil
+    from datetime import timedelta
+
+    cleaned_dirs = []
+    freed_bytes = 0
+    errors = []
+
+    # Get failed/stopped jobs older than max_age
+    cutoff = datetime.now() - timedelta(hours=max_age_hours)
+
+    failed_jobs = job_manager.list_jobs(status="failed", limit=1000)
+    stopped_jobs = job_manager.list_jobs(status="stopped", limit=1000)
+
+    for job in failed_jobs + stopped_jobs:
+        try:
+            # Parse job creation time
+            if job.created_at:
+                job_time = datetime.fromisoformat(job.created_at.replace('Z', '+00:00').replace('+00:00', ''))
+                if job_time > cutoff:
+                    continue  # Skip recent jobs
+
+            # Check for results directory
+            results_dir = Path(f"./results/{job.job_id}")
+            if results_dir.exists():
+                dir_size = sum(f.stat().st_size for f in results_dir.rglob('*') if f.is_file())
+                shutil.rmtree(results_dir)
+                cleaned_dirs.append(str(results_dir))
+                freed_bytes += dir_size
+                logger.info(f"Cleaned up results directory: {results_dir}")
+
+        except Exception as e:
+            errors.append(f"Error cleaning {job.job_id}: {str(e)}")
+            logger.warning(f"Failed to clean up job {job.job_id}: {e}")
+
+    return {
+        "status": "success",
+        "cleaned_directories": cleaned_dirs,
+        "cleaned_count": len(cleaned_dirs),
+        "freed_bytes": freed_bytes,
+        "freed_mb": round(freed_bytes / (1024 * 1024), 2),
+        "errors": errors if errors else None
+    }
+
+
+@app.get("/cleanup/status")
+async def get_cleanup_status():
+    """
+    Get information about cleanable resources.
+    Shows expired uploads and failed job artifacts that can be cleaned.
+    """
+    from datetime import timedelta
+
+    now = datetime.now()
+
+    # Check expired uploads
+    expired_uploads = []
+    with _uploaded_datasets_lock:
+        for dataset_id, entry in uploaded_datasets.items():
+            if isinstance(entry, dict):
+                uploaded_at = entry.get("uploaded_at")
+                if uploaded_at:
+                    age = now - uploaded_at
+                    if age > timedelta(hours=UPLOAD_TTL_HOURS):
+                        expired_uploads.append({
+                            "dataset_id": dataset_id,
+                            "filename": entry["filename"],
+                            "size": entry["size"],
+                            "age_hours": round(age.total_seconds() / 3600, 1)
+                        })
+
+    # Check failed job artifacts
+    failed_jobs = job_manager.list_jobs(status="failed", limit=100)
+    stopped_jobs = job_manager.list_jobs(status="stopped", limit=100)
+
+    cleanable_artifacts = []
+    for job in failed_jobs + stopped_jobs:
+        results_dir = Path(f"./results/{job.job_id}")
+        if results_dir.exists():
+            try:
+                dir_size = sum(f.stat().st_size for f in results_dir.rglob('*') if f.is_file())
+                cleanable_artifacts.append({
+                    "job_id": job.job_id,
+                    "status": job.status,
+                    "path": str(results_dir),
+                    "size_mb": round(dir_size / (1024 * 1024), 2)
+                })
+            except Exception:
+                pass
+
+    return {
+        "expired_uploads": {
+            "count": len(expired_uploads),
+            "items": expired_uploads,
+            "total_bytes": sum(u["size"] for u in expired_uploads)
+        },
+        "failed_job_artifacts": {
+            "count": len(cleanable_artifacts),
+            "items": cleanable_artifacts,
+            "total_mb": sum(a["size_mb"] for a in cleanable_artifacts)
+        }
     }
 
 
@@ -1498,17 +1772,33 @@ async def detect_model_layers(request: ModelLayersRequest):
 
 if __name__ == "__main__":
     import uvicorn
+    from config import validate_cuda_visible_devices
 
     # Determine the URL for display
     display_url = settings.domain or f"http://localhost:{settings.port}"
 
     logger.info("Starting Merlina - Magical Model Training")
+    logger.info(f"Version: {__version__}")
     logger.info(f"Visit {display_url} to access the interface")
     logger.info(f"API documentation: {display_url}/api/docs")
+    logger.info(f"Health check: {display_url}/health")
     logger.info(f"Frontend directory: {FRONTEND_DIR}")
     logger.info(f"Database: {settings.database_path}")
     logger.info(f"Log level: {settings.log_level}")
-    if settings.cuda_visible_devices:
-        logger.info(f"GPUs: {settings.cuda_visible_devices}")
+
+    # GPU startup check
+    if torch.cuda.is_available():
+        gpu_count = torch.cuda.device_count()
+        gpu_names = [torch.cuda.get_device_name(i) for i in range(gpu_count)]
+        logger.info(f"CUDA available: {gpu_count} GPU(s) detected")
+        for i, name in enumerate(gpu_names):
+            props = torch.cuda.get_device_properties(i)
+            mem_gb = props.total_memory / (1024**3)
+            logger.info(f"  GPU {i}: {name} ({mem_gb:.1f} GB)")
+
+        if settings.cuda_visible_devices:
+            logger.info(f"CUDA_VISIBLE_DEVICES: {settings.cuda_visible_devices}")
+    else:
+        logger.warning("CUDA not available - GPU training will not work")
 
     uvicorn.run(app, host=settings.host, port=settings.port)

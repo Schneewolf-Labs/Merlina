@@ -72,7 +72,15 @@ def create_loader(
         if uploaded_datasets is None or dataset_id not in uploaded_datasets:
             raise LoaderCreationError(f"Uploaded dataset '{dataset_id}' not found")
 
-        file_content, filename = uploaded_datasets[dataset_id]
+        # Handle both old tuple format (content, filename) and new dict format
+        dataset_entry = uploaded_datasets[dataset_id]
+        if isinstance(dataset_entry, dict):
+            file_content = dataset_entry["content"]
+            filename = dataset_entry["filename"]
+        else:
+            # Legacy tuple format for backwards compatibility
+            file_content, filename = dataset_entry
+
         return UploadedDatasetLoader(
             file_content=file_content,
             filename=filename,
