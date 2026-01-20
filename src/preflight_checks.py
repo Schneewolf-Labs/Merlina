@@ -1,6 +1,9 @@
 """
 Pre-flight Validation for Training Jobs
-Validates configuration, resources, and dependencies before starting training
+
+Validates configuration, resources, and dependencies before starting training.
+Performs checks for GPU availability, VRAM requirements, disk space, model access,
+dataset configuration, and API tokens.
 """
 
 import torch
@@ -10,24 +13,24 @@ from typing import Dict, List, Tuple, Any, Optional
 from pathlib import Path
 import psutil
 
+from .utils import get_num_gpus, calculate_effective_batch_size
+from .constants import (
+    VRAM_ESTIMATES_4BIT,
+    FULL_PRECISION_VRAM_MULTIPLIER,
+    DISK_SPACE_ESTIMATES,
+    DEFAULT_DISK_SPACE_ESTIMATE,
+    GATED_MODEL_PREFIXES,
+    MAX_RECOMMENDED_LORA_RANK,
+    MIN_EFFECTIVE_BATCH_SIZE,
+    MAX_EFFECTIVE_BATCH_SIZE,
+    MAX_RECOMMENDED_LEARNING_RATE,
+    FLASH_ATTENTION_MIN_COMPUTE_CAP,
+    get_vram_estimate,
+    get_disk_space_estimate,
+    is_gated_model,
+)
+
 logger = logging.getLogger(__name__)
-
-
-def get_num_gpus() -> int:
-    """Get the number of GPUs available for training."""
-    if torch.cuda.is_available():
-        return max(1, torch.cuda.device_count())
-    return 1
-
-
-def calculate_effective_batch_size(batch_size: int, gradient_accumulation_steps: int) -> int:
-    """
-    Calculate the effective batch size accounting for gradient accumulation and multiple GPUs.
-
-    Effective batch size = per_device_batch_size × gradient_accumulation_steps × num_gpus
-    """
-    num_gpus = get_num_gpus()
-    return batch_size * gradient_accumulation_steps * num_gpus
 
 
 def is_local_model_path(model_path: str) -> bool:
@@ -160,11 +163,12 @@ class PreflightValidator:
                 "total_memory_gb": props.total_memory / (1024**3)
             })
 
-            # Check compute capability for flash attention
-            if props.major < 8:
+            # Check compute capability for flash attention using constant
+            if props.major < FLASH_ATTENTION_MIN_COMPUTE_CAP:
                 self.warnings.append(
                     f"GPU {i} ({props.name}) has compute capability {props.major}.{props.minor}. "
-                    "Flash Attention 2 requires 8.0+ (Ampere or newer). Will fall back to eager attention."
+                    f"Flash Attention 2 requires {FLASH_ATTENTION_MIN_COMPUTE_CAP}.0+ (Ampere or newer). "
+                    "Will fall back to eager attention."
                 )
 
         logger.info(f"Found {gpu_count} GPU(s): {[g['name'] for g in gpu_info]}")
@@ -176,29 +180,12 @@ class PreflightValidator:
         }
 
     def _check_vram(self, config: Any) -> Dict[str, Any]:
-        """Check if available VRAM is sufficient"""
+        """Check if available VRAM is sufficient."""
         if not torch.cuda.is_available():
             return {"skipped": "No GPU available"}
 
-        # Estimate VRAM requirements based on model size
-        model_name = config.base_model.lower()
-
-        # Model size estimates (in GB of VRAM with 4-bit quantization)
-        size_estimates = {
-            "3b": 6,
-            "7b": 10,
-            "8b": 10,
-            "13b": 16,
-            "14b": 18,
-            "34b": 30,
-            "70b": 60,
-        }
-
-        estimated_vram = None
-        for size_key, vram_needed in size_estimates.items():
-            if size_key in model_name:
-                estimated_vram = vram_needed
-                break
+        # Estimate VRAM requirements based on model size using constants
+        estimated_vram = get_vram_estimate(config.base_model, config.use_4bit)
 
         if estimated_vram is None:
             self.warnings.append(
@@ -207,9 +194,8 @@ class PreflightValidator:
             )
             return {"estimate_unavailable": True}
 
-        # Adjust for quantization
+        # Warn about full precision memory usage
         if not config.use_4bit:
-            estimated_vram *= 3.5  # Roughly 3.5x more VRAM for full precision
             self.warnings.append(
                 f"Training without 4-bit quantization will require ~{estimated_vram:.1f}GB VRAM. "
                 "Consider enabling 4-bit quantization to reduce memory usage."
@@ -233,29 +219,22 @@ class PreflightValidator:
         }
 
     def _check_disk_space(self, config: Any) -> Dict[str, Any]:
-        """Check available disk space for model checkpoints"""
+        """Check available disk space for model checkpoints."""
         output_dir = Path(f"./models/{config.output_name}")
         output_dir.parent.mkdir(parents=True, exist_ok=True)
 
-        # Get disk usage
-        disk_usage = psutil.disk_usage(str(output_dir.parent))
-        available_gb = disk_usage.free / (1024**3)
+        # Get disk usage with error handling for unusual filesystems
+        try:
+            disk_usage = psutil.disk_usage(str(output_dir.parent))
+            available_gb = disk_usage.free / (1024**3)
+        except (OSError, IOError) as e:
+            self.warnings.append(
+                f"Could not check disk space at {output_dir.parent}: {e}"
+            )
+            return {"error": str(e)}
 
-        # Estimate space needed (model + checkpoints)
-        # Rough estimate: 20GB for 7B model, scales linearly
-        model_name = config.base_model.lower()
-        if "70b" in model_name:
-            estimated_space = 140
-        elif "34b" in model_name:
-            estimated_space = 70
-        elif "13b" in model_name or "14b" in model_name:
-            estimated_space = 30
-        elif "7b" in model_name or "8b" in model_name:
-            estimated_space = 20
-        elif "3b" in model_name:
-            estimated_space = 10
-        else:
-            estimated_space = 25  # Default estimate
+        # Estimate space needed using constants
+        estimated_space = get_disk_space_estimate(config.base_model)
 
         if available_gb < estimated_space:
             self.errors.append(
@@ -321,16 +300,10 @@ class PreflightValidator:
                 "has_config": config_file.exists()
             }
         else:
-            # HuggingFace model - check for gated models
-            gated_models = [
-                "meta-llama/Llama-2",
-                "meta-llama/Meta-Llama-3",
-                "mistralai/Mixtral",
-            ]
+            # HuggingFace model - check for gated models using constants
+            model_is_gated = is_gated_model(model_path)
 
-            is_gated = any(gated in model_path for gated in gated_models)
-
-            if is_gated and not config.hf_token:
+            if model_is_gated and not config.hf_token:
                 self.errors.append(
                     f"Model '{model_path}' is gated and requires a HuggingFace token. "
                     "Please provide hf_token in the configuration or set HF_TOKEN environment variable."
@@ -339,7 +312,7 @@ class PreflightValidator:
             return {
                 "model": model_path,
                 "is_local": False,
-                "is_gated": is_gated,
+                "is_gated": model_is_gated,
                 "has_token": bool(config.hf_token or os.getenv("HF_TOKEN"))
             }
 
@@ -377,12 +350,14 @@ class PreflightValidator:
         }
 
     def _check_training_config(self, config: Any) -> Dict[str, Any]:
-        """Validate training hyperparameters"""
+        """Validate training hyperparameters using configurable thresholds."""
         issues = []
 
-        # Check LoRA config
-        if config.lora_r > 256:
-            self.warnings.append(f"LoRA rank ({config.lora_r}) is very high. Consider using 64-128 for most cases.")
+        # Check LoRA config using constants
+        if config.lora_r > MAX_RECOMMENDED_LORA_RANK:
+            self.warnings.append(
+                f"LoRA rank ({config.lora_r}) is very high. Consider using 64-128 for most cases."
+            )
 
         if config.lora_alpha < config.lora_r:
             self.warnings.append(
@@ -390,22 +365,24 @@ class PreflightValidator:
                 "Typically alpha should be 1-2x the rank."
             )
 
-        # Check batch size and gradient accumulation
-        effective_batch_size = calculate_effective_batch_size(config.batch_size, config.gradient_accumulation_steps)
-        if effective_batch_size < 4:
+        # Check batch size and gradient accumulation using constants
+        effective_batch_size = calculate_effective_batch_size(
+            config.batch_size, config.gradient_accumulation_steps
+        )
+        if effective_batch_size < MIN_EFFECTIVE_BATCH_SIZE:
             self.warnings.append(
                 f"Effective batch size ({effective_batch_size}) is very small. "
                 "Consider increasing gradient_accumulation_steps for more stable training."
             )
 
-        if effective_batch_size > 128:
+        if effective_batch_size > MAX_EFFECTIVE_BATCH_SIZE:
             self.warnings.append(
                 f"Effective batch size ({effective_batch_size}) is very large. "
                 "This may require significant memory and could lead to worse generalization."
             )
 
-        # Check learning rate
-        if config.learning_rate > 1e-4:
+        # Check learning rate using constants
+        if config.learning_rate > MAX_RECOMMENDED_LEARNING_RATE:
             self.warnings.append(
                 f"Learning rate ({config.learning_rate}) is high for fine-tuning. "
                 "Consider using 1e-5 to 1e-4 for LoRA fine-tuning."

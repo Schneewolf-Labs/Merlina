@@ -1,5 +1,13 @@
 """
-Enhanced Training Runner with WebSocket updates and better error handling
+Enhanced Training Runner with WebSocket updates and better error handling.
+
+This module provides the core training functionality for Merlina, including:
+- Model loading with quantization support
+- Dataset preparation and formatting
+- ORPO and SFT training modes
+- WebSocket progress updates
+- Background HuggingFace Hub uploads
+- Weights & Biases integration
 """
 
 import os
@@ -10,7 +18,7 @@ import logging
 import asyncio
 import threading
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Callable
 
 from transformers import (
     AutoModelForCausalLM,
@@ -35,25 +43,9 @@ from dataset_handlers import (
 from src.job_manager import JobManager
 from src.websocket_manager import websocket_manager
 from src.preflight_checks import is_local_model_path
+from src.utils import get_num_gpus, calculate_effective_batch_size, get_torch_dtype
 
 logger = logging.getLogger(__name__)
-
-
-def get_num_gpus() -> int:
-    """Get the number of GPUs available for training."""
-    if torch.cuda.is_available():
-        return max(1, torch.cuda.device_count())
-    return 1
-
-
-def calculate_effective_batch_size(batch_size: int, gradient_accumulation_steps: int) -> int:
-    """
-    Calculate the effective batch size accounting for gradient accumulation and multiple GPUs.
-
-    Effective batch size = per_device_batch_size × gradient_accumulation_steps × num_gpus
-    """
-    num_gpus = get_num_gpus()
-    return batch_size * gradient_accumulation_steps * num_gpus
 
 
 def generate_model_readme(config: Any, training_mode: str) -> str:
@@ -555,23 +547,90 @@ class WebSocketCallback(TrainerCallback):
                 )
 
 
-async def run_training_async(job_id: str, config: Any, job_manager: JobManager, uploaded_datasets: dict):
-    """Async wrapper for training to enable WebSocket updates"""
-    loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, run_training_sync, job_id, config, job_manager, uploaded_datasets)
-
-
-def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploaded_datasets: dict, event_loop=None):
+def _cleanup_training_resources(model: Optional[Any], trainer: Optional[Any]) -> None:
     """
-    Run ORPO training job with enhanced monitoring.
+    Clean up training resources to free GPU memory.
+
+    This function safely deletes model and trainer objects and clears
+    CUDA cache to prevent OOM errors in subsequent training jobs.
+
+    Args:
+        model: The model object to clean up (can be None)
+        trainer: The trainer object to clean up (can be None)
+    """
+    try:
+        # Delete trainer first as it may hold references to model
+        if trainer is not None:
+            del trainer
+            logger.debug("Trainer cleaned up")
+
+        # Then delete model
+        if model is not None:
+            del model
+            logger.debug("Model cleaned up")
+
+        # Force garbage collection
+        gc.collect()
+
+        # Clear CUDA cache if available
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            logger.debug("GPU memory cleaned up")
+
+    except Exception as cleanup_error:
+        logger.debug(f"Error during cleanup (non-fatal): {cleanup_error}")
+
+
+async def run_training_async(
+    job_id: str,
+    config: Any,
+    job_manager: JobManager,
+    uploaded_datasets: dict
+) -> None:
+    """
+    Async wrapper for training to enable WebSocket updates.
+
+    Runs the synchronous training function in a thread pool executor
+    to avoid blocking the event loop.
 
     Args:
         job_id: Unique job identifier
         config: Training configuration
-        job_manager: Job manager instance
+        job_manager: JobManager instance
         uploaded_datasets: Dictionary of uploaded datasets
-        event_loop: Event loop for WebSocket updates (optional)
     """
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, run_training_sync, job_id, config, job_manager, uploaded_datasets)
+
+
+def run_training_sync(
+    job_id: str,
+    config: Any,
+    job_manager: JobManager,
+    uploaded_datasets: dict,
+    event_loop: Optional[asyncio.AbstractEventLoop] = None
+) -> None:
+    """
+    Run training job with enhanced monitoring and WebSocket updates.
+
+    Supports both ORPO (Odds Ratio Preference Optimization) and SFT
+    (Supervised Fine-Tuning) training modes with optional LoRA adapters.
+
+    Args:
+        job_id: Unique job identifier for tracking
+        config: Training configuration containing all hyperparameters
+        job_manager: JobManager instance for persistence and status updates
+        uploaded_datasets: Dictionary mapping dataset IDs to uploaded content
+        event_loop: Event loop for WebSocket updates (optional, for async context)
+
+    Note:
+        This function handles cleanup of GPU resources in all cases (success,
+        failure, or interruption) to prevent OOM errors in subsequent jobs.
+    """
+    # Initialize resources to None for proper cleanup tracking
+    model = None
+    trainer = None
+
     try:
         # Update job status
         job_manager.update_job(job_id, status="initializing", progress=0.0)
@@ -1039,20 +1098,4 @@ def run_training_sync(job_id: str, config: Any, job_manager: JobManager, uploade
     finally:
         # Ensure GPU memory is freed even on error
         # This prevents OOM errors in subsequent training jobs
-        try:
-            # Clean up trainer if it exists in local scope
-            local_vars = locals()
-            if 'trainer' in local_vars and local_vars['trainer'] is not None:
-                del trainer
-            # Clean up model if it exists in local scope
-            if 'model' in local_vars and local_vars['model'] is not None:
-                del model
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-                logger.debug("GPU memory cleaned up in finally block")
-        except NameError:
-            # Variables weren't defined yet, nothing to clean up
-            pass
-        except Exception as cleanup_error:
-            logger.debug(f"Error during cleanup: {cleanup_error}")
+        _cleanup_training_resources(model, trainer)

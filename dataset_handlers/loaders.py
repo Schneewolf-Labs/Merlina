@@ -1,11 +1,17 @@
 """
-Dataset loader implementations for different sources
+Dataset loader implementations for different sources.
+
+This module provides concrete implementations of DatasetLoader for:
+- HuggingFace Hub datasets
+- Local files (JSON, JSONL, CSV, Parquet)
+- Uploaded file content (from web UI)
 """
 
 import json
+import os
 import tempfile
 from pathlib import Path
-from typing import Optional, Union
+from typing import Optional, Union, List, Dict
 import logging
 
 from datasets import load_dataset, Dataset
@@ -15,23 +21,45 @@ logger = logging.getLogger(__name__)
 
 
 class HuggingFaceLoader(DatasetLoader):
-    """Load dataset from HuggingFace Hub"""
+    """
+    Load dataset from HuggingFace Hub.
 
-    def __init__(self, repo_id: str, split: str = "train", token: Optional[str] = None):
+    This loader supports both public and private datasets. For private datasets,
+    provide an API token with appropriate permissions.
+
+    Example:
+        >>> loader = HuggingFaceLoader("schneewolflabs/Athanor-DPO")
+        >>> dataset = loader.load()
+    """
+
+    def __init__(
+        self,
+        repo_id: str,
+        split: str = "train",
+        token: Optional[str] = None
+    ) -> None:
         """
         Initialize HuggingFace dataset loader.
 
         Args:
             repo_id: HuggingFace repository ID (e.g., "schneewolflabs/Athanor-DPO")
             split: Dataset split to load (default: "train")
-            token: Optional HuggingFace API token for private datasets
+            token: Optional HuggingFace API token for private/gated datasets
         """
         self.repo_id = repo_id
         self.split = split
         self.token = token
 
     def load(self) -> Dataset:
-        """Load dataset from HuggingFace Hub"""
+        """
+        Load dataset from HuggingFace Hub.
+
+        Returns:
+            The loaded Dataset
+
+        Raises:
+            ValueError: If the dataset cannot be loaded
+        """
         logger.info(f"Loading dataset from HuggingFace: {self.repo_id} (split: {self.split})")
 
         try:
@@ -48,7 +76,12 @@ class HuggingFaceLoader(DatasetLoader):
             raise ValueError(f"Failed to load dataset '{self.repo_id}': {str(e)}")
 
     def get_source_info(self) -> dict:
-        """Get information about the dataset source"""
+        """
+        Get information about the dataset source.
+
+        Returns:
+            Dictionary containing source type, repo ID, and split
+        """
         return {
             "source_type": "huggingface",
             "repo_id": self.repo_id,
@@ -57,9 +90,18 @@ class HuggingFaceLoader(DatasetLoader):
 
 
 class LocalFileLoader(DatasetLoader):
-    """Load dataset from local file (JSON, JSONL, CSV, Parquet)"""
+    """
+    Load dataset from local file.
 
-    SUPPORTED_FORMATS = {
+    Supports JSON, JSONL, CSV, and Parquet formats. The format is automatically
+    inferred from the file extension, or can be explicitly specified.
+
+    Example:
+        >>> loader = LocalFileLoader("./data/training.jsonl")
+        >>> dataset = loader.load()
+    """
+
+    SUPPORTED_FORMATS: Dict[str, str] = {
         '.json': 'json',
         '.jsonl': 'json',
         '.csv': 'csv',
@@ -67,14 +109,22 @@ class LocalFileLoader(DatasetLoader):
         '.pq': 'parquet'
     }
 
-    def __init__(self, file_path: Union[str, Path], file_format: Optional[str] = None):
+    def __init__(
+        self,
+        file_path: Union[str, Path],
+        file_format: Optional[str] = None
+    ) -> None:
         """
         Initialize local file loader.
 
         Args:
-            file_path: Path to the dataset file
-            file_format: Optional file format override ('json', 'csv', 'parquet')
-                        If not provided, will be inferred from file extension
+            file_path: Path to the dataset file (absolute or relative)
+            file_format: Optional file format override ('json', 'csv', 'parquet').
+                        If not provided, will be inferred from file extension.
+
+        Raises:
+            FileNotFoundError: If the file does not exist
+            ValueError: If the format cannot be determined
         """
         self.file_path = Path(file_path)
         self.file_format = file_format
@@ -144,20 +194,35 @@ class LocalFileLoader(DatasetLoader):
 
 
 class UploadedDatasetLoader(DatasetLoader):
-    """Load dataset from uploaded file content"""
+    """
+    Load dataset from uploaded file content.
 
-    def __init__(self, file_content: bytes, filename: str, file_format: Optional[str] = None):
+    This loader handles file content uploaded through the web UI by writing
+    it to a temporary file, loading it with LocalFileLoader, and cleaning
+    up the temporary file afterward.
+    """
+
+    def __init__(
+        self,
+        file_content: bytes,
+        filename: str,
+        file_format: Optional[str] = None
+    ) -> None:
         """
         Initialize uploaded dataset loader.
 
         Args:
             file_content: Raw bytes of the uploaded file
-            filename: Original filename (used to infer format)
+            filename: Original filename (used to infer format if not specified)
             file_format: Optional file format override ('json', 'csv', 'parquet')
+
+        Raises:
+            ValueError: If format cannot be inferred from filename
         """
         self.file_content = file_content
         self.filename = filename
         self.file_format = file_format
+        self._temp_path: Optional[str] = None
 
         # Infer format from filename if not provided
         if not self.file_format:
@@ -170,28 +235,50 @@ class UploadedDatasetLoader(DatasetLoader):
                     f"Supported formats: {list(LocalFileLoader.SUPPORTED_FORMATS.values())}"
                 )
 
-        # Create temp file to store content
-        self.temp_file = None
+    def _cleanup_temp_file(self) -> None:
+        """Clean up the temporary file if it exists."""
+        if self._temp_path:
+            try:
+                temp_file = Path(self._temp_path)
+                if temp_file.exists():
+                    temp_file.unlink()
+                    logger.debug(f"Cleaned up temp file: {self._temp_path}")
+            except OSError as e:
+                logger.warning(f"Failed to clean up temp file '{self._temp_path}': {e}")
+            finally:
+                self._temp_path = None
 
     def load(self) -> Dataset:
-        """Load dataset from uploaded content"""
+        """
+        Load dataset from uploaded content.
+
+        Creates a temporary file, writes the content to it, loads the dataset
+        using LocalFileLoader, and ensures cleanup of the temporary file.
+
+        Returns:
+            The loaded Dataset
+
+        Raises:
+            ValueError: If the dataset cannot be loaded
+        """
         logger.info(f"Loading dataset from upload: {self.filename} (format: {self.file_format})")
 
+        # Ensure any previous temp file is cleaned up
+        self._cleanup_temp_file()
+
         try:
-            # Write content to temporary file
+            # Write content to temporary file with appropriate suffix
             suffix = Path(self.filename).suffix or f'.{self.file_format}'
-            self.temp_file = tempfile.NamedTemporaryFile(
-                mode='wb',
-                suffix=suffix,
-                delete=False
-            )
-            self.temp_file.write(self.file_content)
-            self.temp_file.flush()
-            temp_path = self.temp_file.name
-            self.temp_file.close()
+
+            # Create temp file with delete=False so we control cleanup
+            fd, self._temp_path = tempfile.mkstemp(suffix=suffix)
+            try:
+                os.write(fd, self.file_content)
+            finally:
+                os.close(fd)
 
             # Use LocalFileLoader to load from temp file
-            loader = LocalFileLoader(temp_path, self.file_format)
+            loader = LocalFileLoader(self._temp_path, self.file_format)
             dataset = loader.load()
 
             logger.info(f"Successfully loaded {len(dataset)} samples from upload")
@@ -202,15 +289,16 @@ class UploadedDatasetLoader(DatasetLoader):
             raise ValueError(f"Failed to load uploaded dataset '{self.filename}': {str(e)}")
 
         finally:
-            # Clean up temp file
-            if self.temp_file and Path(self.temp_file.name).exists():
-                try:
-                    Path(self.temp_file.name).unlink()
-                except Exception as e:
-                    logger.warning(f"Failed to clean up temp file: {e}")
+            # Always clean up the temp file
+            self._cleanup_temp_file()
 
     def get_source_info(self) -> dict:
-        """Get information about the dataset source"""
+        """
+        Get information about the dataset source.
+
+        Returns:
+            Dictionary containing source type, filename, and format
+        """
         return {
             "source_type": "upload",
             "filename": self.filename,
