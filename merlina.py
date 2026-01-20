@@ -474,7 +474,6 @@ async def create_training_job(config: TrainingConfig, priority: Optional[str] = 
 
     # Import training runner
     from src.training_runner import run_training_sync
-    import asyncio
 
     # Get the current event loop for WebSocket updates
     try:
