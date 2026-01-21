@@ -14,6 +14,12 @@ class DatasetManager {
         this.datasetColumns = null;
         this.datasetSamples = null;
 
+        // Preview navigation state
+        this.previewOffset = 0;
+        this.previewLimit = 5;
+        this.previewTotalCount = 0;
+        this.previewType = null; // 'raw' or 'formatted'
+
         this.toast = new Toast();
         this.setupEventListeners();
     }
@@ -55,6 +61,37 @@ class DatasetManager {
         const previewFormattedBtn = document.getElementById('preview-formatted-button');
         if (previewFormattedBtn) {
             previewFormattedBtn.addEventListener('click', () => this.handlePreviewFormatted());
+        }
+
+        // Navigation controls
+        const prevBtn = document.getElementById('preview-prev-button');
+        if (prevBtn) {
+            prevBtn.addEventListener('click', () => this.handlePrevious());
+        }
+
+        const nextBtn = document.getElementById('preview-next-button');
+        if (nextBtn) {
+            nextBtn.addEventListener('click', () => this.handleNext());
+        }
+
+        const jumpBtn = document.getElementById('jump-to-index-button');
+        if (jumpBtn) {
+            jumpBtn.addEventListener('click', () => this.handleJumpToIndex());
+        }
+
+        const limitSelect = document.getElementById('preview-limit');
+        if (limitSelect) {
+            limitSelect.addEventListener('change', (e) => this.handleLimitChange(e));
+        }
+
+        // Enter key on index input
+        const indexInput = document.getElementById('preview-index');
+        if (indexInput) {
+            indexInput.addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') {
+                    this.handleJumpToIndex();
+                }
+            });
         }
     }
 
@@ -245,13 +282,36 @@ class DatasetManager {
      * Handle dataset preview
      */
     async handlePreview() {
+        this.previewType = 'raw';
+        this.previewOffset = 0;
+        this.previewLimit = parseInt(document.getElementById('preview-limit').value) || 5;
+        await this.loadPreview();
+    }
+
+    /**
+     * Load preview with current offset and limit
+     */
+    async loadPreview() {
+        if (this.previewType === 'raw') {
+            await this.loadRawPreview();
+        } else if (this.previewType === 'formatted') {
+            await this.loadFormattedPreview();
+        }
+    }
+
+    /**
+     * Load raw dataset preview
+     */
+    async loadRawPreview() {
         const previewBtn = document.getElementById('preview-dataset-button');
 
         try {
             LoadingManager.show(previewBtn, '⏳ Loading...');
 
             const datasetConfig = this.getDatasetConfig(true);  // forPreview=true
-            const data = await MerlinaAPI.previewDataset(datasetConfig);
+            const data = await MerlinaAPI.previewDataset(datasetConfig, this.previewOffset, this.previewLimit);
+
+            this.previewTotalCount = data.total_count;
 
             // Display preview
             const previewDiv = document.getElementById('dataset-preview');
@@ -270,6 +330,9 @@ class DatasetManager {
                 formattedPreview.style.display = 'none';
             }
 
+            // Update position info
+            this.updatePositionInfo('raw');
+
             this.toast.success(`Loaded ${data.num_samples} sample(s)`);
         } catch (error) {
             console.error('Preview failed:', error);
@@ -283,17 +346,29 @@ class DatasetManager {
      * Handle formatted preview
      */
     async handlePreviewFormatted() {
+        this.previewType = 'formatted';
+        this.previewOffset = 0;
+        this.previewLimit = parseInt(document.getElementById('preview-limit').value) || 5;
+        await this.loadFormattedPreview();
+    }
+
+    /**
+     * Load formatted dataset preview
+     */
+    async loadFormattedPreview() {
         const previewBtn = document.getElementById('preview-formatted-button');
 
         try {
             LoadingManager.show(previewBtn, '⏳ Loading...');
 
             const datasetConfig = this.getDatasetConfig(true);  // forPreview=true
-            const data = await MerlinaAPI.previewFormattedDataset(datasetConfig);
+            const data = await MerlinaAPI.previewFormattedDataset(datasetConfig, this.previewOffset, this.previewLimit);
 
             if (!data.samples || data.samples.length === 0) {
                 throw new Error('No samples returned');
             }
+
+            this.previewTotalCount = data.total_count;
 
             // Get first sample
             const sample = data.samples[0];
@@ -333,6 +408,9 @@ class DatasetManager {
             if (rawPreview) {
                 rawPreview.style.display = 'none';
             }
+
+            // Update position info
+            this.updatePositionInfo('formatted');
 
             this.toast.success(`Preview formatted with ${formatNames[formatType]}`);
         } catch (error) {
@@ -478,6 +556,133 @@ class DatasetManager {
         if (reasoningCol) mapping[reasoningCol] = 'reasoning';
 
         return mapping;
+    }
+
+    /**
+     * Handle previous button click
+     */
+    async handlePrevious() {
+        if (!this.previewType) {
+            this.toast.error('Please load a preview first');
+            return;
+        }
+
+        const newOffset = Math.max(0, this.previewOffset - this.previewLimit);
+        if (newOffset !== this.previewOffset) {
+            this.previewOffset = newOffset;
+            await this.loadPreview();
+        }
+    }
+
+    /**
+     * Handle next button click
+     */
+    async handleNext() {
+        if (!this.previewType) {
+            this.toast.error('Please load a preview first');
+            return;
+        }
+
+        const newOffset = this.previewOffset + this.previewLimit;
+        if (newOffset < this.previewTotalCount) {
+            this.previewOffset = newOffset;
+            await this.loadPreview();
+        }
+    }
+
+    /**
+     * Handle jump to index
+     */
+    async handleJumpToIndex() {
+        if (!this.previewType) {
+            this.toast.error('Please load a preview first');
+            return;
+        }
+
+        const indexInput = document.getElementById('preview-index');
+        const index = parseInt(indexInput.value);
+
+        if (isNaN(index) || index < 1) {
+            this.toast.error('Please enter a valid index (starting from 1)');
+            return;
+        }
+
+        // Convert 1-based index to 0-based offset
+        const newOffset = index - 1;
+
+        if (newOffset >= this.previewTotalCount) {
+            this.toast.error(`Index out of range (max: ${this.previewTotalCount})`);
+            return;
+        }
+
+        this.previewOffset = newOffset;
+        await this.loadPreview();
+    }
+
+    /**
+     * Handle limit change
+     */
+    async handleLimitChange(e) {
+        if (!this.previewType) {
+            return;
+        }
+
+        this.previewLimit = parseInt(e.target.value) || 5;
+        // Reset to beginning when changing limit
+        this.previewOffset = 0;
+        await this.loadPreview();
+    }
+
+    /**
+     * Update position information display
+     */
+    updatePositionInfo(type) {
+        const startIdx = this.previewOffset + 1;
+        const endIdx = Math.min(this.previewOffset + this.previewLimit, this.previewTotalCount);
+
+        const infoText = `(Showing ${startIdx}-${endIdx} of ${this.previewTotalCount})`;
+        const positionText = `Samples ${startIdx}-${endIdx} of ${this.previewTotalCount}`;
+
+        if (type === 'raw') {
+            const infoEl = document.getElementById('raw-preview-info');
+            const positionEl = document.getElementById('raw-preview-position');
+            if (infoEl) infoEl.textContent = infoText;
+            if (positionEl) positionEl.textContent = positionText;
+        } else if (type === 'formatted') {
+            const infoEl = document.getElementById('formatted-preview-info');
+            const positionEl = document.getElementById('formatted-preview-position');
+            if (infoEl) infoEl.textContent = infoText;
+            if (positionEl) positionEl.textContent = positionText;
+        }
+
+        // Update index input to show current position
+        const indexInput = document.getElementById('preview-index');
+        if (indexInput) {
+            indexInput.value = startIdx;
+            indexInput.max = this.previewTotalCount;
+        }
+
+        // Update button states
+        this.updateNavigationButtons();
+    }
+
+    /**
+     * Update navigation button states (enable/disable)
+     */
+    updateNavigationButtons() {
+        const prevBtn = document.getElementById('preview-prev-button');
+        const nextBtn = document.getElementById('preview-next-button');
+
+        if (prevBtn) {
+            prevBtn.disabled = this.previewOffset === 0;
+            prevBtn.style.opacity = this.previewOffset === 0 ? '0.5' : '1';
+        }
+
+        if (nextBtn) {
+            const isAtEnd = this.previewOffset + this.previewLimit >= this.previewTotalCount;
+            nextBtn.disabled = isAtEnd;
+            nextBtn.style.opacity = isAtEnd ? '0.5' : '1';
+        }
     }
 }
 

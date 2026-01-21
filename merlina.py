@@ -951,7 +951,7 @@ async def get_gpu_info(index: int):
 
 # Dataset management endpoints
 @app.post("/dataset/preview")
-async def preview_dataset(config: DatasetConfig):
+async def preview_dataset(config: DatasetConfig, offset: int = 0, limit: int = 10):
     """Preview dataset without formatting"""
     try:
         # Create loader using factory
@@ -989,13 +989,16 @@ async def preview_dataset(config: DatasetConfig):
             convert_messages_format=config.convert_messages_format
         )
 
-        # Preview raw data
-        preview = pipeline.preview(num_samples=10)
+        # Preview raw data with offset and limit
+        samples, total_count = pipeline.preview(num_samples=limit, offset=offset)
 
         return {
             "status": "success",
-            "samples": preview,
-            "num_samples": len(preview)
+            "samples": samples,
+            "num_samples": len(samples),
+            "total_count": total_count,
+            "offset": offset,
+            "limit": limit
         }
 
     except Exception as e:
@@ -1004,7 +1007,7 @@ async def preview_dataset(config: DatasetConfig):
 
 
 @app.post("/dataset/preview-formatted")
-async def preview_formatted_dataset(config: DatasetConfig):
+async def preview_formatted_dataset(config: DatasetConfig, offset: int = 0, limit: int = 5):
     """Preview dataset with formatting applied"""
     try:
         # Create loader using factory
@@ -1061,13 +1064,16 @@ async def preview_formatted_dataset(config: DatasetConfig):
             convert_messages_format=config.convert_messages_format
         )
 
-        # Preview formatted data
-        preview = pipeline.preview_formatted(num_samples=5)
+        # Preview formatted data with offset and limit
+        samples, total_count = pipeline.preview_formatted(num_samples=limit, offset=offset)
 
         return {
             "status": "success",
-            "samples": preview,
-            "num_samples": len(preview)
+            "samples": samples,
+            "num_samples": len(samples),
+            "total_count": total_count,
+            "offset": offset,
+            "limit": limit
         }
 
     except Exception as e:

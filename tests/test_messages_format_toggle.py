@@ -39,7 +39,7 @@ def test_messages_format_toggle():
         convert_messages_format=True
     )
 
-    preview_with = pipeline_with_conversion.preview(num_samples=1)
+    preview_with, total_count = pipeline_with_conversion.preview(num_samples=1)
     print(f"✓ Columns with conversion: {list(preview_with[0].keys())}")
     assert 'prompt' in preview_with[0], "Should have 'prompt' column after conversion"
     assert 'chosen' in preview_with[0], "Should have 'chosen' column after conversion"
@@ -59,7 +59,7 @@ def test_messages_format_toggle():
     )
 
     try:
-        preview_without = pipeline_without_conversion.preview(num_samples=1)
+        preview_without, total_count = pipeline_without_conversion.preview(num_samples=1)
         print(f"✓ Columns without conversion: {list(preview_without[0].keys())}")
         assert 'messages' in preview_without[0], "Should still have 'messages' column when conversion disabled"
         print(f"✓ Still has messages column: {str(preview_without[0]['messages'])[:80]}...")
@@ -73,7 +73,7 @@ def test_messages_format_toggle():
     print("Test 3: Formatted preview with conversion")
     print("-" * 60)
 
-    formatted = pipeline_with_conversion.preview_formatted(num_samples=1)
+    formatted, total_count = pipeline_with_conversion.preview_formatted(num_samples=1)
     print(f"✓ Formatted sample contains ChatML tags: {'<|im_start|>' in formatted[0]['prompt']}")
     assert '<|im_start|>' in formatted[0]['prompt'], "Should have ChatML formatting"
     print()

@@ -193,15 +193,17 @@ def test_integration_with_pipeline():
         )
 
         # Test preview (should auto-convert)
-        preview = pipeline.preview(num_samples=2)
+        preview, total_count = pipeline.preview(num_samples=2)
         assert len(preview) == 2
+        assert total_count == 2
         assert "prompt" in preview[0]
         assert "chosen" in preview[0]
         assert preview[0]["prompt"] == "Hello"
 
         # Test formatted preview
-        formatted = pipeline.preview_formatted(num_samples=2)
+        formatted, total_count = pipeline.preview_formatted(num_samples=2)
         assert len(formatted) == 2
+        assert total_count == 2
         assert "<|im_start|>user" in formatted[0]["prompt"]
 
         print("✓ Pipeline integration works")
