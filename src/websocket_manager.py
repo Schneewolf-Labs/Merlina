@@ -1,6 +1,8 @@
 """
-WebSocket Manager for Real-time Training Updates
-Broadcasts training progress, metrics, and status to connected clients
+WebSocket Manager for Real-time Training Updates.
+
+Broadcasts training progress, metrics, and status to connected clients.
+Provides methods for connection management and message broadcasting.
 """
 
 import asyncio
@@ -16,10 +18,21 @@ logger = logging.getLogger(__name__)
 class WebSocketManager:
     """
     Manages WebSocket connections and broadcasts updates to clients.
-    Thread-safe implementation using asyncio.Lock for collection access.
+
+    This class provides thread-safe connection management using asyncio.Lock
+    and supports both global broadcasts and job-specific message routing.
+
+    Attributes:
+        active_connections: Set of all active WebSocket connections
+        job_connections: Mapping of job IDs to their subscribed connections
+
+    Note:
+        The asyncio.Lock is lazily initialized to avoid issues when the
+        module is imported before an event loop exists.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
+        """Initialize the WebSocket manager with empty connection sets."""
         # Set of active WebSocket connections
         self.active_connections: Set[WebSocket] = set()
 
@@ -27,7 +40,23 @@ class WebSocketManager:
         self.job_connections: Dict[str, Set[WebSocket]] = {}
 
         # Lock for thread-safe access to connection collections
-        self._lock: asyncio.Lock = asyncio.Lock()
+        # Using None for lazy initialization to avoid issues when module
+        # is imported before an event loop exists
+        self._lock: Optional[asyncio.Lock] = None
+
+    def _get_lock(self) -> asyncio.Lock:
+        """
+        Get or create the asyncio lock (lazy initialization).
+
+        This ensures the lock is created within a running event loop context,
+        avoiding issues when the module is imported at startup.
+
+        Returns:
+            The asyncio.Lock instance for this manager
+        """
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
 
     async def connect(self, websocket: WebSocket, job_id: Optional[str] = None):
         """
@@ -38,7 +67,7 @@ class WebSocketManager:
             job_id: Optional job ID to subscribe to specific job updates
         """
         await websocket.accept()
-        async with self._lock:
+        async with self._get_lock():
             self.active_connections.add(websocket)
 
             if job_id:
@@ -57,7 +86,7 @@ class WebSocketManager:
             websocket: WebSocket connection
             job_id: Optional job ID if subscribed to specific job
         """
-        async with self._lock:
+        async with self._get_lock():
             self.active_connections.discard(websocket)
 
             if job_id and job_id in self.job_connections:
@@ -78,7 +107,7 @@ class WebSocketManager:
         Args:
             message: Dictionary to send as JSON
         """
-        async with self._lock:
+        async with self._get_lock():
             if not self.active_connections:
                 return
 
@@ -109,7 +138,7 @@ class WebSocketManager:
             job_id: Job identifier
             message: Dictionary to send as JSON
         """
-        async with self._lock:
+        async with self._get_lock():
             if job_id not in self.job_connections:
                 return
 
