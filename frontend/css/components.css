@@ -986,3 +986,104 @@ textarea.magic-input {
 .manual-layers-input {
     margin-top: var(--space-sm);
 }
+
+/* ===== Multi-Dataset Cards ===== */
+.dataset-card {
+    background: var(--card-bg);
+    border: 2px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: var(--space-lg);
+    margin-bottom: var(--space-md);
+    transition: all var(--transition-normal);
+    position: relative;
+}
+
+.dataset-card:hover {
+    border-color: var(--primary-purple);
+    box-shadow: 0 4px 20px rgba(192, 66, 255, 0.15);
+}
+
+.dataset-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: var(--space-md);
+    padding-bottom: var(--space-sm);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.dataset-card-header h3 {
+    margin: 0;
+    font-size: 1.1em;
+    color: var(--primary-purple);
+}
+
+.remove-dataset-btn {
+    background: transparent;
+    border: 2px solid var(--danger);
+    color: var(--danger);
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    font-weight: bold;
+    font-size: var(--font-size-sm);
+    transition: all var(--transition-normal);
+}
+
+.remove-dataset-btn:hover {
+    background: var(--danger);
+    color: white;
+    transform: scale(1.05);
+}
+
+/* Nested spell sections in dataset cards */
+.dataset-card .spell-section {
+    background: rgba(0, 0, 0, 0.02);
+    padding: var(--space-md);
+    border-radius: var(--radius-md);
+    margin-bottom: var(--space-md);
+}
+
+.dataset-card .spell-section:last-child {
+    margin-bottom: 0;
+}
+
+.dataset-card .spell-section h4 {
+    margin: 0 0 var(--space-sm) 0;
+    font-size: 0.95em;
+    color: var(--secondary-purple);
+}
+
+/* Dark mode adjustments */
+[data-theme="dark"] .dataset-card .spell-section {
+    background: rgba(255, 255, 255, 0.02);
+}
+
+/* Upload status messages in dataset cards */
+.dataset-card .success-message {
+    color: var(--success);
+    padding: var(--space-sm);
+    background: rgba(16, 185, 129, 0.1);
+    border-radius: var(--radius-sm);
+    margin-top: var(--space-sm);
+}
+
+.dataset-card .error-message {
+    color: var(--danger);
+    padding: var(--space-sm);
+    background: rgba(239, 68, 68, 0.1);
+    border-radius: var(--radius-sm);
+    margin-top: var(--space-sm);
+}
+
+/* Inspect columns button */
+.inspect-columns-button {
+    background: linear-gradient(135deg, var(--primary-purple), var(--secondary-purple));
+    color: white;
+    font-weight: bold;
+}
+
+.inspect-columns-button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 15px rgba(192, 66, 255, 0.3);
+}

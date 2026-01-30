@@ -180,8 +180,8 @@ class DatasetFormat(BaseModel):
     )
 
 
-class DatasetConfig(BaseModel):
-    """Complete dataset configuration"""
+class SingleDatasetConfig(BaseModel):
+    """Configuration for a single dataset source"""
     source: DatasetSource = Field(
         default=DatasetSource(
             source_type="huggingface",
@@ -194,6 +194,48 @@ class DatasetConfig(BaseModel):
     format: DatasetFormat = Field(
         default=DatasetFormat(format_type="chatml"),
         description="Dataset format configuration"
+    )
+
+    # Column mapping (if dataset uses different column names)
+    column_mapping: Optional[dict] = Field(
+        None,
+        description="Map dataset columns to expected names (system, prompt, chosen, rejected)"
+    )
+
+    # Messages format conversion
+    convert_messages_format: bool = Field(
+        True,
+        description="Automatically detect and convert messages format to standard format"
+    )
+
+    # Optional: limit samples from this specific dataset
+    max_samples: Optional[int] = Field(None, description="Limit samples from this dataset")
+
+    # Optional: name for identification in UI
+    name: Optional[str] = Field(None, description="Optional name to identify this dataset")
+
+
+class DatasetConfig(BaseModel):
+    """Complete dataset configuration - supports single or multiple datasets"""
+    # New multi-dataset support: list of datasets to concatenate
+    datasets: Optional[list[SingleDatasetConfig]] = Field(
+        None,
+        description="List of datasets to concatenate together. If provided, single dataset fields are ignored."
+    )
+
+    # Legacy single dataset fields (for backward compatibility)
+    source: DatasetSource = Field(
+        default=DatasetSource(
+            source_type="huggingface",
+            repo_id="schneewolflabs/Athanor-DPO",
+            split="train"
+        ),
+        description="Dataset source configuration (legacy, use 'datasets' for multi-dataset)"
+    )
+
+    format: DatasetFormat = Field(
+        default=DatasetFormat(format_type="chatml"),
+        description="Dataset format configuration (legacy, use 'datasets' for multi-dataset)"
     )
 
     # Optional: model name for tokenizer-based formatting in preview
@@ -213,10 +255,28 @@ class DatasetConfig(BaseModel):
 
     # Additional options
     test_size: float = Field(0.01, ge=0.001, le=0.5, description="Fraction of data for evaluation")
-    max_samples: Optional[int] = Field(None, description="Limit dataset size (for testing)")
+    max_samples: Optional[int] = Field(None, description="Limit total dataset size (for testing)")
 
     # Training mode (affects schema validation)
     training_mode: str = Field("orpo", description="Training mode: 'sft' or 'orpo'. For SFT, rejected column is optional.")
+
+    def get_dataset_configs(self) -> list[SingleDatasetConfig]:
+        """Get list of dataset configs, handling both single and multi-dataset modes"""
+        if self.datasets and len(self.datasets) > 0:
+            return self.datasets
+        # Legacy single dataset mode - convert to list
+        return [SingleDatasetConfig(
+            source=self.source,
+            format=self.format,
+            column_mapping=self.column_mapping,
+            convert_messages_format=self.convert_messages_format,
+            max_samples=self.max_samples,
+            name="Dataset 1"
+        )]
+
+    def is_multi_dataset(self) -> bool:
+        """Check if using multi-dataset mode"""
+        return self.datasets is not None and len(self.datasets) > 0
 
 
 # Pydantic models
@@ -951,13 +1011,30 @@ async def get_gpu_info(index: int):
 
 # Dataset management endpoints
 @app.post("/dataset/preview")
-async def preview_dataset(config: DatasetConfig):
-    """Preview dataset without formatting"""
+async def preview_dataset(config: DatasetConfig, dataset_index: int = 0):
+    """
+    Preview dataset without formatting.
+
+    Args:
+        config: Dataset configuration (single or multi-dataset)
+        dataset_index: Index of dataset to preview when using multi-dataset mode (default: 0)
+    """
     try:
+        # Get the appropriate dataset config (handles both single and multi-dataset modes)
+        dataset_configs = config.get_dataset_configs()
+
+        if dataset_index >= len(dataset_configs):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Dataset index {dataset_index} out of range (have {len(dataset_configs)} datasets)"
+            )
+
+        single_config = dataset_configs[dataset_index]
+
         # Create loader using factory
         try:
             loader = create_loader_from_config(
-                source_config=config.source,
+                source_config=single_config.source,
                 uploaded_datasets=uploaded_datasets
             )
         except LoaderCreationError as e:
@@ -967,26 +1044,26 @@ async def preview_dataset(config: DatasetConfig):
 
         # Get formatter (just for pipeline, we'll preview raw)
         # For tokenizer format, we can't preview without a model, so use chatml as default
-        formatter_type = config.format.format_type
+        formatter_type = single_config.format.format_type
         if formatter_type == 'tokenizer':
             logger.warning("Cannot preview with 'tokenizer' format without loading the model. Using 'chatml' for preview.")
             formatter_type = 'chatml'
 
         formatter = get_formatter(
             format_type=formatter_type,
-            custom_templates=config.format.custom_templates,
-            enable_thinking=config.format.enable_thinking
+            custom_templates=single_config.format.custom_templates,
+            enable_thinking=single_config.format.enable_thinking
         )
 
         # Create pipeline
         pipeline = DatasetPipeline(
             loader=loader,
             formatter=formatter,
-            column_mapping=config.column_mapping,
+            column_mapping=single_config.column_mapping,
             test_size=config.test_size,
-            max_samples=config.max_samples,
+            max_samples=single_config.max_samples,
             training_mode=config.training_mode,
-            convert_messages_format=config.convert_messages_format
+            convert_messages_format=single_config.convert_messages_format
         )
 
         # Preview raw data
@@ -995,22 +1072,43 @@ async def preview_dataset(config: DatasetConfig):
         return {
             "status": "success",
             "samples": preview,
-            "num_samples": len(preview)
+            "num_samples": len(preview),
+            "dataset_index": dataset_index,
+            "total_datasets": len(dataset_configs)
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Dataset preview failed: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.post("/dataset/preview-formatted")
-async def preview_formatted_dataset(config: DatasetConfig):
-    """Preview dataset with formatting applied"""
+async def preview_formatted_dataset(config: DatasetConfig, dataset_index: int = 0):
+    """
+    Preview dataset with formatting applied.
+
+    Args:
+        config: Dataset configuration (single or multi-dataset)
+        dataset_index: Index of dataset to preview when using multi-dataset mode (default: 0)
+    """
     try:
+        # Get the appropriate dataset config (handles both single and multi-dataset modes)
+        dataset_configs = config.get_dataset_configs()
+
+        if dataset_index >= len(dataset_configs):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Dataset index {dataset_index} out of range (have {len(dataset_configs)} datasets)"
+            )
+
+        single_config = dataset_configs[dataset_index]
+
         # Create loader using factory
         try:
             loader = create_loader_from_config(
-                source_config=config.source,
+                source_config=single_config.source,
                 uploaded_datasets=uploaded_datasets
             )
         except LoaderCreationError as e:
@@ -1019,7 +1117,7 @@ async def preview_formatted_dataset(config: DatasetConfig):
             raise HTTPException(status_code=400, detail=str(e))
 
         # Get formatter
-        formatter_type = config.format.format_type
+        formatter_type = single_config.format.format_type
 
         # For tokenizer format, check if we have a cached tokenizer (thread-safe)
         if formatter_type == 'tokenizer':
@@ -1040,25 +1138,25 @@ async def preview_formatted_dataset(config: DatasetConfig):
                 formatter_type = 'chatml'
                 formatter = get_formatter(
                     format_type=formatter_type,
-                    custom_templates=config.format.custom_templates,
-                    enable_thinking=config.format.enable_thinking
+                    custom_templates=single_config.format.custom_templates,
+                    enable_thinking=single_config.format.enable_thinking
                 )
         else:
             formatter = get_formatter(
                 format_type=formatter_type,
-                custom_templates=config.format.custom_templates,
-                enable_thinking=config.format.enable_thinking
+                custom_templates=single_config.format.custom_templates,
+                enable_thinking=single_config.format.enable_thinking
             )
 
         # Create pipeline
         pipeline = DatasetPipeline(
             loader=loader,
             formatter=formatter,
-            column_mapping=config.column_mapping,
+            column_mapping=single_config.column_mapping,
             test_size=config.test_size,
-            max_samples=config.max_samples,
+            max_samples=single_config.max_samples,
             training_mode=config.training_mode,
-            convert_messages_format=config.convert_messages_format
+            convert_messages_format=single_config.convert_messages_format
         )
 
         # Preview formatted data
@@ -1067,25 +1165,44 @@ async def preview_formatted_dataset(config: DatasetConfig):
         return {
             "status": "success",
             "samples": preview,
-            "num_samples": len(preview)
+            "num_samples": len(preview),
+            "dataset_index": dataset_index,
+            "total_datasets": len(dataset_configs)
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Dataset preview failed: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.post("/dataset/columns")
-async def get_dataset_columns(config: DatasetConfig):
+async def get_dataset_columns(config: DatasetConfig, dataset_index: int = 0):
     """
     Get column names and sample data from dataset for mapping.
     Returns available columns and a few sample rows.
+
+    Args:
+        config: Dataset configuration (single or multi-dataset)
+        dataset_index: Index of dataset to inspect when using multi-dataset mode (default: 0)
     """
     try:
+        # Get the appropriate dataset config (handles both single and multi-dataset modes)
+        dataset_configs = config.get_dataset_configs()
+
+        if dataset_index >= len(dataset_configs):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Dataset index {dataset_index} out of range (have {len(dataset_configs)} datasets)"
+            )
+
+        single_config = dataset_configs[dataset_index]
+
         # Create loader using factory
         try:
             loader = create_loader_from_config(
-                source_config=config.source,
+                source_config=single_config.source,
                 uploaded_datasets=uploaded_datasets
             )
         except LoaderCreationError as e:
@@ -1094,7 +1211,7 @@ async def get_dataset_columns(config: DatasetConfig):
             raise HTTPException(status_code=400, detail=str(e))
 
         # Load dataset
-        logger.info("Loading dataset to inspect columns...")
+        logger.info(f"Loading dataset {dataset_index + 1}/{len(dataset_configs)} to inspect columns...")
         dataset = loader.load()
 
         # Get column names
@@ -1108,9 +1225,14 @@ async def get_dataset_columns(config: DatasetConfig):
             "status": "success",
             "columns": columns,
             "samples": samples,
-            "total_rows": len(dataset)
+            "total_rows": len(dataset),
+            "dataset_index": dataset_index,
+            "total_datasets": len(dataset_configs),
+            "dataset_name": single_config.name
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to get dataset columns: {e}")
         raise HTTPException(status_code=400, detail=str(e))

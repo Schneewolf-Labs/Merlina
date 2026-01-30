@@ -251,22 +251,25 @@ class MerlinaAPI {
         });
     }
 
-    static async getDatasetColumns(config) {
-        return this.fetch('/dataset/columns', {
+    static async getDatasetColumns(config, datasetIndex = 0) {
+        const url = `/dataset/columns?dataset_index=${datasetIndex}`;
+        return this.fetch(url, {
             method: 'POST',
             body: JSON.stringify(config)
         }, LONG_TIMEOUT);
     }
 
-    static async previewDataset(config) {
-        return this.fetch('/dataset/preview', {
+    static async previewDataset(config, datasetIndex = 0) {
+        const url = `/dataset/preview?dataset_index=${datasetIndex}`;
+        return this.fetch(url, {
             method: 'POST',
             body: JSON.stringify(config)
         }, LONG_TIMEOUT);
     }
 
-    static async previewFormattedDataset(config) {
-        return this.fetch('/dataset/preview-formatted', {
+    static async previewFormattedDataset(config, datasetIndex = 0) {
+        const url = `/dataset/preview-formatted?dataset_index=${datasetIndex}`;
+        return this.fetch(url, {
             method: 'POST',
             body: JSON.stringify(config)
         }, LONG_TIMEOUT);

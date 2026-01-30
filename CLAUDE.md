@@ -6,6 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Merlina is a magical LLM training system with support for both ORPO (Odds Ratio Preference Optimization) and SFT (Supervised Fine-Tuning). It provides a delightful wizard-themed web interface for fine-tuning language models with LoRA adapters. The system supports flexible dataset loading from multiple sources and automatic chat template formatting.
 
+**New in v1.4:**
+- **Multi-Dataset Support**: Train on multiple datasets simultaneously with automatic concatenation
+- Each dataset can have its own source, column mapping, and format configuration
+- Individual dataset preview and column inspection in the UI
+- Per-dataset sample limits with global max samples option
+
 **New in v1.3:**
 - **Messages Format Support**: Automatic detection and conversion of common chat dataset format with multi-turn conversation support
 
@@ -256,6 +262,55 @@ Merlina now automatically detects and converts datasets in the common "messages"
 ```
 
 The messages format is automatically detected and converted with no additional configuration required. Simply load your dataset and Merlina will handle the conversion transparently.
+
+**Multi-Dataset Support** (New in v1.4):
+
+Merlina now supports training on multiple datasets simultaneously. Datasets are loaded, formatted according to their individual configurations, and concatenated before training.
+
+**Key Features:**
+- **Multiple Sources**: Each dataset can come from a different source (HuggingFace, local file, upload)
+- **Individual Column Mapping**: Each dataset can have its own column mapping
+- **Per-Dataset Formatting**: Each dataset can use a different format (ChatML, Llama3, Tokenizer, etc.)
+- **Per-Dataset Limits**: Optionally limit samples from each dataset with `max_samples`
+- **Global Limits**: Set a total `max_samples` limit for the combined dataset
+
+**API Configuration:**
+```python
+# Multi-dataset configuration
+{
+    "datasets": [
+        {
+            "source": {"source_type": "huggingface", "repo_id": "dataset1", "split": "train"},
+            "format": {"format_type": "chatml"},
+            "column_mapping": {"question": "prompt", "answer": "chosen"},
+            "max_samples": 1000,
+            "name": "Dataset 1"
+        },
+        {
+            "source": {"source_type": "huggingface", "repo_id": "dataset2", "split": "train"},
+            "format": {"format_type": "llama3"},
+            "column_mapping": {"input": "prompt", "output": "chosen"},
+            "max_samples": 500,
+            "name": "Dataset 2"
+        }
+    ],
+    "test_size": 0.01,
+    "max_samples": null,  // Global limit (optional)
+    "training_mode": "sft"
+}
+```
+
+**Frontend Usage:**
+1. Click "Add Another Dataset" to add multiple datasets
+2. Configure each dataset's source, column mapping, and format independently
+3. Use "Inspect Dataset Columns" on each dataset to see available columns
+4. Use the dataset preview dropdown to preview individual datasets
+
+**Implementation Details:**
+- `SingleDatasetConfig`: Configuration for one dataset (source, format, column_mapping, etc.)
+- `DatasetConfig`: Now supports both legacy single-dataset mode and new `datasets` array
+- `MultiDatasetPipeline`: Orchestrates loading and concatenation of multiple datasets
+- `create_multi_dataset_pipeline()`: Factory function for creating multi-dataset pipelines
 
 ### Model Loading
 

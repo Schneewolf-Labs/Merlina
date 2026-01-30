@@ -226,3 +226,155 @@ class DatasetPipeline:
             )
 
         logger.info(f"Dataset schema validated (mode={self.training_mode}). Columns: {available_columns}")
+
+
+class MultiDatasetPipeline:
+    """
+    Orchestrates loading, formatting, and concatenation of multiple datasets.
+    Each dataset can have its own source, formatter, and column mapping.
+    """
+
+    def __init__(
+        self,
+        pipelines: list[DatasetPipeline],
+        test_size: float = 0.01,
+        max_samples: Optional[int] = None,
+        seed: int = 42,
+        shuffle: bool = True,
+        training_mode: str = "orpo"
+    ):
+        """
+        Initialize multi-dataset pipeline.
+
+        Args:
+            pipelines: List of DatasetPipeline instances, one per dataset
+            test_size: Fraction of combined data to use for evaluation
+            max_samples: Optional limit on total number of samples
+            seed: Random seed for train/test split
+            shuffle: Whether to shuffle the combined dataset before splitting
+            training_mode: Training mode ('sft' or 'orpo')
+        """
+        self.pipelines = pipelines
+        self.test_size = test_size
+        self.max_samples = max_samples
+        self.seed = seed
+        self.shuffle = shuffle
+        self.training_mode = training_mode
+
+    def prepare(self) -> tuple[Dataset, Dataset]:
+        """
+        Load, format, and concatenate all datasets, then split.
+
+        Returns:
+            Tuple of (train_dataset, eval_dataset)
+        """
+        from datasets import concatenate_datasets
+
+        all_formatted_datasets = []
+
+        for i, pipeline in enumerate(self.pipelines):
+            logger.info(f"Processing dataset {i + 1}/{len(self.pipelines)}...")
+
+            # Load dataset
+            dataset = pipeline.loader.load()
+            logger.info(f"Dataset {i + 1} loaded with {len(dataset)} samples")
+
+            # Convert messages format if detected and enabled
+            if pipeline.convert_messages_format and has_messages_format(dataset):
+                logger.info(f"Dataset {i + 1}: Detected messages format, converting...")
+                dataset = convert_messages_dataset(dataset)
+
+            # Apply column mapping if provided
+            if pipeline.column_mapping:
+                logger.info(f"Dataset {i + 1}: Applying column mapping: {pipeline.column_mapping}")
+                dataset = pipeline._apply_column_mapping(dataset)
+
+            # Validate schema
+            logger.info(f"Dataset {i + 1}: Validating schema...")
+            pipeline._validate_schema(dataset)
+
+            # Limit samples if requested for this specific dataset
+            if pipeline.max_samples and len(dataset) > pipeline.max_samples:
+                logger.info(f"Dataset {i + 1}: Limiting to {pipeline.max_samples} samples")
+                dataset = dataset.select(range(pipeline.max_samples))
+
+            # Format dataset
+            logger.info(f"Dataset {i + 1}: Formatting dataset...")
+            dataset = dataset.map(
+                pipeline.formatter.format,
+                num_proc=min(os.cpu_count() or 1, 4),
+                desc=f"Formatting dataset {i + 1}"
+            )
+
+            all_formatted_datasets.append(dataset)
+            logger.info(f"Dataset {i + 1} prepared with {len(dataset)} samples")
+
+        # Concatenate all datasets
+        logger.info(f"Concatenating {len(all_formatted_datasets)} datasets...")
+        combined_dataset = concatenate_datasets(all_formatted_datasets)
+        logger.info(f"Combined dataset has {len(combined_dataset)} total samples")
+
+        # Apply global max_samples limit
+        if self.max_samples and len(combined_dataset) > self.max_samples:
+            logger.info(f"Limiting combined dataset to {self.max_samples} samples")
+            combined_dataset = combined_dataset.select(range(self.max_samples))
+
+        # Split dataset
+        logger.info(f"Splitting dataset (test_size={self.test_size}, shuffle={self.shuffle})...")
+        split = combined_dataset.train_test_split(
+            test_size=self.test_size,
+            seed=self.seed,
+            shuffle=self.shuffle
+        )
+
+        train_dataset = split["train"]
+        eval_dataset = split["test"]
+
+        logger.info(f"Prepared {len(train_dataset)} training samples and {len(eval_dataset)} eval samples")
+
+        return train_dataset, eval_dataset
+
+    def preview(self, dataset_index: int = 0, num_samples: int = 5) -> list[dict]:
+        """
+        Preview raw samples from a specific dataset.
+
+        Args:
+            dataset_index: Index of the dataset to preview (0-based)
+            num_samples: Number of samples to preview
+
+        Returns:
+            List of raw dataset rows
+        """
+        if dataset_index >= len(self.pipelines):
+            raise ValueError(f"Dataset index {dataset_index} out of range (have {len(self.pipelines)} datasets)")
+
+        return self.pipelines[dataset_index].preview(num_samples)
+
+    def preview_formatted(self, dataset_index: int = 0, num_samples: int = 5) -> list[dict]:
+        """
+        Preview formatted samples from a specific dataset.
+
+        Args:
+            dataset_index: Index of the dataset to preview (0-based)
+            num_samples: Number of samples to preview
+
+        Returns:
+            List of formatted dataset rows
+        """
+        if dataset_index >= len(self.pipelines):
+            raise ValueError(f"Dataset index {dataset_index} out of range (have {len(self.pipelines)} datasets)")
+
+        return self.pipelines[dataset_index].preview_formatted(num_samples)
+
+    def get_dataset_info(self) -> list[dict]:
+        """Get information about each dataset in the pipeline"""
+        info = []
+        for i, pipeline in enumerate(self.pipelines):
+            info.append({
+                "index": i,
+                "source": pipeline.loader.get_source_info(),
+                "format": pipeline.formatter.get_format_info(),
+                "column_mapping": pipeline.column_mapping,
+                "max_samples": pipeline.max_samples
+            })
+        return info
