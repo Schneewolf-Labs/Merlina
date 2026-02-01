@@ -622,8 +622,8 @@ class TestDatasetManagement:
         }
 
         response = client.post("/dataset/preview", json=config)
-        # API returns 400 for dataset not found (HTTPException caught as generic error)
-        assert response.status_code == 400
+        # API returns 404 for dataset not found (proper HTTP semantic)
+        assert response.status_code == 404
         assert "not found" in response.json()["detail"].lower()
 
     def test_preview_formatted_dataset(self, client, mock_dataset_pipeline, mock_dataset_loader):
