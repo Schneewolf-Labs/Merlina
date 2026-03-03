@@ -553,10 +553,10 @@ class PreflightValidator:
         if output_name:
             import re
             # Check for invalid characters
-            if not re.match(r'^[a-zA-Z0-9_-]+$', output_name):
+            if not re.match(r'^[a-zA-Z0-9._-]+$', output_name):
                 self.errors.append(
                     f"Output name '{output_name}' contains invalid characters. "
-                    "Use only letters, numbers, underscores, and hyphens."
+                    "Use only letters, numbers, underscores, hyphens, and periods."
                 )
 
             # Check length
