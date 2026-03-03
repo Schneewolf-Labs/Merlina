@@ -11,6 +11,7 @@ This module provides the core training functionality for Merlina, including:
 """
 
 import os
+os.environ.setdefault("TRL_EXPERIMENTAL_SILENCE", "1")
 import gc
 import torch
 import wandb
@@ -27,7 +28,8 @@ from transformers import (
     TrainerCallback
 )
 from peft import LoraConfig, PeftModel, prepare_model_for_kbit_training, AutoPeftModelForCausalLM
-from trl import ORPOConfig, ORPOTrainer, SFTTrainer, SFTConfig
+from trl import SFTTrainer, SFTConfig
+from trl.experimental.orpo import ORPOConfig, ORPOTrainer
 from accelerate import Accelerator
 
 from huggingface_hub import HfApi
@@ -897,7 +899,7 @@ def run_training_sync(
                 eval_strategy="steps",
                 eval_steps=config.eval_steps,
                 logging_steps=config.logging_steps,
-                warmup_ratio=config.warmup_ratio,
+                warmup_steps=config.warmup_ratio,
                 max_grad_norm=config.max_grad_norm,
                 weight_decay=config.weight_decay,
                 adam_beta1=config.adam_beta1,
@@ -937,7 +939,6 @@ def run_training_sync(
                 learning_rate=config.learning_rate,
                 lr_scheduler_type=config.lr_scheduler_type,
                 max_length=config.max_length,
-                max_prompt_length=config.max_prompt_length,
                 max_completion_length=config.max_length - config.max_prompt_length,
                 beta=config.beta,
                 per_device_train_batch_size=config.batch_size,
@@ -948,7 +949,7 @@ def run_training_sync(
                 eval_strategy="steps",
                 eval_steps=config.eval_steps,
                 logging_steps=config.logging_steps,
-                warmup_ratio=config.warmup_ratio,
+                warmup_steps=config.warmup_ratio,
                 max_grad_norm=config.max_grad_norm,
                 weight_decay=config.weight_decay,
                 adam_beta1=config.adam_beta1,

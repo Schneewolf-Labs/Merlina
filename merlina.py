@@ -5,6 +5,7 @@ ORPO training for LLMs with a delightful interface
 """
 
 import os
+os.environ.setdefault("TRL_EXPERIMENTAL_SILENCE", "1")
 import gc
 import asyncio
 import torch
@@ -28,7 +29,6 @@ from transformers import (
     BitsAndBytesConfig,
 )
 from peft import LoraConfig, PeftModel, prepare_model_for_kbit_training
-from trl import ORPOConfig, ORPOTrainer
 from accelerate import Accelerator
 
 # Import our custom dataset handling module
