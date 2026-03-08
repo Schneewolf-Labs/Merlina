@@ -8,7 +8,7 @@ across merlina.py and training_runner.py.
 from typing import Dict, Optional, Tuple, Any
 import logging
 
-from .base import DatasetLoader, DatasetPipeline
+from .base import DatasetLoader, DatasetPipeline, MultiDatasetPipeline
 from .loaders import HuggingFaceLoader, LocalFileLoader, UploadedDatasetLoader
 from .formatters import get_formatter
 
@@ -200,6 +200,94 @@ def create_pipeline_from_config(
         loader=loader,
         formatter=formatter,
         column_mapping=column_mapping,
+        test_size=test_size,
+        max_samples=max_samples,
+        seed=seed,
+        shuffle=shuffle,
+        training_mode=training_mode
+    )
+
+
+def create_multi_dataset_pipeline(
+    dataset_configs: list,
+    uploaded_datasets: Optional[Dict[str, Tuple[bytes, str]]] = None,
+    hf_token: Optional[str] = None,
+    tokenizer: Optional[Any] = None,
+    test_size: float = 0.01,
+    max_samples: Optional[int] = None,
+    seed: int = 42,
+    shuffle: bool = True,
+    training_mode: str = "orpo"
+) -> MultiDatasetPipeline:
+    """
+    Create a multi-dataset pipeline from a list of dataset configurations.
+
+    Args:
+        dataset_configs: List of SingleDatasetConfig objects
+        uploaded_datasets: Dict mapping dataset_id to (content, filename) tuples
+        hf_token: HuggingFace API token for private datasets
+        tokenizer: Tokenizer instance (required for 'tokenizer' format type)
+        test_size: Fraction of combined data for evaluation
+        max_samples: Optional limit on total samples
+        seed: Random seed for shuffling/splitting
+        shuffle: Whether to shuffle the combined dataset
+        training_mode: Training mode ('sft' or 'orpo')
+
+    Returns:
+        Configured MultiDatasetPipeline instance
+
+    Raises:
+        LoaderCreationError: If configuration is invalid
+    """
+    pipelines = []
+
+    for i, config in enumerate(dataset_configs):
+        logger.info(f"Creating pipeline for dataset {i + 1}/{len(dataset_configs)}")
+
+        # Create loader
+        loader = create_loader_from_config(
+            source_config=config.source,
+            uploaded_datasets=uploaded_datasets,
+            hf_token=hf_token
+        )
+
+        # Get format configuration
+        format_config = config.format
+        format_type = getattr(format_config, 'format_type', 'chatml')
+        custom_templates = getattr(format_config, 'custom_templates', None)
+        enable_thinking = getattr(format_config, 'enable_thinking', False)
+
+        # Create formatter
+        formatter = get_formatter(
+            format_type=format_type,
+            custom_templates=custom_templates,
+            tokenizer=tokenizer if format_type == 'tokenizer' else None,
+            enable_thinking=enable_thinking
+        )
+
+        # Get per-dataset settings
+        column_mapping = getattr(config, 'column_mapping', None)
+        per_dataset_max_samples = getattr(config, 'max_samples', None)
+        convert_messages_format = getattr(config, 'convert_messages_format', True)
+
+        # Create individual pipeline (without splitting - we'll split after concatenation)
+        pipeline = DatasetPipeline(
+            loader=loader,
+            formatter=formatter,
+            column_mapping=column_mapping,
+            test_size=0,  # Don't split individual datasets
+            max_samples=per_dataset_max_samples,
+            seed=seed,
+            shuffle=False,  # Don't shuffle individual datasets
+            training_mode=training_mode,
+            convert_messages_format=convert_messages_format
+        )
+
+        pipelines.append(pipeline)
+
+    # Create multi-dataset pipeline
+    return MultiDatasetPipeline(
+        pipelines=pipelines,
         test_size=test_size,
         max_samples=max_samples,
         seed=seed,

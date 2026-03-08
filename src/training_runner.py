@@ -36,11 +36,13 @@ from huggingface_hub import HfApi
 
 from dataset_handlers import (
     DatasetPipeline,
+    MultiDatasetPipeline,
     HuggingFaceLoader,
     LocalFileLoader,
     UploadedDatasetLoader,
     get_formatter,
-    create_loader_from_config
+    create_loader_from_config,
+    create_multi_dataset_pipeline
 )
 from src.job_manager import JobManager
 from src.websocket_manager import websocket_manager
@@ -823,36 +825,57 @@ def run_training_sync(
             event_loop
         )
 
-        logger.info(f"Loading dataset with config: {config.dataset.source.source_type}")
+        # Check if using multi-dataset mode
+        if config.dataset.is_multi_dataset():
+            dataset_configs = config.dataset.get_dataset_configs()
+            logger.info(f"Loading {len(dataset_configs)} datasets for concatenation...")
 
-        # Create loader using factory
-        loader = create_loader_from_config(
-            source_config=config.dataset.source,
-            uploaded_datasets=uploaded_datasets,
-            hf_token=config.hf_token
-        )
+            # Create multi-dataset pipeline
+            pipeline = create_multi_dataset_pipeline(
+                dataset_configs=dataset_configs,
+                uploaded_datasets=uploaded_datasets,
+                hf_token=config.hf_token,
+                tokenizer=tokenizer,
+                test_size=config.dataset.test_size,
+                max_samples=config.dataset.max_samples,
+                seed=config.seed,
+                shuffle=config.shuffle_dataset,
+                training_mode=config.training_mode
+            )
 
-        # Get formatter
-        formatter = get_formatter(
-            format_type=config.dataset.format.format_type,
-            custom_templates=config.dataset.format.custom_templates,
-            tokenizer=tokenizer if config.dataset.format.format_type == 'tokenizer' else None
-        )
+            train_dataset, eval_dataset = pipeline.prepare()
+        else:
+            # Single dataset mode (legacy)
+            logger.info(f"Loading dataset with config: {config.dataset.source.source_type}")
 
-        # Create pipeline and prepare dataset
-        pipeline = DatasetPipeline(
-            loader=loader,
-            formatter=formatter,
-            column_mapping=config.dataset.column_mapping,
-            test_size=config.dataset.test_size,
-            max_samples=config.dataset.max_samples,
-            seed=config.seed,  # Use config seed instead of hardcoded 42
-            shuffle=config.shuffle_dataset,  # Use config shuffle setting
-            training_mode=config.training_mode,
-            convert_messages_format=config.dataset.convert_messages_format
-        )
+            # Create loader using factory
+            loader = create_loader_from_config(
+                source_config=config.dataset.source,
+                uploaded_datasets=uploaded_datasets,
+                hf_token=config.hf_token
+            )
 
-        train_dataset, eval_dataset = pipeline.prepare()
+            # Get formatter
+            formatter = get_formatter(
+                format_type=config.dataset.format.format_type,
+                custom_templates=config.dataset.format.custom_templates,
+                tokenizer=tokenizer if config.dataset.format.format_type == 'tokenizer' else None
+            )
+
+            # Create pipeline and prepare dataset
+            pipeline = DatasetPipeline(
+                loader=loader,
+                formatter=formatter,
+                column_mapping=config.dataset.column_mapping,
+                test_size=config.dataset.test_size,
+                max_samples=config.dataset.max_samples,
+                seed=config.seed,  # Use config seed instead of hardcoded 42
+                shuffle=config.shuffle_dataset,  # Use config shuffle setting
+                training_mode=config.training_mode,
+                convert_messages_format=config.dataset.convert_messages_format
+            )
+
+            train_dataset, eval_dataset = pipeline.prepare()
 
         # Setup training arguments
         job_manager.update_job(job_id, status="training", progress=0.3)
