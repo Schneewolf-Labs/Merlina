@@ -279,20 +279,26 @@ def mock_dataset_pipeline(mock_dataset_loader):
     })
 
     mock = Mock()
-    mock.preview.return_value = [
-        {
-            "prompt": "What is AI?",
-            "chosen": "AI is artificial intelligence",
-            "rejected": "I don't know"
-        }
-    ]
-    mock.preview_formatted.return_value = [
-        {
-            "prompt": "<|im_start|>user\nWhat is AI?<|im_end|>\n<|im_start|>assistant\n",
-            "chosen": "AI is artificial intelligence<|im_end|>",
-            "rejected": "I don't know<|im_end|>"
-        }
-    ]
+    mock.preview.return_value = (
+        [
+            {
+                "prompt": "What is AI?",
+                "chosen": "AI is artificial intelligence",
+                "rejected": "I don't know"
+            }
+        ],
+        1  # total_count
+    )
+    mock.preview_formatted.return_value = (
+        [
+            {
+                "prompt": "<|im_start|>user\nWhat is AI?<|im_end|>\n<|im_start|>assistant\n",
+                "chosen": "AI is artificial intelligence<|im_end|>",
+                "rejected": "I don't know<|im_end|>"
+            }
+        ],
+        1  # total_count
+    )
     mock.prepare.return_value = (mock_dataset, mock_dataset)
 
     return mock
@@ -573,6 +579,12 @@ class TestDatasetManagement:
             assert data["status"] == "success"
             assert "samples" in data
             assert len(data["samples"]) > 0
+            assert "total_count" in data
+            assert "offset" in data
+            assert "limit" in data
+            assert data["total_count"] == 1
+            assert data["offset"] == 0
+            assert data["limit"] == 10
 
     def test_preview_dataset_local_file(self, client, mock_dataset_pipeline, mock_dataset_loader):
         """Test POST /dataset/preview for local file"""
@@ -644,6 +656,12 @@ class TestDatasetManagement:
             assert response.status_code == 200
             data = response.json()
             assert "samples" in data
+            assert "total_count" in data
+            assert "offset" in data
+            assert "limit" in data
+            assert data["total_count"] == 1
+            assert data["offset"] == 0
+            assert data["limit"] == 5
 
     def test_preview_formatted_tokenizer_without_cache(self, client, mock_dataset_pipeline, mock_dataset_loader):
         """Test POST /dataset/preview-formatted with tokenizer format but no cache"""
