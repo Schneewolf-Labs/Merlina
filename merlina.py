@@ -5,7 +5,6 @@ ORPO training for LLMs with a delightful interface
 """
 
 import os
-os.environ.setdefault("TRL_EXPERIMENTAL_SILENCE", "1")
 import gc
 import asyncio
 import torch

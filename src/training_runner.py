@@ -11,7 +11,6 @@ This module provides the core training functionality for Merlina, including:
 """
 
 import os
-os.environ.setdefault("TRL_EXPERIMENTAL_SILENCE", "1")
 import gc
 import torch
 import wandb
@@ -25,12 +24,13 @@ from transformers import (
     AutoModelForCausalLM,
     AutoTokenizer,
     BitsAndBytesConfig,
-    TrainerCallback
 )
-from peft import LoraConfig, PeftModel, prepare_model_for_kbit_training, AutoPeftModelForCausalLM
-from trl import SFTTrainer, SFTConfig
-from trl.experimental.orpo import ORPOConfig, ORPOTrainer
+from peft import LoraConfig, PeftModel, AutoPeftModelForCausalLM
 from accelerate import Accelerator
+
+from grimoire import GrimoireTrainer, TrainingConfig, TrainerCallback
+from grimoire.losses import SFTLoss, ORPOLoss
+from grimoire.data import tokenize_sft, tokenize_preference
 
 from huggingface_hub import HfApi
 
@@ -457,7 +457,12 @@ def send_websocket_update(coro, loop=None):
 
 class WebSocketCallback(TrainerCallback):
     """
-    Custom callback to send training metrics via WebSocket and handle stop requests
+    Custom callback to send training metrics via WebSocket and handle stop requests.
+
+    Uses Grimoire's TrainerCallback interface:
+        on_step_end(trainer, step, loss, metrics)
+        on_log(trainer, metrics)
+        on_evaluate(trainer, metrics)
     """
 
     def __init__(self, job_id: str, job_manager: JobManager, event_loop=None):
@@ -465,88 +470,82 @@ class WebSocketCallback(TrainerCallback):
         self.job_manager = job_manager
         self.event_loop = event_loop
 
-    def on_step_end(self, args, state, control, **kwargs):
+    def on_step_end(self, trainer, step, loss, metrics):
         """Called at the end of each training step to check for stop requests"""
-        # Check if stop was requested
         job = self.job_manager.get_job(self.job_id)
         if job and job.stop_requested:
             logger.info(f"Stop requested for job {self.job_id} - gracefully stopping training")
-            control.should_training_stop = True
+            trainer.request_stop()
 
-            # Send WebSocket notification
             send_websocket_update(
                 websocket_manager.send_status_update(
                     job_id=self.job_id,
                     status="stopping",
-                    progress=state.global_step / state.max_steps if state.max_steps else 0.5,
-                    current_step=state.global_step,
-                    total_steps=state.max_steps,
+                    progress=step / trainer.max_steps if trainer.max_steps else 0.5,
+                    current_step=step,
+                    total_steps=trainer.max_steps,
                     message="Stop requested - saving checkpoint..."
                 ),
                 self.event_loop
             )
 
-        return control
-
-    def on_log(self, args, state, control, logs=None, **kwargs):
+    def on_log(self, trainer, metrics):
         """Called when trainer logs metrics"""
-        if logs:
-            # Update job with latest metrics
-            update_data = {}
+        update_data = {}
 
-            # Initialize gpu_memory at the start to avoid UnboundLocalError
-            gpu_memory = None
-            if torch.cuda.is_available():
-                gpu_memory = torch.cuda.max_memory_allocated() / (1024**3)
+        gpu_memory = None
+        if torch.cuda.is_available():
+            gpu_memory = torch.cuda.max_memory_allocated() / (1024**3)
 
-            if "loss" in logs:
-                update_data["loss"] = float(logs["loss"])
+        if "train/loss" in metrics:
+            update_data["loss"] = float(metrics["train/loss"])
 
-            if "eval_loss" in logs:
-                update_data["eval_loss"] = float(logs["eval_loss"])
+        if "train/learning_rate" in metrics:
+            update_data["learning_rate"] = float(metrics["train/learning_rate"])
 
-            if "learning_rate" in logs:
-                update_data["learning_rate"] = float(logs["learning_rate"])
+        if trainer.global_step:
+            update_data["current_step"] = trainer.global_step
 
-            if state.global_step:
-                update_data["current_step"] = state.global_step
+        if trainer.max_steps:
+            update_data["total_steps"] = trainer.max_steps
+            progress = 0.3 + (0.6 * (trainer.global_step / trainer.max_steps))
+            update_data["progress"] = min(progress, 0.9)
 
-            if state.max_steps:
-                update_data["total_steps"] = state.max_steps
-                # Calculate progress based on steps
-                progress = 0.3 + (0.6 * (state.global_step / state.max_steps))
-                update_data["progress"] = min(progress, 0.9)
+        if update_data:
+            self.job_manager.update_job(self.job_id, **update_data)
 
-            # Update database
-            if update_data:
-                self.job_manager.update_job(self.job_id, **update_data)
-
-                # Add to metrics table
-                if state.global_step and "loss" in logs:
-                    self.job_manager.add_metric(
-                        self.job_id,
-                        step=state.global_step,
-                        loss=update_data.get("loss"),
-                        eval_loss=update_data.get("eval_loss"),
-                        learning_rate=update_data.get("learning_rate"),
-                        gpu_memory_used=gpu_memory
-                    )
-
-                # Send WebSocket update (run in event loop)
-                send_websocket_update(
-                    websocket_manager.send_status_update(
-                        job_id=self.job_id,
-                        status="training",
-                        progress=update_data.get("progress", 0.5),
-                        current_step=update_data.get("current_step"),
-                        total_steps=update_data.get("total_steps"),
-                        loss=update_data.get("loss"),
-                        eval_loss=update_data.get("eval_loss"),
-                        learning_rate=update_data.get("learning_rate"),
-                        gpu_memory=gpu_memory
-                    ),
-                    self.event_loop
+            if trainer.global_step and "loss" in update_data:
+                self.job_manager.add_metric(
+                    self.job_id,
+                    step=trainer.global_step,
+                    loss=update_data.get("loss"),
+                    eval_loss=update_data.get("eval_loss"),
+                    learning_rate=update_data.get("learning_rate"),
+                    gpu_memory_used=gpu_memory
                 )
+
+            send_websocket_update(
+                websocket_manager.send_status_update(
+                    job_id=self.job_id,
+                    status="training",
+                    progress=update_data.get("progress", 0.5),
+                    current_step=update_data.get("current_step"),
+                    total_steps=update_data.get("total_steps"),
+                    loss=update_data.get("loss"),
+                    eval_loss=update_data.get("eval_loss"),
+                    learning_rate=update_data.get("learning_rate"),
+                    gpu_memory=gpu_memory
+                ),
+                self.event_loop
+            )
+
+    def on_evaluate(self, trainer, metrics):
+        """Called after evaluation completes"""
+        update_data = {}
+        if "eval/loss" in metrics:
+            update_data["eval_loss"] = float(metrics["eval/loss"])
+        if update_data:
+            self.job_manager.update_job(self.job_id, **update_data)
 
 
 def _cleanup_training_resources(model: Optional[Any], trainer: Optional[Any]) -> None:
@@ -792,8 +791,8 @@ def run_training_sync(
             trust_remote_code=True,
         )
 
-        if bnb_config:
-            model = prepare_model_for_kbit_training(model)
+        # Note: prepare_model_for_kbit_training is handled by GrimoireTrainer
+        # when peft_config is provided, so we don't call it here.
 
         # Setup LoRA (only if enabled)
         peft_config = None
@@ -868,122 +867,100 @@ def run_training_sync(
 
         output_dir = f"./results/{job_id}"
 
-        # Choose trainer based on training mode
+        # Choose training mode and tokenize dataset accordingly
         training_mode = config.training_mode.lower()
         logger.info(f"Using training mode: {training_mode}")
 
         if training_mode == "sft":
-            # SFT Configuration
-            logger.info("Configuring SFT (Supervised Fine-Tuning) trainer")
+            logger.info("Configuring SFT (Supervised Fine-Tuning)")
+            loss_fn = SFTLoss()
 
-            # For SFT, we need to format the dataset as text
-            # Convert the dataset to have a 'text' field with prompt + chosen
-            def format_for_sft(example):
-                """Format dataset entry for SFT training"""
-                return {
-                    'text': example['prompt'] + example['chosen']
-                }
-
-            train_dataset = train_dataset.map(format_for_sft, remove_columns=train_dataset.column_names)
-            eval_dataset = eval_dataset.map(format_for_sft, remove_columns=eval_dataset.column_names)
-
-            sft_args = SFTConfig(
-                run_name=wandb_run_name if config.use_wandb else config.output_name,
-                learning_rate=config.learning_rate,
-                lr_scheduler_type=config.lr_scheduler_type,
-                per_device_train_batch_size=config.batch_size,
-                per_device_eval_batch_size=config.batch_size,
-                gradient_accumulation_steps=config.gradient_accumulation_steps,
-                optim=config.optimizer_type,
-                num_train_epochs=config.num_epochs,
-                eval_strategy="steps",
-                eval_steps=config.eval_steps,
-                logging_steps=config.logging_steps,
-                warmup_steps=config.warmup_ratio,
-                max_grad_norm=config.max_grad_norm,
-                weight_decay=config.weight_decay,
-                adam_beta1=config.adam_beta1,
-                adam_beta2=config.adam_beta2,
-                adam_epsilon=config.adam_epsilon,
-                report_to=["wandb"] if config.use_wandb else [],
-                output_dir=output_dir,
-                bf16=torch_dtype == torch.bfloat16,
-                fp16=torch_dtype == torch.float16,
-                save_strategy="steps",
-                save_steps=config.eval_steps,
-                save_total_limit=2,
-                seed=config.seed,
-                gradient_checkpointing=config.gradient_checkpointing,
-                # SFT-specific parameters (use max_length, not max_seq_length)
-                max_length=config.max_length,
-                dataset_text_field="text",
-                packing=False,
+            # Tokenize: concatenate prompt+chosen, mask prompt tokens in labels
+            train_dataset = train_dataset.map(
+                lambda x: tokenize_sft(
+                    x, tokenizer, max_length=config.max_length,
+                    prompt_field="prompt", response_field="chosen",
+                ),
+                remove_columns=train_dataset.column_names,
             )
-
-            # Create SFT trainer
-            trainer = SFTTrainer(
-                model=model,
-                args=sft_args,
-                train_dataset=train_dataset,
-                eval_dataset=eval_dataset,
-                peft_config=peft_config,
-                processing_class=tokenizer,
-                callbacks=[WebSocketCallback(job_id, job_manager, event_loop)]
+            eval_dataset = eval_dataset.map(
+                lambda x: tokenize_sft(
+                    x, tokenizer, max_length=config.max_length,
+                    prompt_field="prompt", response_field="chosen",
+                ),
+                remove_columns=eval_dataset.column_names,
             )
         else:
-            # ORPO Configuration (default)
-            logger.info("Configuring ORPO (Odds Ratio Preference Optimization) trainer")
+            logger.info("Configuring ORPO (Odds Ratio Preference Optimization)")
+            loss_fn = ORPOLoss(beta=config.beta)
 
-            orpo_args = ORPOConfig(
-                run_name=wandb_run_name if config.use_wandb else config.output_name,
-                learning_rate=config.learning_rate,
-                lr_scheduler_type=config.lr_scheduler_type,
-                max_length=config.max_length,
-                max_completion_length=config.max_length - config.max_prompt_length,
-                beta=config.beta,
-                per_device_train_batch_size=config.batch_size,
-                per_device_eval_batch_size=config.batch_size,
-                gradient_accumulation_steps=config.gradient_accumulation_steps,
-                optim=config.optimizer_type,
-                num_train_epochs=config.num_epochs,
-                eval_strategy="steps",
-                eval_steps=config.eval_steps,
-                logging_steps=config.logging_steps,
-                warmup_steps=config.warmup_ratio,
-                max_grad_norm=config.max_grad_norm,
-                weight_decay=config.weight_decay,
-                adam_beta1=config.adam_beta1,
-                adam_beta2=config.adam_beta2,
-                adam_epsilon=config.adam_epsilon,
-                report_to=["wandb"] if config.use_wandb else [],
-                output_dir=output_dir,
-                bf16=torch_dtype == torch.bfloat16,
-                fp16=torch_dtype == torch.float16,
-                save_strategy="steps",
-                save_steps=config.eval_steps,
-                save_total_limit=2,
-                seed=config.seed,
-                gradient_checkpointing=config.gradient_checkpointing,
+            # Tokenize: chosen and rejected pairs with prompt masking
+            train_dataset = train_dataset.map(
+                lambda x: tokenize_preference(
+                    x, tokenizer, max_length=config.max_length,
+                    max_prompt_length=config.max_prompt_length,
+                ),
+                remove_columns=train_dataset.column_names,
+            )
+            eval_dataset = eval_dataset.map(
+                lambda x: tokenize_preference(
+                    x, tokenizer, max_length=config.max_length,
+                    max_prompt_length=config.max_prompt_length,
+                ),
+                remove_columns=eval_dataset.column_names,
             )
 
-            # Create ORPO trainer
-            trainer = ORPOTrainer(
-                model=model,
-                args=orpo_args,
-                train_dataset=train_dataset,
-                eval_dataset=eval_dataset,
-                peft_config=peft_config,
-                processing_class=tokenizer,
-                callbacks=[WebSocketCallback(job_id, job_manager, event_loop)]
-            )
+        # Determine mixed precision setting
+        if torch_dtype == torch.bfloat16:
+            mixed_precision = "bf16"
+        elif torch_dtype == torch.float16:
+            mixed_precision = "fp16"
+        else:
+            mixed_precision = "no"
+
+        # Convert eval_steps to int if needed (Merlina stores as float ratio)
+        eval_steps = int(config.eval_steps) if config.eval_steps else None
+
+        grimoire_config = TrainingConfig(
+            output_dir=output_dir,
+            num_epochs=config.num_epochs,
+            batch_size=config.batch_size,
+            gradient_accumulation_steps=config.gradient_accumulation_steps,
+            learning_rate=config.learning_rate,
+            weight_decay=config.weight_decay,
+            warmup_ratio=config.warmup_ratio,
+            max_grad_norm=config.max_grad_norm,
+            max_length=config.max_length,
+            mixed_precision=mixed_precision,
+            gradient_checkpointing=config.gradient_checkpointing,
+            optimizer=config.optimizer_type,
+            lr_scheduler=config.lr_scheduler_type,
+            disable_dropout=(training_mode == "orpo"),
+            logging_steps=config.logging_steps,
+            eval_steps=eval_steps,
+            save_steps=eval_steps,
+            save_total_limit=2,
+            seed=config.seed,
+            run_name=wandb_run_name if config.use_wandb else config.output_name,
+        )
+
+        trainer = GrimoireTrainer(
+            model=model,
+            tokenizer=tokenizer,
+            config=grimoire_config,
+            loss_fn=loss_fn,
+            train_dataset=train_dataset,
+            eval_dataset=eval_dataset,
+            peft_config=peft_config,
+            callbacks=[WebSocketCallback(job_id, job_manager, event_loop)],
+        )
 
         # Train
         logger.info("Starting training")
-        train_result = trainer.train()
+        trainer.train()
 
         # Check if training was stopped early
-        job = job_manager.get_job(job_id)
-        was_stopped = job and job.stop_requested
+        was_stopped = trainer.stopped_early
 
         # Save model
         save_status = "saving_stopped" if was_stopped else "saving"
@@ -1000,7 +977,10 @@ def run_training_sync(
 
         final_output_dir = f"./models/{config.output_name}"
         trainer.save_model(final_output_dir)
-        tokenizer.save_pretrained(final_output_dir)
+
+        # Capture step info before cleanup
+        final_step = trainer.global_step
+        final_max_steps = trainer.max_steps
 
         # Clean up trainer and model to free VRAM before potential merge/upload
         # This prevents OOM when loading the model again for merging
@@ -1049,7 +1029,7 @@ def run_training_sync(
         else:
             # No upload - mark as completed/stopped immediately
             final_status = "stopped" if was_stopped else "completed"
-            final_progress = 1.0 if not was_stopped else (job.current_step / job.total_steps if job.total_steps else 0.9)
+            final_progress = 1.0 if not was_stopped else (final_step / final_max_steps if final_max_steps else 0.9)
 
             job_manager.update_job(
                 job_id,
@@ -1067,7 +1047,7 @@ def run_training_sync(
             )
 
             if was_stopped:
-                logger.info(f"Training stopped early for job {job_id} at step {job.current_step}/{job.total_steps}")
+                logger.info(f"Training stopped early for job {job_id} at step {final_step}/{final_max_steps}")
             else:
                 logger.info(f"Training completed for job {job_id}")
 
