@@ -26,8 +26,6 @@ from transformers import (
     BitsAndBytesConfig,
 )
 from peft import LoraConfig, PeftModel, AutoPeftModelForCausalLM
-from accelerate import Accelerator
-
 from grimoire import GrimoireTrainer, TrainingConfig, TrainerCallback
 from grimoire.losses import SFTLoss, ORPOLoss
 from grimoire.data import tokenize_sft, tokenize_preference
@@ -653,8 +651,9 @@ def run_training_sync(
             gpu_manager.set_visible_devices(config.gpu_ids)
             logger.info(f"Using GPUs: {config.gpu_ids}")
 
-        # Setup accelerator
-        accelerator = Accelerator()
+        # NOTE: Do NOT create a bare Accelerator() here — it initializes a global
+        # AcceleratorState singleton that conflicts with GrimoireTrainer's Accelerator
+        # (which needs mixed_precision). The trainer creates its own accelerator.
 
         # Configure Weights & Biases
         wandb_run_name = None
@@ -942,6 +941,8 @@ def run_training_sync(
             save_total_limit=2,
             seed=config.seed,
             run_name=wandb_run_name if config.use_wandb else config.output_name,
+            log_with="wandb" if config.use_wandb else None,
+            project_name=wandb_project,
         )
 
         trainer = GrimoireTrainer(
@@ -994,7 +995,8 @@ def run_training_sync(
         upload_thread_started = False
         if config.push_to_hub:
             # Check if we should upload (main process in distributed, or always in single GPU)
-            should_upload = accelerator.is_main_process if accelerator.num_processes > 1 else True
+            is_distributed = torch.distributed.is_initialized()
+            should_upload = (not is_distributed) or (torch.distributed.get_rank() == 0)
 
             if should_upload:
                 # Validate HF token is provided
