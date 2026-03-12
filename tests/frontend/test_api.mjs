@@ -170,24 +170,25 @@ describe('WebSocketManager', () => {
     it('reports disconnected when no socket exists', () => {
         const ws = new WebSocketManager();
         assert.equal(ws.getStatus(), 'disconnected');
-        // isConnected() returns falsy (null && ...) when no socket
-        assert.ok(!ws.isConnected());
+        assert.equal(ws.isConnected(), false);
     });
 
-    it('disconnect sets intentional close flag', () => {
-        const ws = new WebSocketManager();
-        ws.disconnect();
-        assert.equal(ws.isIntentionalClose, true);
-        assert.equal(ws.socket, null);
-    });
-
-    it('disconnect nulls jobId when socket exists', () => {
+    it('disconnect cleans up all state', () => {
         const ws = new WebSocketManager();
         ws.jobId = 'test-123';
-        ws.socket = { close: () => {} };  // Mock socket
+        ws.socket = { close: () => {} };
         ws.disconnect();
         assert.equal(ws.jobId, null);
         assert.equal(ws.socket, null);
+        assert.equal(ws.isIntentionalClose, true);
+    });
+
+    it('disconnect clears jobId even without socket', () => {
+        const ws = new WebSocketManager();
+        ws.jobId = 'orphaned-job';
+        ws.disconnect();
+        assert.equal(ws.jobId, null);
+        assert.equal(ws.isIntentionalClose, true);
     });
 
     describe('handleMessage', () => {

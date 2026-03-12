@@ -496,15 +496,16 @@ class WebSocketManager {
         if (this.socket) {
             this.socket.close(1000, 'Client closed connection');
             this.socket = null;
-            this.jobId = null;
         }
+
+        this.jobId = null;
     }
 
     /**
      * Check if connected
      */
     isConnected() {
-        return this.socket && this.socket.readyState === WebSocket.OPEN;
+        return this.socket !== null && this.socket.readyState === WebSocket.OPEN;
     }
 
     /**
