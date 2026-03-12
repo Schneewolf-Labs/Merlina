@@ -352,10 +352,10 @@ class ConfigManager {
         this.setCheckboxValue('use-lora', config.use_lora);
         this.setCheckboxValue('use-4bit', config.use_4bit);
 
-        // LoRA settings
-        if (config.lora_r) this.setInputValue('lora-r', config.lora_r);
-        if (config.lora_alpha) this.setInputValue('lora-alpha', config.lora_alpha);
-        if (config.lora_dropout) this.setInputValue('lora-dropout', config.lora_dropout);
+        // LoRA settings (use != null to allow falsy values like 0)
+        if (config.lora_r != null) this.setInputValue('lora-r', config.lora_r);
+        if (config.lora_alpha != null) this.setInputValue('lora-alpha', config.lora_alpha);
+        if (config.lora_dropout != null) this.setInputValue('lora-dropout', config.lora_dropout);
         if (config.target_modules) this.setInputValue('target-modules', config.target_modules);
         if (config.modules_to_save) this.setInputValue('modules-to-save', config.modules_to_save);
 

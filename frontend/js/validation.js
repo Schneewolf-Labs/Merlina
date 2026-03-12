@@ -248,19 +248,20 @@ class Validator {
      * Estimate VRAM usage based on config
      */
     static estimateVRAM(config) {
-        // Base model size estimates (in GB)
-        const modelSizes = {
-            '1b': 2,
-            '3b': 6,
-            '7b': 14,
-            '8b': 16,
-            '13b': 26,
-            '70b': 140
-        };
+        // Base model size estimates (in GB), sorted largest first to avoid
+        // substring false positives (e.g. "13b" matching "3b")
+        const modelSizes = [
+            ['70b', 140],
+            ['13b', 26],
+            ['8b', 16],
+            ['7b', 14],
+            ['3b', 6],
+            ['1b', 2]
+        ];
 
         // Try to extract model size from name
         let baseSize = 10; // Default fallback
-        for (const [size, gb] of Object.entries(modelSizes)) {
+        for (const [size, gb] of modelSizes) {
             if (config.base_model.toLowerCase().includes(size)) {
                 baseSize = gb;
                 break;
