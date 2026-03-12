@@ -151,6 +151,8 @@ class JobManager {
         this.wsManager.connect(jobId, {
             onStatus: (data) => {
                 this.updateJobUI(data);
+                // Update the job card in the sidebar from WebSocket data
+                this.updateJobCard(data.job_id || jobId, data);
             },
             onMetrics: (data) => {
                 this.updateMetrics(data);
@@ -165,8 +167,27 @@ class JobManager {
             }
         });
 
-        // Also do initial polling as fallback
-        this.updateJobStatus();
+        // Do a single initial status fetch (no polling)
+        this.fetchInitialStatus();
+    }
+
+    /**
+     * Fetch initial job status once (no repeated polling)
+     */
+    async fetchInitialStatus() {
+        if (!this.currentJobId) return;
+
+        try {
+            const status = await MerlinaAPI.getJobStatus(this.currentJobId);
+            this.updateJobUI(status);
+
+            // If job is already in a terminal state, stop monitoring
+            if (['completed', 'failed', 'stopped'].includes(status.status)) {
+                this.stopMonitoring();
+            }
+        } catch (error) {
+            console.error('Failed to fetch initial job status:', error);
+        }
     }
 
     /**
@@ -190,7 +211,7 @@ class JobManager {
     }
 
     /**
-     * Update job status from API
+     * Update job status from API (used only during polling fallback)
      */
     async updateJobStatus() {
         if (!this.currentJobId) return;
@@ -199,15 +220,34 @@ class JobManager {
             const status = await MerlinaAPI.getJobStatus(this.currentJobId);
             this.updateJobUI(status);
 
+            // Update the job card in the sidebar
+            this.updateJobCard(this.currentJobId, status);
+
             // If job is complete, stop monitoring
             if (['completed', 'failed', 'stopped'].includes(status.status)) {
                 this.stopMonitoring();
+                // Refresh full job list on terminal state
+                await this.loadJobs();
             }
-
-            // Update jobs list
-            await this.loadJobs();
         } catch (error) {
             console.error('Failed to update job status:', error);
+        }
+    }
+
+    /**
+     * Update a single job card in the sidebar without fetching /jobs
+     */
+    updateJobCard(jobId, data) {
+        // Use the existing JobCardRenderer.update utility
+        JobCardRenderer.update(jobId, {
+            status: data.status,
+            progress: data.progress
+        });
+
+        // Update local tracking
+        if (this.activeJobs[jobId]) {
+            if (data.status) this.activeJobs[jobId].status = data.status;
+            if (data.progress !== undefined) this.activeJobs[jobId].progress = data.progress;
         }
     }
 
@@ -274,6 +314,7 @@ class JobManager {
     handleJobCompleted(data) {
         this.toast.success('Training completed successfully!');
         this.stopMonitoring();
+        // Refresh job list once on completion to get final state
         this.loadJobs();
     }
 

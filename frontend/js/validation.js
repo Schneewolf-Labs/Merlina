@@ -4,86 +4,86 @@
  * Validation rules for form inputs
  */
 const ValidationRules = {
-    base_model: {
+    'base-model': {
         required: true,
         pattern: /^[a-zA-Z0-9\-_\/\.]+$/,
         message: 'Please enter a valid model name (alphanumeric, hyphens, underscores, slashes)'
     },
-    output_name: {
+    'output-name': {
         required: true,
         pattern: /^[a-zA-Z0-9\-_]+$/,
         minLength: 3,
         maxLength: 100,
         message: 'Model name must be 3-100 characters (alphanumeric, hyphens, underscores only)'
     },
-    learning_rate: {
+    'learning-rate': {
         required: true,
         type: 'number',
         min: 0.000001,
         max: 0.1,
         message: 'Learning rate must be between 0.000001 and 0.1'
     },
-    epochs: {
+    'epochs': {
         required: true,
         type: 'number',
         min: 1,
         max: 100,
         message: 'Epochs must be between 1 and 100'
     },
-    batch_size: {
+    'batch-size': {
         required: true,
         type: 'number',
         min: 1,
         max: 32,
         message: 'Batch size must be between 1 and 32'
     },
-    grad_accum: {
+    'grad-accum': {
         required: true,
         type: 'number',
         min: 1,
         max: 256,
         message: 'Gradient accumulation must be between 1 and 256'
     },
-    max_length: {
+    'max-length': {
         required: true,
         type: 'number',
         min: 128,
         max: 32768,
         message: 'Max length must be between 128 and 32768'
     },
-    max_prompt_length: {
+    'max-prompt-length': {
         required: true,
         type: 'number',
         min: 64,
         max: 16384,
         message: 'Max prompt length must be between 64 and 16384'
     },
-    beta: {
+    'beta': {
         required: true,
         type: 'number',
         min: 0.01,
         max: 10,
         message: 'Beta must be between 0.01 and 10'
     },
-    lora_r: {
+    'lora-r': {
         type: 'number',
         min: 8,
         max: 512,
         message: 'LoRA rank must be between 8 and 512'
     },
-    lora_alpha: {
+    'lora-alpha': {
         type: 'number',
         min: 8,
         max: 512,
         message: 'LoRA alpha must be between 8 and 512'
     },
-    lora_dropout: {
+    'lora-dropout': {
         type: 'number',
         min: 0,
         max: 0.5,
         message: 'LoRA dropout must be between 0 and 0.5'
     },
-    test_size: {
+    'test-size': {
         type: 'number',
         min: 0.001,
         max: 0.5,
@@ -248,19 +248,20 @@ class Validator {
      * Estimate VRAM usage based on config
      */
     static estimateVRAM(config) {
-        // Base model size estimates (in GB)
-        const modelSizes = {
-            '1b': 2,
-            '3b': 6,
-            '7b': 14,
-            '8b': 16,
-            '13b': 26,
-            '70b': 140
-        };
+        // Base model size estimates (in GB), sorted largest first to avoid
+        // substring false positives (e.g. "13b" matching "3b")
+        const modelSizes = [
+            ['70b', 140],
+            ['13b', 26],
+            ['8b', 16],
+            ['7b', 14],
+            ['3b', 6],
+            ['1b', 2]
+        ];
 
         // Try to extract model size from name
         let baseSize = 10; // Default fallback
-        for (const [size, gb] of Object.entries(modelSizes)) {
+        for (const [size, gb] of modelSizes) {
             if (config.base_model.toLowerCase().includes(size)) {
                 baseSize = gb;
                 break;
