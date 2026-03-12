@@ -1,5 +1,10 @@
 // Playwright configuration for Merlina frontend integration tests
 import { defineConfig } from '@playwright/test';
+import { fileURLToPath } from 'url';
+import path from 'path';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const rootDir = path.resolve(__dirname, '..', '..');
 
 export default defineConfig({
     testDir: '.',
@@ -15,7 +20,8 @@ export default defineConfig({
     },
 
     webServer: {
-        command: 'python tests/frontend/serve_for_tests.py',
+        command: `python ${path.join(rootDir, 'tests', 'frontend', 'serve_for_tests.py')}`,
+        cwd: rootDir,
         url: 'http://localhost:8000/version',
         reuseExistingServer: !process.env.CI,
         timeout: 30000,
