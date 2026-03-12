@@ -460,35 +460,10 @@ def run_training_sync(
             wandb_project = config.wandb_project or "merlina-training"
             logger.info(f"W&B Project: {wandb_project}, Run: {wandb_run_name}")
 
-            # Initialize wandb with project, name, and tags
-            wandb_config = {
-                "model": config.base_model,
-                "learning_rate": config.learning_rate,
-                "batch_size": config.batch_size,
-                "effective_batch_size": calculate_effective_batch_size(config.batch_size, config.gradient_accumulation_steps),
-                "epochs": config.num_epochs,
-                "optimizer": config.optimizer_type,
-                "attention": config.attn_implementation,
-                "use_lora": config.use_lora,
-                "lora_r": config.lora_r if config.use_lora else None,
-                "lora_alpha": config.lora_alpha if config.use_lora else None,
-                "beta": config.beta,
-                "seed": config.seed
-            }
-
-            wandb.init(
-                project=wandb_project,
-                name=wandb_run_name,
-                tags=config.wandb_tags or [],
-                notes=config.wandb_notes,
-                config=wandb_config
-            )
-
-            # Capture W&B run URL and save to job
-            if wandb.run is not None:
-                wandb_url = wandb.run.get_url()
-                logger.info(f"W&B run URL: {wandb_url}")
-                job_manager.update_job(job_id, wandb_url=wandb_url)
+            # NOTE: Do NOT call wandb.init() here — Grimoire's Accelerator handles
+            # the full wandb lifecycle via init_trackers(). Calling it here creates
+            # a conflict where accelerate gets a stale run handle and metrics don't log.
+            # The wandb URL is captured after trainer creation below.
 
         # Set HF token if provided
         if config.hf_token:
@@ -729,6 +704,8 @@ def run_training_sync(
             run_name=wandb_run_name if config.use_wandb else config.output_name,
             log_with="wandb" if config.use_wandb else None,
             project_name=wandb_project,
+            wandb_tags=config.wandb_tags or [],
+            wandb_notes=config.wandb_notes,
         )
 
         trainer = GrimoireTrainer(
@@ -741,6 +718,12 @@ def run_training_sync(
             peft_config=peft_config,
             callbacks=[WebSocketCallback(job_id, job_manager, event_loop)],
         )
+
+        # Capture W&B run URL after trainer init (accelerator owns the wandb run)
+        if config.use_wandb and wandb.run is not None:
+            wandb_url = wandb.run.get_url()
+            logger.info(f"W&B run URL: {wandb_url}")
+            job_manager.update_job(job_id, wandb_url=wandb_url)
 
         # Train
         logger.info("Starting training")
