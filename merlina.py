@@ -763,7 +763,7 @@ async def websocket_endpoint(websocket: WebSocket, job_id: str):
     except Exception as e:
         logger.error(f"WebSocket error for job {job_id}: {e}")
     finally:
-        websocket_manager.disconnect(websocket, job_id)
+        await websocket_manager.disconnect(websocket, job_id)
 
 
 @app.get("/stats")
