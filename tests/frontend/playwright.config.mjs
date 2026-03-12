@@ -15,7 +15,7 @@ export default defineConfig({
     },
 
     webServer: {
-        command: 'python ../../merlina.py',
+        command: 'python tests/frontend/serve_for_tests.py',
         url: 'http://localhost:8000/version',
         reuseExistingServer: !process.env.CI,
         timeout: 30000,
