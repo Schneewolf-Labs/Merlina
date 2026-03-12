@@ -64,7 +64,7 @@ class MockTrainingConfig(BaseModel):
 
 
 # Import the function to test
-from src.training_runner import generate_model_readme
+from src.model_card import generate_model_readme
 
 
 def test_readme_basic_structure():

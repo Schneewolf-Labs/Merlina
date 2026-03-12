@@ -61,7 +61,10 @@ mock_transformers.PreTrainedTokenizerBase = FakeTokenizerBase  # Required for is
 sys.modules['transformers'] = mock_transformers
 
 # Mock other ML libraries and system dependencies
-for module in ['trl', 'peft', 'accelerate', 'bitsandbytes', 'wandb', 'psutil', 'pynvml']:
+for module in [
+    'trl', 'peft', 'accelerate', 'accelerate.utils', 'bitsandbytes', 'wandb', 'psutil', 'pynvml',
+    'grimoire', 'grimoire.losses', 'grimoire.data',
+]:
     sys.modules[module] = MagicMock()
 
 from fastapi.testclient import TestClient
