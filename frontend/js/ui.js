@@ -261,7 +261,9 @@ class Modal {
     }
 
     isVisible() {
-        return this.modal && this.modal.style.display !== 'none';
+        if (!this.modal) return false;
+        // Check computed style to handle both inline and CSS-hidden modals
+        return window.getComputedStyle(this.modal).display !== 'none';
     }
 
     /**

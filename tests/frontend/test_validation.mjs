@@ -284,16 +284,61 @@ describe('Validator.validateDatasetConfig', () => {
 // ═════════════════════════════════════════════════════════════════════════════
 
 describe('Validator.estimateVRAM', () => {
+    const baseConfig = {
+        use_4bit: false,
+        batch_size: 1,
+        gradient_accumulation_steps: 16,
+        max_length: 2048,
+    };
+
     it('estimates VRAM for 7B model', () => {
         const result = Validator.estimateVRAM({
+            ...baseConfig,
             base_model: 'meta-llama/Llama-3-7b',
-            use_4bit: false,
-            batch_size: 1,
-            gradient_accumulation_steps: 16,
-            max_length: 2048,
         });
-        assert.ok(parseFloat(result.base) > 0);
+        assert.equal(parseFloat(result.base), 14.0);
         assert.ok(parseFloat(result.total) > parseFloat(result.base));
+    });
+
+    it('estimates VRAM for 8B model', () => {
+        const result = Validator.estimateVRAM({
+            ...baseConfig,
+            base_model: 'Meta-Llama-3.1-8B-Instruct',
+        });
+        assert.equal(parseFloat(result.base), 16.0);
+    });
+
+    it('estimates VRAM for 13B model (must not match 3b)', () => {
+        const result = Validator.estimateVRAM({
+            ...baseConfig,
+            base_model: 'llama-13b-chat',
+        });
+        // Should match 13b (26GB), NOT 3b (6GB)
+        assert.equal(parseFloat(result.base), 26.0);
+    });
+
+    it('estimates VRAM for 70B model', () => {
+        const result = Validator.estimateVRAM({
+            ...baseConfig,
+            base_model: 'meta-llama/Llama-3-70b',
+        });
+        assert.equal(parseFloat(result.base), 140.0);
+    });
+
+    it('estimates VRAM for 1B model', () => {
+        const result = Validator.estimateVRAM({
+            ...baseConfig,
+            base_model: 'TinyLlama-1b',
+        });
+        assert.equal(parseFloat(result.base), 2.0);
+    });
+
+    it('estimates VRAM for 3B model', () => {
+        const result = Validator.estimateVRAM({
+            ...baseConfig,
+            base_model: 'phi-3b-mini',
+        });
+        assert.equal(parseFloat(result.base), 6.0);
     });
 
     it('reduces VRAM estimate with 4-bit quantization', () => {
@@ -306,6 +351,9 @@ describe('Validator.estimateVRAM', () => {
         const full = Validator.estimateVRAM({ ...config, use_4bit: false });
         const quantized = Validator.estimateVRAM({ ...config, use_4bit: true });
         assert.ok(parseFloat(quantized.base) < parseFloat(full.base));
+        // 4-bit should be ~35% of full
+        const ratio = parseFloat(quantized.base) / parseFloat(full.base);
+        assert.ok(ratio > 0.3 && ratio < 0.4, `4-bit ratio ${ratio} should be ~0.35`);
     });
 
     it('uses fallback size for unknown model', () => {
@@ -330,6 +378,27 @@ describe('Validator.estimateVRAM', () => {
         const small = Validator.estimateVRAM({ ...config, batch_size: 1 });
         const large = Validator.estimateVRAM({ ...config, batch_size: 8 });
         assert.ok(parseFloat(large.training) > parseFloat(small.training));
+    });
+
+    it('longer sequence increases training overhead', () => {
+        const config = {
+            base_model: 'meta-llama/Llama-3-7b',
+            use_4bit: false,
+            batch_size: 1,
+            gradient_accumulation_steps: 1,
+        };
+        const short = Validator.estimateVRAM({ ...config, max_length: 512 });
+        const long = Validator.estimateVRAM({ ...config, max_length: 8192 });
+        assert.ok(parseFloat(long.training) > parseFloat(short.training));
+    });
+
+    it('total equals base plus training', () => {
+        const result = Validator.estimateVRAM({
+            ...baseConfig,
+            base_model: 'meta-llama/Llama-3-7b',
+        });
+        const expected = parseFloat(result.base) + parseFloat(result.training);
+        assert.equal(parseFloat(result.total), parseFloat(expected.toFixed(1)));
     });
 });
 
@@ -398,5 +467,95 @@ describe('debounce', () => {
         fn.cancel();
         await new Promise(r => setTimeout(r, 100));
         assert.equal(called, false);
+    });
+
+    it('passes latest arguments from rapid calls', async () => {
+        let receivedArg = null;
+        const fn = debounce((arg) => { receivedArg = arg; }, 50);
+        fn('first');
+        fn('second');
+        fn('third');
+        await new Promise(r => setTimeout(r, 100));
+        assert.equal(receivedArg, 'third');
+    });
+
+    it('can be called again after cancel', async () => {
+        let count = 0;
+        const fn = debounce(() => { count++; }, 50);
+        fn();
+        fn.cancel();
+        fn();
+        await new Promise(r => setTimeout(r, 100));
+        assert.equal(count, 1);
+    });
+
+    it('cancel is safe to call when nothing is pending', () => {
+        const fn = debounce(() => {}, 50);
+        // Should not throw
+        fn.cancel();
+        fn.cancel();
+    });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Edge case: real-world model name validation
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('Real-world model name validation', () => {
+    const rule = ValidationRules['base-model'];
+
+    it('accepts standard HuggingFace model IDs', () => {
+        const models = [
+            'meta-llama/Llama-3-8B-Instruct',
+            'mistralai/Mistral-7B-v0.1',
+            'Qwen/Qwen2.5-72B-Instruct',
+            'google/gemma-2-9b',
+        ];
+        for (const model of models) {
+            const errors = Validator.validateField('base-model', model, rule);
+            assert.equal(errors.length, 0, `Should accept model: ${model}`);
+        }
+    });
+
+    it('accepts local paths with slashes and dots', () => {
+        const paths = [
+            './models/my-model',
+            '../shared/model-v2',
+            '/home/user/models/llama',
+        ];
+        for (const path of paths) {
+            const errors = Validator.validateField('base-model', path, rule);
+            assert.equal(errors.length, 0, `Should accept path: ${path}`);
+        }
+    });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Edge case: output-name boundary tests
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('Output name boundary tests', () => {
+    const rule = ValidationRules['output-name'];
+
+    it('rejects 2-char names (under minLength)', () => {
+        const errors = Validator.validateField('output-name', 'ab', rule);
+        assert.ok(errors.length > 0);
+    });
+
+    it('accepts 3-char names (at minLength)', () => {
+        const errors = Validator.validateField('output-name', 'abc', rule);
+        assert.equal(errors.length, 0);
+    });
+
+    it('accepts 100-char names (at maxLength)', () => {
+        const name = 'a'.repeat(100);
+        const errors = Validator.validateField('output-name', name, rule);
+        assert.equal(errors.length, 0);
+    });
+
+    it('rejects 101-char names (over maxLength)', () => {
+        const name = 'a'.repeat(101);
+        const errors = Validator.validateField('output-name', name, rule);
+        assert.ok(errors.length > 0);
     });
 });
