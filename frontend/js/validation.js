@@ -11,10 +11,10 @@ const ValidationRules = {
     },
     'output-name': {
         required: true,
-        pattern: /^[a-zA-Z0-9\-_]+$/,
+        pattern: /^[a-zA-Z0-9\-_.]+$/,
         minLength: 3,
         maxLength: 100,
-        message: 'Model name must be 3-100 characters (alphanumeric, hyphens, underscores only)'
+        message: 'Model name must be 3-100 characters (alphanumeric, hyphens, underscores, periods only)'
     },
     'learning-rate': {
         required: true,
