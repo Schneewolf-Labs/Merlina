@@ -2,6 +2,7 @@
 
 import { MerlinaAPI } from './api.js';
 import { Toast, LoadingManager, GPUDisplay } from './ui.js';
+import { sanitizeHTML } from './validation.js';
 
 /**
  * GPU Manager - handles GPU operations
@@ -43,7 +44,7 @@ class GPUManager {
                 container.innerHTML = `
                     <div class="warning-message">
                         <div class="warning-header">⚠️ No CUDA Available</div>
-                        <div class="warning-body">${data.message}</div>
+                        <div class="warning-body">${sanitizeHTML(data.message)}</div>
                     </div>
                 `;
 
@@ -78,7 +79,7 @@ class GPUManager {
             container.innerHTML = `
                 <div class="error-message">
                     <div class="error-header">❌ Error Loading GPUs</div>
-                    <div class="error-body">${error.message}</div>
+                    <div class="error-body">${sanitizeHTML(error.message)}</div>
                 </div>
             `;
             this.toast.error('Failed to load GPU information');
@@ -127,7 +128,7 @@ class GPUManager {
             }
         } catch (error) {
             console.error('Failed to refresh GPU stats:', error);
-            container.innerHTML = `<div class="error-message">Error: ${error.message}</div>`;
+            container.innerHTML = `<div class="error-message">Error: ${sanitizeHTML(error.message)}</div>`;
         }
     }
 }

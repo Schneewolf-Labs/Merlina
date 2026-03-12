@@ -6,7 +6,7 @@ import { ConfigManager } from './config.js';
 import { GPUManager } from './gpu.js';
 import { ModelManager } from './model.js';
 import { Toast, FormUI, Tooltip, createSparkle } from './ui.js';
-import { Validator, debounce } from './validation.js';
+import { Validator, ValidationRules, debounce } from './validation.js';
 import { ThemeManager } from './theme.js';
 
 /**
@@ -666,13 +666,13 @@ class MerlinaApp {
      */
     setupInputValidation() {
         // Add validation on blur for all inputs with rules
-        for (const fieldId of Object.keys(Validator.validationRules || {})) {
+        for (const fieldId of Object.keys(ValidationRules)) {
             const field = document.getElementById(fieldId);
             if (!field) continue;
 
             // Debounced validation
             const validateField = debounce(() => {
-                const rules = Validator.validationRules[fieldId];
+                const rules = ValidationRules[fieldId];
                 const errors = Validator.validateField(fieldId, field.value, rules);
 
                 if (errors.length > 0) {
@@ -686,7 +686,7 @@ class MerlinaApp {
             field.addEventListener('blur', () => {
                 // Clear debounce and validate immediately
                 validateField.cancel?.();
-                const rules = Validator.validationRules[fieldId];
+                const rules = ValidationRules[fieldId];
                 const errors = Validator.validateField(fieldId, field.value, rules);
 
                 if (errors.length > 0) {
