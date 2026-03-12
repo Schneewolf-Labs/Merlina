@@ -21,18 +21,17 @@ test.describe('Page load', () => {
 
     test('displays version in footer', async ({ page }) => {
         await page.goto('/');
-        const version = page.locator('#version-display');
+        const version = page.locator('#version-info');
         await expect(version).toBeVisible();
         await expect(version).toContainText(/v\d+\.\d+\.\d+/);
     });
 
     test('all three main sections are visible', async ({ page }) => {
         await page.goto('/');
-        // Section headers
-        await expect(page.getByText('Model Selection')).toBeVisible();
-        await expect(page.getByText('Dataset Configuration')).toBeVisible();
-        // Training config section contains multiple subsections
-        await expect(page.getByText('Training Hyperparameters')).toBeVisible();
+        // Section headers (step-based with emoji prefixes)
+        await expect(page.getByText('Select Your Base Model')).toBeVisible();
+        await expect(page.getByText('Configure Your Dataset')).toBeVisible();
+        await expect(page.getByText('Configure Training Parameters')).toBeVisible();
     });
 
     test('has skip-to-content link for accessibility', async ({ page }) => {
@@ -292,7 +291,7 @@ test.describe('Keyboard shortcuts', () => {
 test.describe('Advanced settings', () => {
     test('advanced section is collapsed by default', async ({ page }) => {
         await page.goto('/');
-        const advancedContent = page.locator('#advanced-settings');
+        const advancedContent = page.locator('.advanced-section').first();
         if (await advancedContent.count() > 0) {
             await expect(advancedContent).toBeHidden();
         }
@@ -303,7 +302,7 @@ test.describe('Advanced settings', () => {
         const toggle = page.locator('#toggle-advanced');
         if (await toggle.count() > 0) {
             await toggle.click();
-            const advancedContent = page.locator('#advanced-settings');
+            const advancedContent = page.locator('.advanced-section').first();
             await expect(advancedContent).toBeVisible();
         }
     });
