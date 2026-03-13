@@ -8,6 +8,7 @@ from typing import Optional, Callable
 from datasets import Dataset
 import logging
 from .messages_converter import has_messages_format, convert_messages_dataset
+from .deduplication import deduplicate_dataset, DedupeStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,9 @@ class DatasetPipeline:
         seed: int = 42,
         shuffle: bool = True,
         training_mode: str = "orpo",
-        convert_messages_format: bool = True
+        convert_messages_format: bool = True,
+        deduplicate: bool = False,
+        dedupe_strategy: DedupeStrategy = "prompt_chosen"
     ):
         """
         Initialize dataset pipeline.
@@ -80,6 +83,12 @@ class DatasetPipeline:
             shuffle: Whether to shuffle the dataset before splitting
             training_mode: Training mode ('sft' or 'orpo'). For SFT, rejected is optional.
             convert_messages_format: Whether to automatically detect and convert messages format
+            deduplicate: Whether to remove duplicate samples from the dataset
+            dedupe_strategy: Strategy for identifying duplicates:
+                - "prompt": Based on prompt field only
+                - "chosen": Based on chosen field only
+                - "prompt_chosen": Based on combined prompt+chosen (default)
+                - "exact": Based on all fields
         """
         self.loader = loader
         self.formatter = formatter
@@ -90,6 +99,8 @@ class DatasetPipeline:
         self.shuffle = shuffle
         self.training_mode = training_mode
         self.convert_messages_format = convert_messages_format
+        self.deduplicate = deduplicate
+        self.dedupe_strategy = dedupe_strategy
 
     def prepare(self) -> tuple[Dataset, Dataset]:
         """
@@ -116,6 +127,11 @@ class DatasetPipeline:
         # Validate schema
         logger.info("Validating dataset schema...")
         self._validate_schema(dataset)
+
+        # Deduplicate if enabled
+        if self.deduplicate:
+            logger.info(f"Deduplicating dataset (strategy='{self.dedupe_strategy}')...")
+            dataset = deduplicate_dataset(dataset, strategy=self.dedupe_strategy)
 
         # Limit samples if requested
         if self.max_samples and len(dataset) > self.max_samples:
