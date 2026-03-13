@@ -678,8 +678,15 @@ def run_training_sync(
         else:
             mixed_precision = "no"
 
-        # Convert eval_steps to int if needed (Merlina stores as float ratio)
-        eval_steps = int(config.eval_steps) if config.eval_steps else None
+        # Convert eval_steps: <1 means ratio (e.g. 0.2 = every 20%), >=1 means absolute steps
+        eval_steps = None
+        if config.eval_steps:
+            if config.eval_steps < 1:
+                import math
+                total_steps = math.ceil(len(train_dataset) / (config.batch_size * config.gradient_accumulation_steps))
+                eval_steps = max(1, int(total_steps * config.eval_steps))
+            else:
+                eval_steps = int(config.eval_steps)
 
         grimoire_config = TrainingConfig(
             output_dir=output_dir,
