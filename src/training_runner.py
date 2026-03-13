@@ -639,6 +639,7 @@ def run_training_sync(
             train_dataset = train_dataset.map(
                 lambda x: tokenize_sft(
                     x, tokenizer, max_length=config.max_length,
+                    max_prompt_length=config.max_prompt_length,
                     prompt_field="prompt", response_field="chosen",
                 ),
                 remove_columns=train_dataset.column_names,
@@ -646,6 +647,7 @@ def run_training_sync(
             eval_dataset = eval_dataset.map(
                 lambda x: tokenize_sft(
                     x, tokenizer, max_length=config.max_length,
+                    max_prompt_length=config.max_prompt_length,
                     prompt_field="prompt", response_field="chosen",
                 ),
                 remove_columns=eval_dataset.column_names,
