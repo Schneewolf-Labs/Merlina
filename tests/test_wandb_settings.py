@@ -6,7 +6,7 @@ import sys
 sys.path.insert(0, '/home/python/AI/merlina')
 
 # Import only the run name generator (avoid full imports)
-from src.training_runner import generate_wandb_run_name
+from src.model_card import generate_wandb_run_name
 
 class MockConfig:
     """Mock config for testing"""

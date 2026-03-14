@@ -5,7 +5,6 @@ ORPO training for LLMs with a delightful interface
 """
 
 import os
-os.environ.setdefault("TRL_EXPERIMENTAL_SILENCE", "1")
 import gc
 import asyncio
 import torch
@@ -267,7 +266,7 @@ class TrainingConfig(BaseModel):
 
     # Optional settings
     warmup_ratio: float = Field(0.05, ge=0.0, le=0.5)
-    eval_steps: float = Field(0.2, ge=0.1, le=1.0)
+    eval_steps: float = Field(0.2, gt=0, description="<1 = ratio of total steps, >=1 = absolute step count")
     use_4bit: bool = Field(True, description="Use 4-bit quantization")
     use_wandb: bool = Field(True, description="Log to Weights & Biases")
     push_to_hub: bool = Field(False, description="Push to HuggingFace Hub")
