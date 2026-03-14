@@ -249,10 +249,15 @@ class TrainingConfig(BaseModel):
     max_prompt_length: int = Field(1024, ge=256, le=4096)
 
     # Training mode
-    training_mode: str = Field("orpo", description="Training mode: 'sft' or 'orpo'")
+    training_mode: str = Field(
+        "orpo",
+        description="Training mode: 'sft', 'orpo', 'dpo', 'simpo', 'cpo', or 'ipo'"
+    )
 
-    # ORPO specific
-    beta: float = Field(0.1, ge=0.01, le=1.0, description="ORPO beta parameter (only used when training_mode='orpo')")
+    # Preference optimization parameters
+    beta: float = Field(0.1, ge=0.01, le=10.0, description="Beta parameter for preference optimization (ORPO, DPO, SimPO, CPO, IPO)")
+    label_smoothing: float = Field(0.0, ge=0.0, le=0.5, description="Label smoothing for DPO/CPO loss")
+    gamma: float = Field(0.5, ge=0.0, le=5.0, description="SimPO reward margin between chosen and rejected")
 
     # Dataset configuration
     dataset: DatasetConfig = Field(

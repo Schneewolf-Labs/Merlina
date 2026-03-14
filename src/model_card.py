@@ -86,10 +86,15 @@ def generate_model_readme(config: Any, training_mode: str) -> str:
         f"| Seed | {config.seed} |",
     ]
 
-    # Add ORPO-specific params
-    if training_mode.lower() == "orpo":
-        config_lines.append(f"| ORPO Beta | {config.beta} |")
+    # Add preference-specific params
+    preference_modes = {"orpo", "dpo", "simpo", "cpo", "ipo"}
+    if training_mode.lower() in preference_modes:
+        config_lines.append(f"| Beta | {config.beta} |")
         config_lines.append(f"| Max Prompt Length | {config.max_prompt_length} |")
+    if training_mode.lower() == "simpo":
+        config_lines.append(f"| SimPO Gamma | {config.gamma} |")
+    if training_mode.lower() in ("dpo", "cpo"):
+        config_lines.append(f"| Label Smoothing | {config.label_smoothing} |")
 
     # Add LoRA params if enabled
     if config.use_lora:
@@ -226,8 +231,9 @@ def generate_wandb_run_name(config: Any) -> str:
         suffixes.append("4bit")
     if config.gradient_checkpointing:
         suffixes.append("gc")
-    # Only add beta for ORPO mode (SFT doesn't use beta)
-    if config.beta != 0.1 and config.training_mode == "orpo":
+    # Only add beta for preference modes (SFT doesn't use beta)
+    preference_modes = {"orpo", "dpo", "simpo", "cpo", "ipo"}
+    if config.beta != 0.1 and config.training_mode in preference_modes:
         suffixes.append(f"beta{config.beta}")
 
     if suffixes:

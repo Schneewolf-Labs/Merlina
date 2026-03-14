@@ -4,7 +4,7 @@ Enhanced Training Runner with WebSocket updates and better error handling.
 This module provides the core training functionality for Merlina, including:
 - Model loading with quantization support
 - Dataset preparation and formatting
-- ORPO and SFT training modes
+- Multiple training modes: SFT, ORPO, DPO, SimPO, CPO, IPO
 - WebSocket progress updates
 - Background HuggingFace Hub uploads
 - Weights & Biases integration
@@ -27,7 +27,7 @@ from transformers import (
 )
 from peft import LoraConfig, PeftModel, AutoPeftModelForCausalLM
 from grimoire import GrimoireTrainer, TrainingConfig, TrainerCallback
-from grimoire.losses import SFTLoss, ORPOLoss
+from grimoire.losses import SFTLoss, ORPOLoss, DPOLoss, SimPOLoss, CPOLoss, IPOLoss
 from grimoire.data import tokenize_sft, tokenize_preference
 
 from huggingface_hub import HfApi
@@ -69,7 +69,7 @@ def _run_background_upload(
     Args:
         config: Training configuration
         final_output_dir: Path to saved model
-        training_mode: 'sft' or 'orpo'
+        training_mode: Training method name (sft, orpo, dpo, simpo, cpo, ipo)
         job_id: Job identifier
         job_manager: JobManager for status updates
         event_loop: Event loop for WebSocket updates
@@ -398,8 +398,8 @@ def run_training_sync(
     """
     Run training job with enhanced monitoring and WebSocket updates.
 
-    Supports both ORPO (Odds Ratio Preference Optimization) and SFT
-    (Supervised Fine-Tuning) training modes with optional LoRA adapters.
+    Supports multiple training modes (SFT, ORPO, DPO, SimPO, CPO, IPO)
+    with optional LoRA adapters.
 
     Args:
         job_id: Unique job identifier for tracking
@@ -631,6 +631,9 @@ def run_training_sync(
         training_mode = config.training_mode.lower()
         logger.info(f"Using training mode: {training_mode}")
 
+        # Preference-based methods that all use tokenize_preference
+        PREFERENCE_MODES = {"orpo", "dpo", "simpo", "cpo", "ipo"}
+
         if training_mode == "sft":
             logger.info("Configuring SFT (Supervised Fine-Tuning)")
             loss_fn = SFTLoss()
@@ -652,9 +655,23 @@ def run_training_sync(
                 ),
                 remove_columns=eval_dataset.column_names,
             )
-        else:
-            logger.info("Configuring ORPO (Odds Ratio Preference Optimization)")
-            loss_fn = ORPOLoss(beta=config.beta)
+        elif training_mode in PREFERENCE_MODES:
+            # Create appropriate loss function for each preference method
+            if training_mode == "orpo":
+                logger.info("Configuring ORPO (Odds Ratio Preference Optimization)")
+                loss_fn = ORPOLoss(beta=config.beta)
+            elif training_mode == "dpo":
+                logger.info("Configuring DPO (Direct Preference Optimization)")
+                loss_fn = DPOLoss(beta=config.beta, label_smoothing=config.label_smoothing)
+            elif training_mode == "simpo":
+                logger.info("Configuring SimPO (Simple Preference Optimization)")
+                loss_fn = SimPOLoss(beta=config.beta, gamma=config.gamma)
+            elif training_mode == "cpo":
+                logger.info("Configuring CPO (Contrastive Preference Optimization)")
+                loss_fn = CPOLoss(beta=config.beta, label_smoothing=config.label_smoothing)
+            elif training_mode == "ipo":
+                logger.info("Configuring IPO (Identity Preference Optimization)")
+                loss_fn = IPOLoss(beta=config.beta)
 
             # Tokenize: chosen and rejected pairs with prompt masking
             train_dataset = train_dataset.map(
@@ -671,6 +688,8 @@ def run_training_sync(
                 ),
                 remove_columns=eval_dataset.column_names,
             )
+        else:
+            raise ValueError(f"Unknown training mode: {training_mode}. Supported: sft, orpo, dpo, simpo, cpo, ipo")
 
         # Determine mixed precision setting
         if torch_dtype == torch.bfloat16:
@@ -704,7 +723,7 @@ def run_training_sync(
             gradient_checkpointing=config.gradient_checkpointing,
             optimizer=config.optimizer_type,
             lr_scheduler=config.lr_scheduler_type,
-            disable_dropout=(training_mode == "orpo"),
+            disable_dropout=(training_mode in PREFERENCE_MODES),
             logging_steps=config.logging_steps,
             eval_steps=eval_steps,
             save_steps=eval_steps,

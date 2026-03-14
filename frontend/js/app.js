@@ -197,6 +197,8 @@ class MerlinaApp {
             max_length: parseInt(document.getElementById('max-length')?.value || 2048),
             max_prompt_length: parseInt(document.getElementById('max-prompt-length')?.value || 1024),
             beta: parseFloat(document.getElementById('beta')?.value || 0.1),
+            gamma: parseFloat(document.getElementById('gamma')?.value || 0.5),
+            label_smoothing: parseFloat(document.getElementById('label-smoothing')?.value || 0.0),
             seed: parseInt(document.getElementById('seed')?.value || 42),
             max_grad_norm: parseFloat(document.getElementById('max-grad-norm')?.value || 0.3),
             warmup_ratio: parseFloat(document.getElementById('warmup-ratio')?.value || 0.05),
@@ -580,23 +582,42 @@ class MerlinaApp {
     }
 
     /**
-     * Setup training mode toggle (show/hide ORPO beta field)
+     * Setup training mode toggle (show/hide relevant parameter fields)
      */
     setupTrainingModeToggle() {
         const trainingMode = document.getElementById('training-mode');
         const betaField = document.getElementById('beta-field');
+        const gammaField = document.getElementById('gamma-field');
+        const labelSmoothingField = document.getElementById('label-smoothing-field');
+        const descriptionEl = document.getElementById('training-mode-description');
 
-        if (!trainingMode || !betaField) return;
+        if (!trainingMode) return;
 
-        trainingMode.addEventListener('change', (e) => {
-            const mode = e.target.value;
-            // Show beta field only for ORPO mode
-            betaField.style.display = mode === 'orpo' ? 'block' : 'none';
-        });
+        const PREFERENCE_MODES = ['orpo', 'dpo', 'simpo', 'cpo', 'ipo'];
 
-        // Initialize based on current value
-        const currentMode = trainingMode.value;
-        betaField.style.display = currentMode === 'orpo' ? 'block' : 'none';
+        const MODE_DESCRIPTIONS = {
+            sft: '<strong>SFT:</strong> Learn from good examples. Uses only the "chosen" response for each prompt — great for teaching your model a new style or task. No rejected responses needed.',
+            orpo: '<strong>ORPO:</strong> A simple, all-in-one preference method. Combines supervised learning with odds-ratio preference optimization in a single pass — no reference model needed. Good default choice for preference training.',
+            dpo: '<strong>DPO:</strong> The most popular preference method. Directly optimizes the policy to prefer chosen over rejected responses using a clever log-ratio trick. Stable and well-studied.',
+            simpo: '<strong>SimPO:</strong> A streamlined DPO variant that skips the reference model entirely. Uses length-normalized rewards and a configurable margin (gamma) to separate good from bad responses.',
+            cpo: '<strong>CPO:</strong> Reference-free contrastive learning on preference pairs. Similar to DPO but simpler — directly contrasts chosen vs. rejected without needing a frozen copy of the model.',
+            ipo: '<strong>IPO:</strong> A squared-loss variant of DPO that avoids overfitting to noisy preferences. More robust when your chosen/rejected labels may not be perfectly clean.',
+        };
+
+        const updateFields = (mode) => {
+            const isPreference = PREFERENCE_MODES.includes(mode);
+            // Beta: shown for all preference methods
+            if (betaField) betaField.style.display = isPreference ? 'block' : 'none';
+            // Gamma: SimPO only
+            if (gammaField) gammaField.style.display = mode === 'simpo' ? 'block' : 'none';
+            // Label smoothing: DPO and CPO
+            if (labelSmoothingField) labelSmoothingField.style.display = (mode === 'dpo' || mode === 'cpo') ? 'block' : 'none';
+            // Description
+            if (descriptionEl) descriptionEl.innerHTML = MODE_DESCRIPTIONS[mode] || '';
+        };
+
+        trainingMode.addEventListener('change', (e) => updateFields(e.target.value));
+        updateFields(trainingMode.value);
     }
 
     /**

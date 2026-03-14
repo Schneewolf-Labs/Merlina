@@ -38,8 +38,10 @@ class MockTrainingConfig(BaseModel):
     max_length: int = 2048
     max_prompt_length: int = 1024
 
-    # ORPO specific
+    # Preference optimization
     beta: float = 0.1
+    gamma: float = 0.5
+    label_smoothing: float = 0.0
 
     # Optimizer
     optimizer_type: str = "paged_adamw_8bit"
@@ -187,7 +189,7 @@ def test_readme_training_params():
     assert "| Batch Size | 2 |" in readme, "Should have batch size"
     assert "| Gradient Accumulation | 8 |" in readme, "Should have gradient accumulation"
     assert "| Max Sequence Length | 4096 |" in readme, "Should have max length"
-    assert "| ORPO Beta | 0.15 |" in readme, "Should have ORPO beta"
+    assert "| Beta | 0.15 |" in readme, "Should have beta"
 
     print("  ✓ All training parameters present in configuration table")
     print()
@@ -259,7 +261,7 @@ def test_readme_orpo_mode():
     readme = generate_model_readme(config, "orpo")
 
     assert "| Training Mode | ORPO |" in readme, "Should show ORPO training mode"
-    assert "| ORPO Beta | 0.2 |" in readme, "Should have ORPO beta"
+    assert "| Beta | 0.2 |" in readme, "Should have beta"
     assert "| Max Prompt Length | 512 |" in readme, "Should have max prompt length"
 
     print("  ✓ ORPO mode correctly includes ORPO-specific params")
