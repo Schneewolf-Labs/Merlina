@@ -98,7 +98,11 @@ def test_llama3_template_renders():
         {"role": "user", "content": "Hello"},
     ]
 
-    result = template.render(messages=messages, add_generation_prompt=True)
+    # bos_token is a variable the tokenizer provides at render time
+    result = template.render(
+        messages=messages, add_generation_prompt=True,
+        bos_token="<|begin_of_text|>"
+    )
     assert "<|begin_of_text|>" in result
     assert "<|start_header_id|>user<|end_header_id|>" in result
     assert "Hello<|eot_id|>" in result
@@ -118,8 +122,23 @@ def test_mistral_template_renders():
         {"role": "user", "content": "Hello"},
     ]
 
-    result = template.render(messages=messages, add_generation_prompt=False)
+    result = template.render(
+        messages=messages, bos_token="<s>", eos_token="</s>"
+    )
     assert "[INST] Hello [/INST]" in result
+    print("  Basic: OK")
+
+    # Test with system message
+    messages_sys = [
+        {"role": "system", "content": "Be helpful."},
+        {"role": "user", "content": "Hello"},
+    ]
+    result_sys = template.render(
+        messages=messages_sys, bos_token="<s>", eos_token="</s>"
+    )
+    assert "Be helpful." in result_sys
+    assert "[INST] Hello [/INST]" in result_sys
+    print("  With system: OK")
     print("PASSED\n")
 
 

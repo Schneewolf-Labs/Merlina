@@ -399,56 +399,55 @@ class TokenizerFormatter(DatasetFormatter):
 # carries the correct template for inference.
 
 CHAT_TEMPLATES: Dict[str, str] = {
+    # Standard ChatML template — used by Qwen, Yi, and other ChatML models.
+    # Sourced from: https://github.com/chujiezheng/chat_templates/blob/main/chat_templates/chatml.jinja
     "chatml": (
+        "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}"
         "{% for message in messages %}"
-        "{% if message['role'] == 'system' %}"
-        "<|im_start|>system\n{{ message['content'] }}<|im_end|>\n"
-        "{% elif message['role'] == 'user' %}"
-        "<|im_start|>user\n{{ message['content'] }}<|im_end|>\n"
-        "{% elif message['role'] == 'assistant' %}"
-        "<|im_start|>assistant\n{{ message['content'] }}<|im_end|>\n"
-        "{% endif %}"
+        "{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}"
         "{% endfor %}"
         "{% if add_generation_prompt %}"
-        "<|im_start|>assistant\n"
+        "{{ '<|im_start|>assistant\n' }}"
         "{% endif %}"
     ),
+    # Llama 3 Instruct template.
+    # Sourced from: https://github.com/chujiezheng/chat_templates/blob/main/chat_templates/llama-3-instruct.jinja
     "llama3": (
-        "<|begin_of_text|>"
+        "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}"
+        "{{ bos_token }}"
         "{% for message in messages %}"
-        "{% if message['role'] == 'system' %}"
-        "<|start_header_id|>system<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
-        "{% elif message['role'] == 'user' %}"
-        "<|start_header_id|>user<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
-        "{% elif message['role'] == 'assistant' %}"
-        "<|start_header_id|>assistant<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
-        "{% endif %}"
+        "{{'<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n' + message['content'] + '<|eot_id|>'}}"
         "{% endfor %}"
         "{% if add_generation_prompt %}"
-        "<|start_header_id|>assistant<|end_header_id|>\n\n"
+        "{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}"
         "{% endif %}"
     ),
+    # Mistral Instruct template with system message support.
+    # Sourced from: https://github.com/chujiezheng/chat_templates/blob/main/chat_templates/mistral-instruct.jinja
     "mistral": (
+        "{% if messages[0]['role'] == 'system' %}"
+        "{% set system_message = messages[0]['content'] + '\n\n' %}"
+        "{% set messages = messages[1:] %}"
+        "{% else %}"
+        "{% set system_message = '' %}"
+        "{% endif %}"
+        "{{ bos_token + system_message }}"
         "{% for message in messages %}"
         "{% if message['role'] == 'user' %}"
-        "[INST] {{ message['content'] }} [/INST] "
+        "{{ '[INST] ' + message['content'] + ' [/INST]' }}"
         "{% elif message['role'] == 'assistant' %}"
-        "{{ message['content'] }}"
+        "{{ ' ' + message['content'] + eos_token }}"
         "{% endif %}"
         "{% endfor %}"
     ),
+    # Qwen3 template — ChatML-based, same structure as chatml.
     "qwen3": (
+        "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}"
         "{% for message in messages %}"
-        "{% if message['role'] == 'system' %}"
-        "<|im_start|>system\n{{ message['content'] }}<|im_end|>\n"
-        "{% elif message['role'] == 'user' %}"
-        "<|im_start|>user\n{{ message['content'] }}<|im_end|>\n"
-        "{% elif message['role'] == 'assistant' %}"
-        "<|im_start|>assistant\n{{ message['content'] }}<|im_end|>\n"
-        "{% endif %}"
+        "{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}"
         "{% endfor %}"
         "{% if add_generation_prompt %}"
-        "<|im_start|>assistant\n"
+        "{{ '<|im_start|>assistant\n' }}"
         "{% endif %}"
     ),
 }
