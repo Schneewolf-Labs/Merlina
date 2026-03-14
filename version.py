@@ -16,7 +16,7 @@ VERSION_MINOR = __version_info__[1]
 VERSION_PATCH = __version_info__[2]
 
 # Release information
-RELEASE_NAME = "Magical Memories"  # Codename for this release
+RELEASE_NAME = "Seven Spells"  # Codename for this release
 RELEASE_DATE = "2026-03-14"  # Release date of current version
 
 def get_version() -> str:
