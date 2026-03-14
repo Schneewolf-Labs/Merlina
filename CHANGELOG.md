@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-03-14 "Seven Spells"
+
+### Added
+- **Messages Format Support**: Automatic detection and conversion of the common "messages" chat dataset format
+  - Multi-turn conversation support (user/assistant turns combined with double newlines)
+  - System message extraction into dedicated `system` field
+  - Toggleable via UI checkbox or `convert_messages_format` API parameter (enabled by default)
+  - New module: `dataset_handlers/messages_converter.py`
+- **DPO Mode** (Direct Preference Optimization): Log-ratio preference learning with `beta` and `label_smoothing` parameters
+- **SimPO Mode** (Simple Preference Optimization): Reference-free DPO variant with length-normalized rewards and configurable `gamma` margin
+- **CPO Mode** (Contrastive Preference Optimization): Reference-free contrastive learning with `label_smoothing` support
+- **IPO Mode** (Identity Preference Optimization): Squared-loss DPO variant, more robust to noisy preferences
+- **KTO Mode** (Kahneman-Tversky Optimization): Binary feedback optimization using prospect theory; works with unpaired data and optional rejected responses
+- Dynamic hyperparameter UI: `gamma` field appears for SimPO, `label_smoothing` for DPO/CPO
+- Messages format detection banner in dataset preview UI
+- Example scripts for messages format usage
+- Test coverage for messages format conversion and toggle behavior
+
+### Changed
+- Training mode selector expanded from 2 modes to 7 (ORPO, SFT, DPO, SimPO, CPO, IPO, KTO)
+- `TrainingConfig` now accepts `beta`, `label_smoothing`, and `gamma` hyperparameters
+- Dataset preview endpoints enhanced with messages format detection and conversion
+- Frontend dynamically adapts parameter fields based on selected training mode
+
+
+
 ### Planned
 - Semantic versioning system
 - Version tracking and changelog management
