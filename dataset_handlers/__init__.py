@@ -12,7 +12,9 @@ from .formatters import (
     Qwen3Formatter,
     CustomFormatter,
     TokenizerFormatter,
-    get_formatter
+    get_formatter,
+    get_chat_template_for_format,
+    CHAT_TEMPLATES,
 )
 from .validators import validate_dataset_schema, DatasetValidationError
 from .factory import (
@@ -36,6 +38,8 @@ __all__ = [
     'CustomFormatter',
     'TokenizerFormatter',
     'get_formatter',
+    'get_chat_template_for_format',
+    'CHAT_TEMPLATES',
     'validate_dataset_schema',
     'DatasetValidationError',
     'create_loader',
