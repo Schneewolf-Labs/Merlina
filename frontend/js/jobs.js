@@ -268,9 +268,10 @@ class JobManager {
         // Update metrics
         MetricsDisplay.update(status);
 
-        // Update W&B link - show whenever wandb_url is available in status
+        // Update W&B link - only change visibility when wandb_url is explicitly present
+        // WebSocket updates don't include wandb_url, so skip hiding on those
         const wandbLink = document.getElementById('wandb-link');
-        if (wandbLink) {
+        if (wandbLink && 'wandb_url' in status) {
             if (status.wandb_url) {
                 wandbLink.style.display = 'block';
                 wandbLink.href = status.wandb_url;
