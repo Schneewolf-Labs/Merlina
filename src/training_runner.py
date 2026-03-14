@@ -4,7 +4,7 @@ Enhanced Training Runner with WebSocket updates and better error handling.
 This module provides the core training functionality for Merlina, including:
 - Model loading with quantization support
 - Dataset preparation and formatting
-- Multiple training modes: SFT, ORPO, DPO, SimPO, CPO, IPO
+- Multiple training modes: SFT, ORPO, DPO, SimPO, CPO, IPO, KTO
 - WebSocket progress updates
 - Background HuggingFace Hub uploads
 - Weights & Biases integration
@@ -27,8 +27,8 @@ from transformers import (
 )
 from peft import LoraConfig, PeftModel, AutoPeftModelForCausalLM
 from grimoire import GrimoireTrainer, TrainingConfig, TrainerCallback
-from grimoire.losses import SFTLoss, ORPOLoss, DPOLoss, SimPOLoss, CPOLoss, IPOLoss
-from grimoire.data import tokenize_sft, tokenize_preference
+from grimoire.losses import SFTLoss, ORPOLoss, DPOLoss, SimPOLoss, CPOLoss, IPOLoss, KTOLoss
+from grimoire.data import tokenize_sft, tokenize_preference, tokenize_kto
 
 from huggingface_hub import HfApi
 from src.model_card import generate_model_readme, upload_model_readme, generate_wandb_run_name
@@ -398,7 +398,7 @@ def run_training_sync(
     """
     Run training job with enhanced monitoring and WebSocket updates.
 
-    Supports multiple training modes (SFT, ORPO, DPO, SimPO, CPO, IPO)
+    Supports multiple training modes (SFT, ORPO, DPO, SimPO, CPO, IPO, KTO)
     with optional LoRA adapters.
 
     Args:
@@ -655,6 +655,67 @@ def run_training_sync(
                 ),
                 remove_columns=eval_dataset.column_names,
             )
+        elif training_mode == "kto":
+            logger.info("Configuring KTO (Kahneman-Tversky Optimization)")
+            loss_fn = KTOLoss(beta=config.beta)
+
+            # KTO uses unpaired binary feedback: each example has a response + label (True/False)
+            # Split chosen/rejected pairs into separate examples with binary labels
+            from datasets import Dataset as HFDataset, concatenate_datasets
+
+            def _split_to_kto(dataset):
+                """Split paired chosen/rejected into unpaired KTO examples."""
+                positive_rows = []
+                negative_rows = []
+
+                for row in dataset:
+                    prompt = row["prompt"]
+                    # Chosen → positive example
+                    positive_rows.append({
+                        "prompt": prompt,
+                        "response": row["chosen"],
+                        "label": True,
+                    })
+                    # Rejected → negative example (if present and non-empty)
+                    rejected = row.get("rejected", "")
+                    if rejected and str(rejected).strip():
+                        negative_rows.append({
+                            "prompt": prompt,
+                            "response": rejected,
+                            "label": False,
+                        })
+
+                parts = [HFDataset.from_list(positive_rows)]
+                if negative_rows:
+                    parts.append(HFDataset.from_list(negative_rows))
+                    logger.info(f"KTO split: {len(positive_rows)} positive + {len(negative_rows)} negative examples")
+                else:
+                    logger.info(f"KTO: {len(positive_rows)} positive examples (no rejected responses)")
+
+                return concatenate_datasets(parts).shuffle(seed=config.seed)
+
+            train_dataset = _split_to_kto(train_dataset)
+            eval_dataset = _split_to_kto(eval_dataset)
+
+            # Tokenize: prompt+response with binary label
+            train_dataset = train_dataset.map(
+                lambda x: tokenize_kto(
+                    x, tokenizer, max_length=config.max_length,
+                    max_prompt_length=config.max_prompt_length,
+                    prompt_field="prompt", response_field="response",
+                    label_field="label",
+                ),
+                remove_columns=train_dataset.column_names,
+            )
+            eval_dataset = eval_dataset.map(
+                lambda x: tokenize_kto(
+                    x, tokenizer, max_length=config.max_length,
+                    max_prompt_length=config.max_prompt_length,
+                    prompt_field="prompt", response_field="response",
+                    label_field="label",
+                ),
+                remove_columns=eval_dataset.column_names,
+            )
         elif training_mode in PREFERENCE_MODES:
             # Create appropriate loss function for each preference method
             if training_mode == "orpo":
@@ -689,7 +750,7 @@ def run_training_sync(
                 remove_columns=eval_dataset.column_names,
             )
         else:
-            raise ValueError(f"Unknown training mode: {training_mode}. Supported: sft, orpo, dpo, simpo, cpo, ipo")
+            raise ValueError(f"Unknown training mode: {training_mode}. Supported: sft, orpo, dpo, simpo, cpo, ipo, kto")
 
         # Determine mixed precision setting
         if torch_dtype == torch.bfloat16:
@@ -723,7 +784,7 @@ def run_training_sync(
             gradient_checkpointing=config.gradient_checkpointing,
             optimizer=config.optimizer_type,
             lr_scheduler=config.lr_scheduler_type,
-            disable_dropout=(training_mode in PREFERENCE_MODES),
+            disable_dropout=(training_mode in PREFERENCE_MODES or training_mode == "kto"),
             logging_steps=config.logging_steps,
             eval_steps=eval_steps,
             save_steps=eval_steps,
