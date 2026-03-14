@@ -207,7 +207,7 @@ class Validator {
     /**
      * Validate dataset configuration
      * @param {Object} config - Dataset configuration
-     * @param {string} trainingMode - Training mode ('sft' or 'orpo')
+     * @param {string} trainingMode - Training mode ('sft', 'orpo', 'grpo', etc.)
      */
     static validateDatasetConfig(config, trainingMode = 'orpo') {
         const errors = [];
@@ -234,8 +234,9 @@ class Validator {
             const hasRejected = Object.values(config.column_mapping).includes('rejected');
 
             if (!hasPrompt) errors.push('Prompt column must be mapped');
-            if (!hasChosen) errors.push('Chosen column must be mapped');
-            // Rejected is required for paired preference modes (not SFT or KTO)
+            // GRPO only needs prompts (completions generated during training)
+            if (!hasChosen && trainingMode !== 'grpo') errors.push('Chosen column must be mapped');
+            // Rejected is required for paired preference modes (not SFT, KTO, or GRPO)
             const PAIRED_PREFERENCE_MODES = ['orpo', 'dpo', 'simpo', 'cpo', 'ipo'];
             if (!hasRejected && PAIRED_PREFERENCE_MODES.includes(trainingMode)) {
                 errors.push('Rejected column must be mapped (required for preference optimization)');

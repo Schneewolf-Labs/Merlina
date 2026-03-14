@@ -511,6 +511,7 @@
                                 <option value="kto">KTO - Kahneman-Tversky Optimization</option>
                                 <option value="cpo">CPO - Contrastive Preference Optimization</option>
                                 <option value="ipo">IPO - Identity Preference Optimization</option>
+                                <option value="grpo">GRPO - Group Relative Policy Optimization</option>
                             </select>
                             <small id="training-mode-description" style="color: #888; font-size: 0.85em; display: block; margin-top: 8px;"></small>
                         </div>
@@ -556,6 +557,42 @@
                                 <label>Label Smoothing</label>
                                 <input type="number" id="label-smoothing" value="0.0" min="0" max="0.5" step="0.01" class="magic-input">
                                 <small style="color: #888; font-size: 0.85em;">Smoothing coefficient for preference loss</small>
+                            </div>
+                        </div>
+                        <!-- GRPO-specific parameters -->
+                        <div id="grpo-fields" style="display: none;">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Generations per Prompt</label>
+                                    <input type="number" id="grpo-num-generations" value="4" min="2" max="16" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">Number of completions generated per prompt (G)</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>Clip Ratio (Epsilon)</label>
+                                    <input type="number" id="grpo-epsilon" value="0.2" min="0.01" max="1.0" step="0.01" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">REINFORCE clip ratio (like PPO)</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>Max New Tokens</label>
+                                    <input type="number" id="grpo-max-new-tokens" value="512" min="64" max="4096" step="64" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">Max tokens per generated completion</small>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Generation Temperature</label>
+                                    <input type="number" id="grpo-temperature" value="1.0" min="0.1" max="2.0" step="0.1" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">Sampling temperature for completions</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>Reward Function</label>
+                                    <select id="grpo-reward-type" class="magic-select">
+                                        <option value="length">Length - Longer completions score higher</option>
+                                        <option value="format">Format - Rewards structured output</option>
+                                        <option value="combined" selected>Combined - Length + structure</option>
+                                    </select>
+                                    <small style="color: #888; font-size: 0.85em;">Built-in reward function for scoring completions</small>
+                                </div>
                             </div>
                         </div>
                         <div class="form-row">

@@ -4,7 +4,7 @@ Enhanced Training Runner with WebSocket updates and better error handling.
 This module provides the core training functionality for Merlina, including:
 - Model loading with quantization support
 - Dataset preparation and formatting
-- Multiple training modes: SFT, ORPO, DPO, SimPO, CPO, IPO, KTO
+- Multiple training modes: SFT, ORPO, DPO, SimPO, CPO, IPO, KTO, GRPO
 - WebSocket progress updates
 - Background HuggingFace Hub uploads
 - Weights & Biases integration
@@ -27,8 +27,8 @@ from transformers import (
 )
 from peft import LoraConfig, PeftModel, AutoPeftModelForCausalLM
 from grimoire import GrimoireTrainer, TrainingConfig, TrainerCallback
-from grimoire.losses import SFTLoss, ORPOLoss, DPOLoss, SimPOLoss, CPOLoss, IPOLoss, KTOLoss
-from grimoire.data import tokenize_sft, tokenize_preference, tokenize_kto
+from grimoire.losses import SFTLoss, ORPOLoss, DPOLoss, SimPOLoss, CPOLoss, IPOLoss, KTOLoss, GRPOLoss
+from grimoire.data import tokenize_sft, tokenize_preference, tokenize_kto, tokenize_grpo
 
 from huggingface_hub import HfApi
 from src.model_card import generate_model_readme, upload_model_readme, generate_wandb_run_name
@@ -399,7 +399,7 @@ def run_training_sync(
     """
     Run training job with enhanced monitoring and WebSocket updates.
 
-    Supports multiple training modes (SFT, ORPO, DPO, SimPO, CPO, IPO, KTO)
+    Supports multiple training modes (SFT, ORPO, DPO, SimPO, CPO, IPO, KTO, GRPO)
     with optional LoRA adapters.
 
     Args:
@@ -750,8 +750,75 @@ def run_training_sync(
                 ),
                 remove_columns=eval_dataset.column_names,
             )
+        elif training_mode == "grpo":
+            logger.info("Configuring GRPO (Group Relative Policy Optimization)")
+
+            # Build reward function based on reward_type config
+            reward_type = getattr(config, 'grpo_reward_type', 'length')
+
+            if reward_type == "length":
+                def reward_fn(prompts, completions):
+                    """Simple length-based reward: longer completions score higher (normalized)."""
+                    lengths = [len(c) for c in completions]
+                    max_len = max(lengths) if lengths else 1
+                    return [l / max_len for l in lengths]
+            elif reward_type == "format":
+                def reward_fn(prompts, completions):
+                    """Format-based reward: checks for structured output markers."""
+                    rewards = []
+                    for c in completions:
+                        score = 0.0
+                        # Reward structured formatting
+                        if any(marker in c for marker in ['\n', '- ', '* ', '1.', '```']):
+                            score += 0.5
+                        # Reward non-empty completions
+                        if len(c.strip()) > 10:
+                            score += 0.5
+                        rewards.append(score)
+                    return rewards
+            else:
+                # Default: combined length + coherence reward
+                def reward_fn(prompts, completions):
+                    """Combined reward: length (normalized) + non-empty bonus."""
+                    rewards = []
+                    lengths = [len(c) for c in completions]
+                    max_len = max(lengths) if lengths else 1
+                    for c in completions:
+                        score = len(c) / max_len * 0.7  # Length component
+                        if len(c.strip()) > 10:
+                            score += 0.3  # Non-empty bonus
+                        rewards.append(score)
+                    return rewards
+
+            logger.info(f"Using reward function: {reward_type}")
+
+            loss_fn = GRPOLoss(
+                reward_fn=reward_fn,
+                tokenizer=tokenizer,
+                num_generations=getattr(config, 'grpo_num_generations', 4),
+                beta=config.beta,
+                epsilon=getattr(config, 'grpo_epsilon', 0.2),
+                max_new_tokens=getattr(config, 'grpo_max_new_tokens', 512),
+                temperature=getattr(config, 'grpo_temperature', 1.0),
+            )
+
+            # GRPO only needs prompts — completions are generated during training
+            train_dataset = train_dataset.map(
+                lambda x: tokenize_grpo(
+                    x, tokenizer, max_prompt_length=config.max_prompt_length,
+                    prompt_field="prompt",
+                ),
+                remove_columns=train_dataset.column_names,
+            )
+            eval_dataset = eval_dataset.map(
+                lambda x: tokenize_grpo(
+                    x, tokenizer, max_prompt_length=config.max_prompt_length,
+                    prompt_field="prompt",
+                ),
+                remove_columns=eval_dataset.column_names,
+            )
         else:
-            raise ValueError(f"Unknown training mode: {training_mode}. Supported: sft, orpo, dpo, simpo, cpo, ipo, kto")
+            raise ValueError(f"Unknown training mode: {training_mode}. Supported: sft, orpo, dpo, simpo, cpo, ipo, kto, grpo")
 
         # Determine mixed precision setting
         if torch_dtype == torch.bfloat16:
@@ -785,7 +852,7 @@ def run_training_sync(
             gradient_checkpointing=config.gradient_checkpointing,
             optimizer=config.optimizer_type,
             lr_scheduler=config.lr_scheduler_type,
-            disable_dropout=(training_mode in PREFERENCE_MODES or training_mode == "kto"),
+            disable_dropout=(training_mode in PREFERENCE_MODES or training_mode in ("kto", "grpo")),
             logging_steps=config.logging_steps,
             eval_steps=eval_steps,
             save_steps=eval_steps,

@@ -4,7 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Merlina is a magical LLM training system with support for ORPO, DPO, SimPO, CPO, IPO, KTO, and SFT training modes. It provides a delightful wizard-themed web interface for fine-tuning language models with LoRA adapters. The system supports flexible dataset loading from multiple sources and automatic chat template formatting.
+Merlina is a magical LLM training system with support for ORPO, DPO, SimPO, CPO, IPO, KTO, SFT, and GRPO training modes. It provides a delightful wizard-themed web interface for fine-tuning language models with LoRA adapters. The system supports flexible dataset loading from multiple sources and automatic chat template formatting.
+
+**New in v1.4:**
+- **GRPO Mode**: Group Relative Policy Optimization — online RL training that generates completions during training and learns from group-relative advantages. Only needs prompts, no paired data required.
 
 **New in v1.3:**
 - **Messages Format Support**: Automatic detection and conversion of common chat dataset format with multi-turn conversation support
@@ -358,10 +361,20 @@ Merlina supports multiple training modes, selectable via the `training_mode` con
 - Best for: General instruction following, adapting to new tasks, style transfer
 - Parameters: Does not use `beta` parameter
 
+**8. GRPO (Group Relative Policy Optimization)** - New in v1.4
+- Requires: `prompt` field only (completions are generated during training)
+- Online RL method: generates G completions per prompt, scores with reward function, optimizes with clipped REINFORCE
+- No paired data needed — just prompts!
+- Best for: RL-based alignment, reward-driven optimization, teaching models to follow specific output formats
+- Parameters: `beta` (KL penalty), `grpo_num_generations`, `grpo_epsilon`, `grpo_max_new_tokens`, `grpo_temperature`, `grpo_reward_type`
+- Built-in reward functions: `length` (longer = better), `format` (structured output), `combined` (both)
+- Note: Requires ZeRO-2 or lower (not ZeRO-3) because `model.generate()` needs full weight access
+
 **Choosing a Mode**:
 - Use **ORPO/DPO/SimPO/CPO/IPO** when you have paired chosen/rejected responses and want preference optimization
 - Use **KTO** when you have binary feedback (thumbs up/down) or want to use preference data without strict pairing
 - Use **SFT** when you only have good examples or want traditional fine-tuning
+- Use **GRPO** when you want RL-based training with only prompts — the model generates and learns from its own completions
 
 ### Training Flow
 

@@ -152,6 +152,15 @@ class ConfigManager {
             }
         };
 
+        // GRPO-specific fields
+        if (trainingMode === 'grpo') {
+            config.grpo_num_generations = parseInt(document.getElementById('grpo-num-generations')?.value || 4);
+            config.grpo_epsilon = parseFloat(document.getElementById('grpo-epsilon')?.value || 0.2);
+            config.grpo_max_new_tokens = parseInt(document.getElementById('grpo-max-new-tokens')?.value || 512);
+            config.grpo_temperature = parseFloat(document.getElementById('grpo-temperature')?.value || 1.0);
+            config.grpo_reward_type = document.getElementById('grpo-reward-type')?.value || 'combined';
+        }
+
         // Optional fields
         const hfToken = document.getElementById('hf-token')?.value || document.getElementById('hf-token-preload')?.value;
         if (hfToken) {
@@ -371,6 +380,14 @@ class ConfigManager {
         this.setInputValue('beta', config.beta || 0.1);
         this.setInputValue('gamma', config.gamma || 0.5);
         this.setInputValue('label-smoothing', config.label_smoothing || 0.0);
+
+        // GRPO-specific settings
+        if (config.grpo_num_generations != null) this.setInputValue('grpo-num-generations', config.grpo_num_generations);
+        if (config.grpo_epsilon != null) this.setInputValue('grpo-epsilon', config.grpo_epsilon);
+        if (config.grpo_max_new_tokens != null) this.setInputValue('grpo-max-new-tokens', config.grpo_max_new_tokens);
+        if (config.grpo_temperature != null) this.setInputValue('grpo-temperature', config.grpo_temperature);
+        if (config.grpo_reward_type) this.setInputValue('grpo-reward-type', config.grpo_reward_type);
+
         this.setInputValue('seed', config.seed || 42);
         this.setInputValue('max-grad-norm', config.max_grad_norm || 0.3);
         this.setInputValue('weight-decay', config.weight_decay || 0.01);
