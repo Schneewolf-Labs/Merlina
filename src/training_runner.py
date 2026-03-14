@@ -39,6 +39,7 @@ from dataset_handlers import (
     LocalFileLoader,
     UploadedDatasetLoader,
     get_formatter,
+    get_chat_template_for_format,
     create_loader_from_config
 )
 from src.job_manager import JobManager
@@ -772,6 +773,23 @@ def run_training_sync(
             ),
             event_loop
         )
+
+        # If the model doesn't have a chat template and we used a known format,
+        # embed that format's chat template into the tokenizer so the saved/uploaded
+        # model carries it for inference.
+        format_type = config.dataset.format.format_type
+        has_existing_template = (
+            hasattr(tokenizer, 'chat_template')
+            and tokenizer.chat_template is not None
+        )
+        if not has_existing_template and format_type != 'tokenizer':
+            chat_template = get_chat_template_for_format(format_type)
+            if chat_template:
+                tokenizer.chat_template = chat_template
+                logger.info(
+                    f"Applied '{format_type}' chat template to tokenizer "
+                    f"(base model had no chat template)"
+                )
 
         final_output_dir = f"./models/{config.output_name}"
         trainer.save_model(final_output_dir)

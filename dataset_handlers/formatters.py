@@ -3,7 +3,7 @@ Dataset formatter implementations for different chat template formats
 """
 
 import logging
-from typing import Optional, Any
+from typing import Dict, Optional, Any
 from .base import DatasetFormatter
 
 logger = logging.getLogger(__name__)
@@ -391,6 +391,84 @@ class TokenizerFormatter(DatasetFormatter):
             "has_chat_template": self.has_chat_template,
             "tokenizer_name": getattr(self.tokenizer, 'name_or_path', 'unknown')
         }
+
+
+# Jinja2 chat templates for each format type.
+# These match the formatting logic in each formatter class and can be
+# written into a tokenizer's chat_template field so that the saved model
+# carries the correct template for inference.
+
+CHAT_TEMPLATES: Dict[str, str] = {
+    "chatml": (
+        "{% for message in messages %}"
+        "{% if message['role'] == 'system' %}"
+        "<|im_start|>system\n{{ message['content'] }}<|im_end|>\n"
+        "{% elif message['role'] == 'user' %}"
+        "<|im_start|>user\n{{ message['content'] }}<|im_end|>\n"
+        "{% elif message['role'] == 'assistant' %}"
+        "<|im_start|>assistant\n{{ message['content'] }}<|im_end|>\n"
+        "{% endif %}"
+        "{% endfor %}"
+        "{% if add_generation_prompt %}"
+        "<|im_start|>assistant\n"
+        "{% endif %}"
+    ),
+    "llama3": (
+        "<|begin_of_text|>"
+        "{% for message in messages %}"
+        "{% if message['role'] == 'system' %}"
+        "<|start_header_id|>system<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
+        "{% elif message['role'] == 'user' %}"
+        "<|start_header_id|>user<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
+        "{% elif message['role'] == 'assistant' %}"
+        "<|start_header_id|>assistant<|end_header_id|>\n\n{{ message['content'] }}<|eot_id|>"
+        "{% endif %}"
+        "{% endfor %}"
+        "{% if add_generation_prompt %}"
+        "<|start_header_id|>assistant<|end_header_id|>\n\n"
+        "{% endif %}"
+    ),
+    "mistral": (
+        "{% for message in messages %}"
+        "{% if message['role'] == 'user' %}"
+        "[INST] {{ message['content'] }} [/INST] "
+        "{% elif message['role'] == 'assistant' %}"
+        "{{ message['content'] }}"
+        "{% endif %}"
+        "{% endfor %}"
+    ),
+    "qwen3": (
+        "{% for message in messages %}"
+        "{% if message['role'] == 'system' %}"
+        "<|im_start|>system\n{{ message['content'] }}<|im_end|>\n"
+        "{% elif message['role'] == 'user' %}"
+        "<|im_start|>user\n{{ message['content'] }}<|im_end|>\n"
+        "{% elif message['role'] == 'assistant' %}"
+        "<|im_start|>assistant\n{{ message['content'] }}<|im_end|>\n"
+        "{% endif %}"
+        "{% endfor %}"
+        "{% if add_generation_prompt %}"
+        "<|im_start|>assistant\n"
+        "{% endif %}"
+    ),
+}
+
+
+def get_chat_template_for_format(format_type: str) -> Optional[str]:
+    """
+    Get the Jinja2 chat template string for a given format type.
+
+    This is used to embed the chat template into the tokenizer config
+    when saving/uploading a model that was trained with a specific format
+    but whose base model didn't have a chat template.
+
+    Args:
+        format_type: One of 'chatml', 'llama3', 'mistral', 'qwen3'
+
+    Returns:
+        Jinja2 chat template string, or None if format has no standard template
+    """
+    return CHAT_TEMPLATES.get(format_type.lower())
 
 
 def get_formatter(
