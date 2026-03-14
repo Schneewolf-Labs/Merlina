@@ -268,9 +268,9 @@ class JobManager {
         // Update metrics
         MetricsDisplay.update(status);
 
-        // Update W&B link
+        // Update W&B link - show whenever wandb_url is available in status
         const wandbLink = document.getElementById('wandb-link');
-        if (wandbLink && this.activeJobs[this.currentJobId]?.config?.use_wandb) {
+        if (wandbLink) {
             if (status.wandb_url) {
                 wandbLink.style.display = 'block';
                 wandbLink.href = status.wandb_url;
