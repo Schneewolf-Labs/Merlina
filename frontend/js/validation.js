@@ -235,9 +235,9 @@ class Validator {
 
             if (!hasPrompt) errors.push('Prompt column must be mapped');
             if (!hasChosen) errors.push('Chosen column must be mapped');
-            // Rejected is required for all preference modes (not SFT)
-            const PREFERENCE_MODES = ['orpo', 'dpo', 'simpo', 'cpo', 'ipo'];
-            if (!hasRejected && PREFERENCE_MODES.includes(trainingMode)) {
+            // Rejected is required for paired preference modes (not SFT or KTO)
+            const PAIRED_PREFERENCE_MODES = ['orpo', 'dpo', 'simpo', 'cpo', 'ipo'];
+            if (!hasRejected && PAIRED_PREFERENCE_MODES.includes(trainingMode)) {
                 errors.push('Rejected column must be mapped (required for preference optimization)');
             }
         }

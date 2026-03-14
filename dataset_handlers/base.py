@@ -208,8 +208,8 @@ class DatasetPipeline:
 
     def _validate_schema(self, dataset: Dataset):
         """Validate that dataset has required columns based on training mode"""
-        # For SFT mode, rejected is not required
-        if self.training_mode == 'sft':
+        # For SFT and KTO modes, rejected is not required
+        if self.training_mode in ('sft', 'kto'):
             required_columns = {'prompt', 'chosen'}
         else:
             required_columns = {'prompt', 'chosen', 'rejected'}

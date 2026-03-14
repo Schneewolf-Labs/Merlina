@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Merlina is a magical LLM training system with support for both ORPO (Odds Ratio Preference Optimization) and SFT (Supervised Fine-Tuning). It provides a delightful wizard-themed web interface for fine-tuning language models with LoRA adapters. The system supports flexible dataset loading from multiple sources and automatic chat template formatting.
+Merlina is a magical LLM training system with support for ORPO, DPO, SimPO, CPO, IPO, KTO, and SFT training modes. It provides a delightful wizard-themed web interface for fine-tuning language models with LoRA adapters. The system supports flexible dataset loading from multiple sources and automatic chat template formatting.
 
 **New in v1.3:**
 - **Messages Format Support**: Automatic detection and conversion of common chat dataset format with multi-turn conversation support
@@ -317,26 +317,50 @@ Jobs are managed through a priority queue system with configurable concurrency:
 
 ### Training Modes
 
-Merlina supports two training modes, selectable via the `training_mode` configuration parameter:
+Merlina supports multiple training modes, selectable via the `training_mode` configuration parameter:
 
 **1. ORPO (Odds Ratio Preference Optimization)** - Default
 - Requires: `prompt`, `chosen`, and `rejected` fields
-- Trains the model to prefer "chosen" responses over "rejected" responses
-- Uses preference optimization loss to push chosen responses up and rejected responses down
-- Best for: Alignment, RLHF-style training, improving response quality
-- Trainer: `ORPOTrainer` from TRL library
-- Parameters: Includes `beta` parameter to control preference strength
+- Combines supervised learning with odds-ratio preference optimization in a single pass — no reference model needed
+- Parameters: `beta`
 
-**2. SFT (Supervised Fine-Tuning)**
+**2. DPO (Direct Preference Optimization)**
+- Requires: `prompt`, `chosen`, and `rejected` fields
+- Directly optimizes the policy to prefer chosen over rejected responses using log-ratio trick
+- Parameters: `beta`, `label_smoothing`
+
+**3. SimPO (Simple Preference Optimization)**
+- Requires: `prompt`, `chosen`, and `rejected` fields
+- Reference-free DPO variant with length-normalized rewards and configurable margin
+- Parameters: `beta`, `gamma`
+
+**4. CPO (Contrastive Preference Optimization)**
+- Requires: `prompt`, `chosen`, and `rejected` fields
+- Reference-free contrastive learning on preference pairs
+- Parameters: `beta`, `label_smoothing`
+
+**5. IPO (Identity Preference Optimization)**
+- Requires: `prompt`, `chosen`, and `rejected` fields
+- Squared-loss variant of DPO, more robust to noisy preferences
+- Parameters: `beta`
+
+**6. KTO (Kahneman-Tversky Optimization)**
+- Requires: `prompt` and `chosen` fields. `rejected` is optional.
+- Uses prospect theory with unpaired binary feedback (good/bad)
+- Automatically splits chosen/rejected pairs into separate positive/negative examples
+- Works with SFT-style datasets (all positive) or preference datasets (split into positive/negative)
+- Best for: When you have binary feedback signals or want to use preference data without strict pairing
+- Parameters: `beta`
+
+**7. SFT (Supervised Fine-Tuning)**
 - Requires: `prompt` and `chosen` fields only (rejected field ignored)
 - Traditional supervised learning on chosen responses
-- Trains the model to predict the chosen response given the prompt
 - Best for: General instruction following, adapting to new tasks, style transfer
-- Trainer: `SFTTrainer` from TRL library
 - Parameters: Does not use `beta` parameter
 
 **Choosing a Mode**:
-- Use **ORPO** when you have paired chosen/rejected responses and want to optimize for preference
+- Use **ORPO/DPO/SimPO/CPO/IPO** when you have paired chosen/rejected responses and want preference optimization
+- Use **KTO** when you have binary feedback (thumbs up/down) or want to use preference data without strict pairing
 - Use **SFT** when you only have good examples or want traditional fine-tuning
 
 ### Training Flow
@@ -350,8 +374,9 @@ Merlina supports two training modes, selectable via the `training_mode` configur
    - Call `pipeline.prepare()` to get formatted train/eval datasets
    - Setup LoRA config (if enabled)
    - Choose trainer based on `training_mode`:
-     - **ORPO Mode**: Setup ORPOTrainer and train with preference optimization (uses chosen vs rejected)
-     - **SFT Mode**: Setup SFTTrainer and train with supervised fine-tuning (uses only chosen)
+     - **Preference Modes (ORPO/DPO/SimPO/CPO/IPO)**: Tokenize chosen/rejected pairs, train with preference loss
+     - **KTO Mode**: Split chosen/rejected into unpaired examples with binary labels, train with KTO loss
+     - **SFT Mode**: Train with supervised fine-tuning (uses only chosen)
    - Save to ./models/{output_name}
    - Optionally merge and push to HuggingFace Hub
 4. Frontend polls GET /status/{job_id} for progress updates

@@ -27,7 +27,7 @@ def validate_dataset_schema(
         dataset: Dataset to validate
         required_columns: Set of column names that must be present
         optional_columns: Set of column names that may be present
-        training_mode: Training mode ('sft' or 'orpo'). For SFT, rejected is optional.
+        training_mode: Training mode ('sft', 'kto', or preference modes). For SFT/KTO, rejected is optional.
 
     Returns:
         True if validation passes
@@ -36,8 +36,8 @@ def validate_dataset_schema(
         DatasetValidationError: If validation fails
     """
     if required_columns is None:
-        # For SFT mode, 'rejected' field is optional
-        if training_mode == 'sft':
+        # For SFT and KTO modes, 'rejected' field is optional
+        if training_mode in ('sft', 'kto'):
             required_columns = {'prompt', 'chosen'}
         else:
             required_columns = {'prompt', 'chosen', 'rejected'}
@@ -74,7 +74,7 @@ def validate_dataset_samples(
         max_prompt_length: Optional maximum prompt length
         max_chosen_length: Optional maximum chosen response length
         max_rejected_length: Optional maximum rejected response length
-        training_mode: Training mode ('sft' or 'orpo'). For SFT, rejected validation is skipped.
+        training_mode: Training mode. For SFT/KTO, rejected validation is skipped.
 
     Returns:
         Dictionary with validation statistics

@@ -215,7 +215,7 @@ class DatasetConfig(BaseModel):
     max_samples: Optional[int] = Field(None, description="Limit dataset size (for testing)")
 
     # Training mode (affects schema validation)
-    training_mode: str = Field("orpo", description="Training mode: 'sft' or 'orpo'. For SFT, rejected column is optional.")
+    training_mode: str = Field("orpo", description="Training mode: 'sft', 'orpo', 'dpo', 'simpo', 'cpo', 'ipo', or 'kto'. For SFT/KTO, rejected column is optional.")
 
 
 # Pydantic models
@@ -251,11 +251,11 @@ class TrainingConfig(BaseModel):
     # Training mode
     training_mode: str = Field(
         "orpo",
-        description="Training mode: 'sft', 'orpo', 'dpo', 'simpo', 'cpo', or 'ipo'"
+        description="Training mode: 'sft', 'orpo', 'dpo', 'simpo', 'cpo', 'ipo', or 'kto'"
     )
 
     # Preference optimization parameters
-    beta: float = Field(0.1, ge=0.01, le=10.0, description="Beta parameter for preference optimization (ORPO, DPO, SimPO, CPO, IPO)")
+    beta: float = Field(0.1, ge=0.01, le=10.0, description="Beta parameter for preference optimization (ORPO, DPO, SimPO, CPO, IPO, KTO)")
     label_smoothing: float = Field(0.0, ge=0.0, le=0.5, description="Label smoothing for DPO/CPO loss")
     gamma: float = Field(0.5, ge=0.0, le=5.0, description="SimPO reward margin between chosen and rejected")
 

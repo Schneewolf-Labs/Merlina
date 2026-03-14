@@ -593,7 +593,7 @@ class MerlinaApp {
 
         if (!trainingMode) return;
 
-        const PREFERENCE_MODES = ['orpo', 'dpo', 'simpo', 'cpo', 'ipo'];
+        const PREFERENCE_MODES = ['orpo', 'dpo', 'simpo', 'cpo', 'ipo', 'kto'];
 
         const MODE_DESCRIPTIONS = {
             sft: '<strong>SFT:</strong> Learn from good examples. Uses only the "chosen" response for each prompt — great for teaching your model a new style or task. No rejected responses needed.',
@@ -601,6 +601,7 @@ class MerlinaApp {
             dpo: '<strong>DPO:</strong> The most popular preference method. Directly optimizes the policy to prefer chosen over rejected responses using a clever log-ratio trick. Stable and well-studied.',
             simpo: '<strong>SimPO:</strong> A streamlined DPO variant that skips the reference model entirely. Uses length-normalized rewards and a configurable margin (gamma) to separate good from bad responses.',
             cpo: '<strong>CPO:</strong> Reference-free contrastive learning on preference pairs. Similar to DPO but simpler — directly contrasts chosen vs. rejected without needing a frozen copy of the model.',
+            kto: '<strong>KTO:</strong> Uses prospect theory to align models with binary feedback (good/bad) instead of paired preferences. Works with unpaired data — if you have rejected responses they\'re split into separate negative examples. Great when you only have thumbs-up/thumbs-down signals.',
             ipo: '<strong>IPO:</strong> A squared-loss variant of DPO that avoids overfitting to noisy preferences. More robust when your chosen/rejected labels may not be perfectly clean.',
         };
 
