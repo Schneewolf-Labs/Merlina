@@ -3,7 +3,7 @@ Dataset formatter implementations for different chat template formats
 """
 
 import logging
-from typing import Optional, Any
+from typing import Dict, Optional, Any
 from .base import DatasetFormatter
 
 logger = logging.getLogger(__name__)
@@ -391,6 +391,83 @@ class TokenizerFormatter(DatasetFormatter):
             "has_chat_template": self.has_chat_template,
             "tokenizer_name": getattr(self.tokenizer, 'name_or_path', 'unknown')
         }
+
+
+# Jinja2 chat templates for each format type.
+# These match the formatting logic in each formatter class and can be
+# written into a tokenizer's chat_template field so that the saved model
+# carries the correct template for inference.
+
+CHAT_TEMPLATES: Dict[str, str] = {
+    # Standard ChatML template — used by Qwen, Yi, and other ChatML models.
+    # Sourced from: https://github.com/chujiezheng/chat_templates/blob/main/chat_templates/chatml.jinja
+    "chatml": (
+        "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}"
+        "{% for message in messages %}"
+        "{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}"
+        "{% endfor %}"
+        "{% if add_generation_prompt %}"
+        "{{ '<|im_start|>assistant\n' }}"
+        "{% endif %}"
+    ),
+    # Llama 3 Instruct template.
+    # Sourced from: https://github.com/chujiezheng/chat_templates/blob/main/chat_templates/llama-3-instruct.jinja
+    "llama3": (
+        "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}"
+        "{{ bos_token }}"
+        "{% for message in messages %}"
+        "{{'<|start_header_id|>' + message['role'] + '<|end_header_id|>\n\n' + message['content'] + '<|eot_id|>'}}"
+        "{% endfor %}"
+        "{% if add_generation_prompt %}"
+        "{{ '<|start_header_id|>assistant<|end_header_id|>\n\n' }}"
+        "{% endif %}"
+    ),
+    # Mistral Instruct template with system message support.
+    # Sourced from: https://github.com/chujiezheng/chat_templates/blob/main/chat_templates/mistral-instruct.jinja
+    "mistral": (
+        "{% if messages[0]['role'] == 'system' %}"
+        "{% set system_message = messages[0]['content'] + '\n\n' %}"
+        "{% set messages = messages[1:] %}"
+        "{% else %}"
+        "{% set system_message = '' %}"
+        "{% endif %}"
+        "{{ bos_token + system_message }}"
+        "{% for message in messages %}"
+        "{% if message['role'] == 'user' %}"
+        "{{ '[INST] ' + message['content'] + ' [/INST]' }}"
+        "{% elif message['role'] == 'assistant' %}"
+        "{{ ' ' + message['content'] + eos_token }}"
+        "{% endif %}"
+        "{% endfor %}"
+    ),
+    # Qwen3 template — ChatML-based, same structure as chatml.
+    "qwen3": (
+        "{% if not add_generation_prompt is defined %}{% set add_generation_prompt = false %}{% endif %}"
+        "{% for message in messages %}"
+        "{{'<|im_start|>' + message['role'] + '\n' + message['content'] + '<|im_end|>' + '\n'}}"
+        "{% endfor %}"
+        "{% if add_generation_prompt %}"
+        "{{ '<|im_start|>assistant\n' }}"
+        "{% endif %}"
+    ),
+}
+
+
+def get_chat_template_for_format(format_type: str) -> Optional[str]:
+    """
+    Get the Jinja2 chat template string for a given format type.
+
+    This is used to embed the chat template into the tokenizer config
+    when saving/uploading a model that was trained with a specific format
+    but whose base model didn't have a chat template.
+
+    Args:
+        format_type: One of 'chatml', 'llama3', 'mistral', 'qwen3'
+
+    Returns:
+        Jinja2 chat template string, or None if format has no standard template
+    """
+    return CHAT_TEMPLATES.get(format_type.lower())
 
 
 def get_formatter(
