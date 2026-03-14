@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-03-14
+
+### Added
+-
+
+### Changed
+-
+
+### Fixed
+-
+
+
+
 ### Planned
 - Semantic versioning system
 - Version tracking and changelog management

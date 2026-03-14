@@ -7,7 +7,7 @@ MINOR version: Backwards-compatible functionality additions
 PATCH version: Backwards-compatible bug fixes
 """
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 __version_info__ = tuple(int(i) for i in __version__.split("."))
 
 # Version metadata
@@ -17,7 +17,7 @@ VERSION_PATCH = __version_info__[2]
 
 # Release information
 RELEASE_NAME = "Magical Memories"  # Codename for this release
-RELEASE_DATE = "2024-12-15"  # Release date of current version
+RELEASE_DATE = "2026-03-14"  # Release date of current version
 
 def get_version() -> str:
     """Returns the current version string."""
