@@ -766,8 +766,15 @@ def run_training_sync(
         if config.eval_steps:
             if config.eval_steps < 1:
                 import math
-                total_steps = math.ceil(len(train_dataset) / (config.batch_size * config.gradient_accumulation_steps))
+                steps_per_epoch = math.ceil(len(train_dataset) / (config.batch_size * config.gradient_accumulation_steps))
+                total_steps = steps_per_epoch * config.num_epochs
                 eval_steps = max(1, int(total_steps * config.eval_steps))
+                logger.info(
+                    f"Eval steps: {eval_steps} (ratio={config.eval_steps}, "
+                    f"dataset={len(train_dataset)}, batch={config.batch_size}, "
+                    f"grad_accum={config.gradient_accumulation_steps}, "
+                    f"epochs={config.num_epochs}, total_steps={total_steps})"
+                )
             else:
                 eval_steps = int(config.eval_steps)
 
