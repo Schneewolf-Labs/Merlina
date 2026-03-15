@@ -21,7 +21,7 @@ print("=" * 60)
 print("\n1. Testing HuggingFace Loader...")
 try:
     loader = HuggingFaceLoader(
-        repo_id="schneewolflabs/Athanor-DPO",
+        repo_id="schneewolflabs/Athanorlite-DPO",
         split="train"
     )
     formatter = get_formatter("chatml")

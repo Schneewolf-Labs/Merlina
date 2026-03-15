@@ -50,7 +50,7 @@ Created a complete dataset handling module with clean architecture:
 Replaced hardcoded dataset loading with modular pipeline:
 ```python
 # Old: Hardcoded
-dataset = load_dataset("schneewolflabs/Athanor-DPO", split='train')
+dataset = load_dataset("schneewolflabs/Athanorlite-DPO", split='train')
 
 # New: Flexible
 loader = create_loader_from_config(config.dataset.source)
@@ -118,7 +118,7 @@ Default configuration maintains original behavior:
 DatasetConfig(
     source=DatasetSource(
         source_type="huggingface",
-        repo_id="schneewolflabs/Athanor-DPO"
+        repo_id="schneewolflabs/Athanorlite-DPO"
     ),
     format=DatasetFormat(format_type="chatml")
 )
@@ -217,7 +217,7 @@ Easy additions thanks to modular design:
 ## Migration Path for Users
 
 ### Phase 1: No Changes Required
-Users can continue using Merlina exactly as before. The default dataset remains `schneewolflabs/Athanor-DPO` with ChatML format.
+Users can continue using Merlina exactly as before. The default dataset remains `schneewolflabs/Athanorlite-DPO` with ChatML format.
 
 ### Phase 2: Try New Sources
 Users can experiment with:

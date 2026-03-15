@@ -206,7 +206,7 @@ Validates training configuration before starting. Checks GPU availability, VRAM,
   "dataset": {
     "source": {
       "source_type": "huggingface",
-      "repo_id": "schneewolflabs/Athanor-DPO",
+      "repo_id": "schneewolflabs/Athanorlite-DPO",
       "split": "train"
     },
     "format": {
@@ -709,7 +709,7 @@ Previews raw dataset without formatting (up to 10 samples).
 {
   "source": {
     "source_type": "huggingface",
-    "repo_id": "schneewolflabs/Athanor-DPO",
+    "repo_id": "schneewolflabs/Athanorlite-DPO",
     "split": "train"
   },
   "format": {
@@ -780,7 +780,7 @@ Returns column names and sample data for column mapping.
 {
   "source": {
     "source_type": "huggingface",
-    "repo_id": "schneewolflabs/Athanor-DPO",
+    "repo_id": "schneewolflabs/Athanorlite-DPO",
     "split": "train"
   }
 }
@@ -1305,7 +1305,7 @@ Complete training configuration schema.
   "dataset": {
     "source": {
       "source_type": "huggingface",
-      "repo_id": "schneewolflabs/Athanor-DPO",
+      "repo_id": "schneewolflabs/Athanorlite-DPO",
       "split": "train"
     },
     "format": {
@@ -1329,7 +1329,7 @@ Dataset configuration schema.
 {
   "source": {
     "source_type": "huggingface",
-    "repo_id": "schneewolflabs/Athanor-DPO",
+    "repo_id": "schneewolflabs/Athanorlite-DPO",
     "split": "train",
     "file_path": null,
     "file_format": null,
@@ -1353,7 +1353,7 @@ Dataset configuration schema.
 ```json
 {
   "source_type": "huggingface",
-  "repo_id": "schneewolflabs/Athanor-DPO",
+  "repo_id": "schneewolflabs/Athanorlite-DPO",
   "split": "train"
 }
 ```
@@ -1486,7 +1486,7 @@ config = {
     "dataset": {
         "source": {
             "source_type": "huggingface",
-            "repo_id": "schneewolflabs/Athanor-DPO",
+            "repo_id": "schneewolflabs/Athanorlite-DPO",
             "split": "train"
         },
         "format": {

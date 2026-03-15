@@ -184,7 +184,7 @@ class DatasetConfig(BaseModel):
     source: DatasetSource = Field(
         default=DatasetSource(
             source_type="huggingface",
-            repo_id="schneewolflabs/Athanor-DPO",
+            repo_id="schneewolflabs/Athanorlite-DPO",
             split="train"
         ),
         description="Dataset source configuration"

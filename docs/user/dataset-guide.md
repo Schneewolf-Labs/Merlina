@@ -22,7 +22,7 @@ Load datasets directly from the HuggingFace Hub:
 {
   "source": {
     "source_type": "huggingface",
-    "repo_id": "schneewolflabs/Athanor-DPO",
+    "repo_id": "schneewolflabs/Athanorlite-DPO",
     "split": "train"
   }
 }
@@ -202,7 +202,7 @@ curl -X POST http://localhost:8000/dataset/preview \
   -d '{
     "source": {
       "source_type": "huggingface",
-      "repo_id": "schneewolflabs/Athanor-DPO"
+      "repo_id": "schneewolflabs/Athanorlite-DPO"
     },
     "format": {
       "format_type": "chatml"

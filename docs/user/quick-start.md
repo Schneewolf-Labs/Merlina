@@ -32,7 +32,7 @@
 5. Done!
 
 **Popular datasets:**
-- `schneewolflabs/Athanor-DPO` (default)
+- `schneewolflabs/Athanorlite-DPO` (default)
 - `Intel/orca_dpo_pairs`
 - `argilla/ultrafeedback-binarized-preferences`
 

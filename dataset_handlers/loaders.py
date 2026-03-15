@@ -28,7 +28,7 @@ class HuggingFaceLoader(DatasetLoader):
     provide an API token with appropriate permissions.
 
     Example:
-        >>> loader = HuggingFaceLoader("schneewolflabs/Athanor-DPO")
+        >>> loader = HuggingFaceLoader("schneewolflabs/Athanorlite-DPO")
         >>> dataset = loader.load()
     """
 
@@ -42,7 +42,7 @@ class HuggingFaceLoader(DatasetLoader):
         Initialize HuggingFace dataset loader.
 
         Args:
-            repo_id: HuggingFace repository ID (e.g., "schneewolflabs/Athanor-DPO")
+            repo_id: HuggingFace repository ID (e.g., "schneewolflabs/Athanorlite-DPO")
             split: Dataset split to load (default: "train")
             token: Optional HuggingFace API token for private/gated datasets
         """

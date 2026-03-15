@@ -88,7 +88,7 @@ Created comprehensive test suite (`test_tokenizer_formatter.py`) that:
   "dataset": {
     "source": {
       "source_type": "huggingface",
-      "repo_id": "schneewolflabs/Athanor-DPO"
+      "repo_id": "schneewolflabs/Athanorlite-DPO"
     },
     "format": {
       "format_type": "tokenizer"

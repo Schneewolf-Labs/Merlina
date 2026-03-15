@@ -34,7 +34,7 @@ config = {
     "dataset": {
         "source": {
             "source_type": "huggingface",
-            "repo_id": "schneewolflabs/Athanor-DPO",
+            "repo_id": "schneewolflabs/Athanorlite-DPO",
             "split": "train"
         },
         "format": {

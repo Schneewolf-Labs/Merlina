@@ -29,7 +29,7 @@ Simply set `format_type` to `"tokenizer"` in your dataset configuration:
   "dataset": {
     "source": {
       "source_type": "huggingface",
-      "repo_id": "schneewolflabs/Athanor-DPO",
+      "repo_id": "schneewolflabs/Athanorlite-DPO",
       "split": "train"
     },
     "format": {
