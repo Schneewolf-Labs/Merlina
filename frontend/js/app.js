@@ -594,6 +594,10 @@ class MerlinaApp {
         if (!trainingMode) return;
 
         const PREFERENCE_MODES = ['orpo', 'dpo', 'simpo', 'cpo', 'ipo', 'kto'];
+        const grpoFields = document.getElementById('grpo-fields');
+        const grpoAnswerFields = document.getElementById('grpo-answer-fields');
+        const grpoFormatFields = document.getElementById('grpo-format-fields');
+        const grpoWeightFields = document.getElementById('grpo-weight-fields');
 
         const MODE_DESCRIPTIONS = {
             sft: '<strong>SFT:</strong> Learn from good examples. Uses only the "chosen" response for each prompt — great for teaching your model a new style or task. No rejected responses needed.',
@@ -603,22 +607,45 @@ class MerlinaApp {
             cpo: '<strong>CPO:</strong> Reference-free contrastive learning on preference pairs. Similar to DPO but simpler — directly contrasts chosen vs. rejected without needing a frozen copy of the model.',
             kto: '<strong>KTO:</strong> Uses prospect theory to align models with binary feedback (good/bad) instead of paired preferences. Works with unpaired data — if you have rejected responses they\'re split into separate negative examples. Great when you only have thumbs-up/thumbs-down signals.',
             ipo: '<strong>IPO:</strong> A squared-loss variant of DPO that avoids overfitting to noisy preferences. More robust when your chosen/rejected labels may not be perfectly clean.',
+            grpo: '<strong>GRPO:</strong> Generates multiple completions per prompt, scores them with a reward function, and learns from group-relative advantages. No paired data needed — just prompts! Uses a clipped REINFORCE objective (like PPO but without a value network). Great for RL-based alignment.',
         };
 
         const updateFields = (mode) => {
             const isPreference = PREFERENCE_MODES.includes(mode);
-            // Beta: shown for all preference methods
-            if (betaField) betaField.style.display = isPreference ? 'block' : 'none';
+            // Beta: shown for all preference methods AND GRPO (as KL penalty)
+            if (betaField) betaField.style.display = (isPreference || mode === 'grpo') ? 'block' : 'none';
             // Gamma: SimPO only
             if (gammaField) gammaField.style.display = mode === 'simpo' ? 'block' : 'none';
             // Label smoothing: DPO and CPO
             if (labelSmoothingField) labelSmoothingField.style.display = (mode === 'dpo' || mode === 'cpo') ? 'block' : 'none';
+            // GRPO-specific fields
+            if (grpoFields) grpoFields.style.display = mode === 'grpo' ? 'block' : 'none';
             // Description
             if (descriptionEl) descriptionEl.innerHTML = MODE_DESCRIPTIONS[mode] || '';
         };
 
         trainingMode.addEventListener('change', (e) => updateFields(e.target.value));
         updateFields(trainingMode.value);
+
+        // GRPO reward type sub-field toggle
+        const grpoRewardType = document.getElementById('grpo-reward-type');
+        const answerColumnGroup = document.getElementById('answer-column-group');
+        const updateRewardFields = (rewardType) => {
+            const needsAnswer = rewardType === 'answer_match' || rewardType === 'answer_and_format';
+            const needsFormat = rewardType === 'regex' || rewardType === 'answer_and_format';
+            const needsWeights = rewardType === 'answer_and_format';
+
+            if (grpoAnswerFields) grpoAnswerFields.style.display = needsAnswer ? 'block' : 'none';
+            if (grpoFormatFields) grpoFormatFields.style.display = needsFormat ? 'block' : 'none';
+            if (grpoWeightFields) grpoWeightFields.style.display = needsWeights ? 'block' : 'none';
+            // Show answer column mapping when answer-based reward is selected in GRPO mode
+            if (answerColumnGroup) answerColumnGroup.style.display = needsAnswer ? 'block' : 'none';
+        };
+
+        if (grpoRewardType) {
+            grpoRewardType.addEventListener('change', (e) => updateRewardFields(e.target.value));
+            updateRewardFields(grpoRewardType.value);
+        }
     }
 
     /**

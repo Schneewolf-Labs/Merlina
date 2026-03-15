@@ -95,6 +95,13 @@ def generate_model_readme(config: Any, training_mode: str) -> str:
         config_lines.append(f"| SimPO Gamma | {config.gamma} |")
     if training_mode.lower() in ("dpo", "cpo"):
         config_lines.append(f"| Label Smoothing | {config.label_smoothing} |")
+    if training_mode.lower() == "grpo":
+        config_lines.append(f"| Beta (KL Penalty) | {config.beta} |")
+        config_lines.append(f"| Generations per Prompt | {config.grpo_num_generations} |")
+        config_lines.append(f"| Clip Ratio (Epsilon) | {config.grpo_epsilon} |")
+        config_lines.append(f"| Max New Tokens | {config.grpo_max_new_tokens} |")
+        config_lines.append(f"| Generation Temperature | {config.grpo_temperature} |")
+        config_lines.append(f"| Reward Type | {config.grpo_reward_type} |")
 
     # Add LoRA params if enabled
     if config.use_lora:

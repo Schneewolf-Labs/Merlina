@@ -4,7 +4,7 @@ Enhanced Training Runner with WebSocket updates and better error handling.
 This module provides the core training functionality for Merlina, including:
 - Model loading with quantization support
 - Dataset preparation and formatting
-- Multiple training modes: SFT, ORPO, DPO, SimPO, CPO, IPO, KTO
+- Multiple training modes: SFT, ORPO, DPO, SimPO, CPO, IPO, KTO, GRPO
 - WebSocket progress updates
 - Background HuggingFace Hub uploads
 - Weights & Biases integration
@@ -27,8 +27,8 @@ from transformers import (
 )
 from peft import LoraConfig, PeftModel, AutoPeftModelForCausalLM
 from grimoire import GrimoireTrainer, TrainingConfig, TrainerCallback
-from grimoire.losses import SFTLoss, ORPOLoss, DPOLoss, SimPOLoss, CPOLoss, IPOLoss, KTOLoss
-from grimoire.data import tokenize_sft, tokenize_preference, tokenize_kto
+from grimoire.losses import SFTLoss, ORPOLoss, DPOLoss, SimPOLoss, CPOLoss, IPOLoss, KTOLoss, GRPOLoss
+from grimoire.data import tokenize_sft, tokenize_preference, tokenize_kto, tokenize_grpo
 
 from huggingface_hub import HfApi
 from src.model_card import generate_model_readme, upload_model_readme, generate_wandb_run_name
@@ -46,6 +46,7 @@ from src.job_manager import JobManager
 from src.websocket_manager import websocket_manager
 from src.preflight_checks import is_local_model_path
 from src.utils import get_num_gpus, calculate_effective_batch_size, get_torch_dtype
+from src.reward_functions import build_reward_function
 
 logger = logging.getLogger(__name__)
 
@@ -399,7 +400,7 @@ def run_training_sync(
     """
     Run training job with enhanced monitoring and WebSocket updates.
 
-    Supports multiple training modes (SFT, ORPO, DPO, SimPO, CPO, IPO, KTO)
+    Supports multiple training modes (SFT, ORPO, DPO, SimPO, CPO, IPO, KTO, GRPO)
     with optional LoRA adapters.
 
     Args:
@@ -750,8 +751,63 @@ def run_training_sync(
                 ),
                 remove_columns=eval_dataset.column_names,
             )
+        elif training_mode == "grpo":
+            logger.info("Configuring GRPO (Group Relative Policy Optimization)")
+
+            reward_type = getattr(config, 'grpo_reward_type', 'length')
+
+            # For answer-based rewards, build prompt→answer lookup from dataset
+            prompt_to_answer = None
+            if reward_type in ("answer_match", "answer_and_format"):
+                if "answer" in train_dataset.column_names:
+                    prompt_to_answer = {}
+                    for row in train_dataset:
+                        prompt_to_answer[row["prompt"]] = str(row["answer"])
+                    logger.info(f"Built prompt→answer lookup with {len(prompt_to_answer)} entries")
+                else:
+                    raise ValueError(
+                        f"Reward type '{reward_type}' requires an 'answer' column in the dataset. "
+                        f"Map your ground-truth column to 'answer' in column mapping."
+                    )
+
+            reward_fn = build_reward_function(
+                reward_type=reward_type,
+                prompt_to_answer=prompt_to_answer,
+                answer_extraction_pattern=getattr(config, 'grpo_answer_pattern', r'\\boxed\{(.*?)\}'),
+                answer_case_sensitive=getattr(config, 'grpo_answer_case_sensitive', False),
+                format_pattern=getattr(config, 'grpo_format_pattern', None),
+                accuracy_weight=getattr(config, 'grpo_accuracy_weight', 0.8),
+                format_weight=getattr(config, 'grpo_format_weight', 0.2),
+            )
+            logger.info(f"Using reward function: {reward_type}")
+
+            loss_fn = GRPOLoss(
+                reward_fn=reward_fn,
+                tokenizer=tokenizer,
+                num_generations=getattr(config, 'grpo_num_generations', 4),
+                beta=config.beta,
+                epsilon=getattr(config, 'grpo_epsilon', 0.2),
+                max_new_tokens=getattr(config, 'grpo_max_new_tokens', 512),
+                temperature=getattr(config, 'grpo_temperature', 1.0),
+            )
+
+            # GRPO only needs prompts — completions are generated during training
+            train_dataset = train_dataset.map(
+                lambda x: tokenize_grpo(
+                    x, tokenizer, max_prompt_length=config.max_prompt_length,
+                    prompt_field="prompt",
+                ),
+                remove_columns=train_dataset.column_names,
+            )
+            eval_dataset = eval_dataset.map(
+                lambda x: tokenize_grpo(
+                    x, tokenizer, max_prompt_length=config.max_prompt_length,
+                    prompt_field="prompt",
+                ),
+                remove_columns=eval_dataset.column_names,
+            )
         else:
-            raise ValueError(f"Unknown training mode: {training_mode}. Supported: sft, orpo, dpo, simpo, cpo, ipo, kto")
+            raise ValueError(f"Unknown training mode: {training_mode}. Supported: sft, orpo, dpo, simpo, cpo, ipo, kto, grpo")
 
         # Determine mixed precision setting
         if torch_dtype == torch.bfloat16:
@@ -785,7 +841,7 @@ def run_training_sync(
             gradient_checkpointing=config.gradient_checkpointing,
             optimizer=config.optimizer_type,
             lr_scheduler=config.lr_scheduler_type,
-            disable_dropout=(training_mode in PREFERENCE_MODES or training_mode == "kto"),
+            disable_dropout=(training_mode in PREFERENCE_MODES or training_mode in ("kto", "grpo")),
             logging_steps=config.logging_steps,
             eval_steps=eval_steps,
             save_steps=eval_steps,

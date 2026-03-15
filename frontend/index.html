@@ -226,6 +226,14 @@
                             <small style="color: #888; font-size: 0.85em;">Optional: Reasoning/thinking process (for Qwen3)</small>
                         </div>
 
+                        <div class="form-group" id="answer-column-group" style="display: none;">
+                            <label>Answer Column (GRPO Ground Truth)</label>
+                            <select id="map-answer" class="magic-select">
+                                <option value="">-- None --</option>
+                            </select>
+                            <small style="color: #888; font-size: 0.85em;">Ground-truth answers for answer_match reward (R1-style training)</small>
+                        </div>
+
                         <!-- Sample Preview -->
                         <div id="column-sample-preview" style="margin-top: 15px; display: none;">
                             <div style="font-weight: bold; color: var(--primary-purple); margin-bottom: 10px;">
@@ -511,6 +519,7 @@
                                 <option value="kto">KTO - Kahneman-Tversky Optimization</option>
                                 <option value="cpo">CPO - Contrastive Preference Optimization</option>
                                 <option value="ipo">IPO - Identity Preference Optimization</option>
+                                <option value="grpo">GRPO - Group Relative Policy Optimization</option>
                             </select>
                             <small id="training-mode-description" style="color: #888; font-size: 0.85em; display: block; margin-top: 8px;"></small>
                         </div>
@@ -556,6 +565,94 @@
                                 <label>Label Smoothing</label>
                                 <input type="number" id="label-smoothing" value="0.0" min="0" max="0.5" step="0.01" class="magic-input">
                                 <small style="color: #888; font-size: 0.85em;">Smoothing coefficient for preference loss</small>
+                            </div>
+                        </div>
+                        <!-- GRPO-specific parameters -->
+                        <div id="grpo-fields" style="display: none;">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Generations per Prompt</label>
+                                    <input type="number" id="grpo-num-generations" value="4" min="2" max="16" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">Number of completions generated per prompt (G)</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>Clip Ratio (Epsilon)</label>
+                                    <input type="number" id="grpo-epsilon" value="0.2" min="0.01" max="1.0" step="0.01" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">REINFORCE clip ratio (like PPO)</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>Max New Tokens</label>
+                                    <input type="number" id="grpo-max-new-tokens" value="512" min="64" max="4096" step="64" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">Max tokens per generated completion</small>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Generation Temperature</label>
+                                    <input type="number" id="grpo-temperature" value="1.0" min="0.1" max="2.0" step="0.1" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">Sampling temperature for completions</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>Reward Function</label>
+                                    <select id="grpo-reward-type" class="magic-select">
+                                        <option value="length">Length - Longer completions score higher</option>
+                                        <option value="format">Format - Rewards structured output</option>
+                                        <option value="combined" selected>Combined - Length + structure</option>
+                                        <option value="answer_match">Answer Match - Compare to ground truth (R1-style)</option>
+                                        <option value="regex">Regex - Match a custom pattern</option>
+                                        <option value="answer_and_format">Answer + Format - Composite accuracy &amp; pattern</option>
+                                    </select>
+                                    <small style="color: #888; font-size: 0.85em;">Built-in reward function for scoring completions</small>
+                                </div>
+                            </div>
+                            <!-- Answer match fields (shown for answer_match / answer_and_format) -->
+                            <div id="grpo-answer-fields" style="display: none;">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Answer Extraction Pattern</label>
+                                        <input type="text" id="grpo-answer-pattern" value="\\boxed\{(.*?)\}" class="magic-input" placeholder="Regex with capture group">
+                                        <small style="color: #888; font-size: 0.85em;">Regex to extract the answer from completions (e.g. <code>\\boxed\{(.*?)\}</code>, <code>#### (.*)</code>, <code>&lt;answer&gt;(.*?)&lt;/answer&gt;</code>)</small>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Case Sensitive</label>
+                                        <select id="grpo-answer-case-sensitive" class="magic-select">
+                                            <option value="false" selected>No (ignore case)</option>
+                                            <option value="true">Yes (exact case)</option>
+                                        </select>
+                                        <small style="color: #888; font-size: 0.85em;">Whether answer comparison is case-sensitive</small>
+                                    </div>
+                                </div>
+                                <div style="background: rgba(138, 43, 226, 0.1); border: 1px solid rgba(138, 43, 226, 0.3); border-radius: 8px; padding: 12px; margin-bottom: 16px;">
+                                    <small style="color: #c9a0dc; font-size: 0.85em;">
+                                        Map your ground-truth column to <strong>"answer"</strong> in the dataset column mapping below.
+                                        The reward function will compare extracted answers against these ground-truth values.
+                                    </small>
+                                </div>
+                            </div>
+                            <!-- Regex/format pattern fields (shown for regex / answer_and_format) -->
+                            <div id="grpo-format-fields" style="display: none;">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Format Pattern (Regex)</label>
+                                        <input type="text" id="grpo-format-pattern" class="magic-input" placeholder="e.g. <think>.*?</think>">
+                                        <small style="color: #888; font-size: 0.85em;">Regex pattern the completion should match for reward (e.g. <code>&lt;think&gt;.*?&lt;/think&gt;</code>)</small>
+                                    </div>
+                                </div>
+                            </div>
+                            <!-- Composite weight fields (shown for answer_and_format) -->
+                            <div id="grpo-weight-fields" style="display: none;">
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Accuracy Weight</label>
+                                        <input type="number" id="grpo-accuracy-weight" value="0.8" min="0" max="1" step="0.1" class="magic-input">
+                                        <small style="color: #888; font-size: 0.85em;">Weight for answer correctness in composite score</small>
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Format Weight</label>
+                                        <input type="number" id="grpo-format-weight" value="0.2" min="0" max="1" step="0.1" class="magic-input">
+                                        <small style="color: #888; font-size: 0.85em;">Weight for format matching in composite score</small>
+                                    </div>
+                                </div>
                             </div>
                         </div>
                         <div class="form-row">
