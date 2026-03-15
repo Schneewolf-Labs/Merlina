@@ -595,6 +595,9 @@ class MerlinaApp {
 
         const PREFERENCE_MODES = ['orpo', 'dpo', 'simpo', 'cpo', 'ipo', 'kto'];
         const grpoFields = document.getElementById('grpo-fields');
+        const grpoAnswerFields = document.getElementById('grpo-answer-fields');
+        const grpoFormatFields = document.getElementById('grpo-format-fields');
+        const grpoWeightFields = document.getElementById('grpo-weight-fields');
 
         const MODE_DESCRIPTIONS = {
             sft: '<strong>SFT:</strong> Learn from good examples. Uses only the "chosen" response for each prompt — great for teaching your model a new style or task. No rejected responses needed.',
@@ -623,6 +626,26 @@ class MerlinaApp {
 
         trainingMode.addEventListener('change', (e) => updateFields(e.target.value));
         updateFields(trainingMode.value);
+
+        // GRPO reward type sub-field toggle
+        const grpoRewardType = document.getElementById('grpo-reward-type');
+        const answerColumnGroup = document.getElementById('answer-column-group');
+        const updateRewardFields = (rewardType) => {
+            const needsAnswer = rewardType === 'answer_match' || rewardType === 'answer_and_format';
+            const needsFormat = rewardType === 'regex' || rewardType === 'answer_and_format';
+            const needsWeights = rewardType === 'answer_and_format';
+
+            if (grpoAnswerFields) grpoAnswerFields.style.display = needsAnswer ? 'block' : 'none';
+            if (grpoFormatFields) grpoFormatFields.style.display = needsFormat ? 'block' : 'none';
+            if (grpoWeightFields) grpoWeightFields.style.display = needsWeights ? 'block' : 'none';
+            // Show answer column mapping when answer-based reward is selected in GRPO mode
+            if (answerColumnGroup) answerColumnGroup.style.display = needsAnswer ? 'block' : 'none';
+        };
+
+        if (grpoRewardType) {
+            grpoRewardType.addEventListener('change', (e) => updateRewardFields(e.target.value));
+            updateRewardFields(grpoRewardType.value);
+        }
     }
 
     /**

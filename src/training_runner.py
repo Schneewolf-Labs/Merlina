@@ -46,6 +46,7 @@ from src.job_manager import JobManager
 from src.websocket_manager import websocket_manager
 from src.preflight_checks import is_local_model_path
 from src.utils import get_num_gpus, calculate_effective_batch_size, get_torch_dtype
+from src.reward_functions import build_reward_function
 
 logger = logging.getLogger(__name__)
 
@@ -753,43 +754,31 @@ def run_training_sync(
         elif training_mode == "grpo":
             logger.info("Configuring GRPO (Group Relative Policy Optimization)")
 
-            # Build reward function based on reward_type config
             reward_type = getattr(config, 'grpo_reward_type', 'length')
 
-            if reward_type == "length":
-                def reward_fn(prompts, completions):
-                    """Simple length-based reward: longer completions score higher (normalized)."""
-                    lengths = [len(c) for c in completions]
-                    max_len = max(lengths) if lengths else 1
-                    return [l / max_len for l in lengths]
-            elif reward_type == "format":
-                def reward_fn(prompts, completions):
-                    """Format-based reward: checks for structured output markers."""
-                    rewards = []
-                    for c in completions:
-                        score = 0.0
-                        # Reward structured formatting
-                        if any(marker in c for marker in ['\n', '- ', '* ', '1.', '```']):
-                            score += 0.5
-                        # Reward non-empty completions
-                        if len(c.strip()) > 10:
-                            score += 0.5
-                        rewards.append(score)
-                    return rewards
-            else:
-                # Default: combined length + coherence reward
-                def reward_fn(prompts, completions):
-                    """Combined reward: length (normalized) + non-empty bonus."""
-                    rewards = []
-                    lengths = [len(c) for c in completions]
-                    max_len = max(lengths) if lengths else 1
-                    for c in completions:
-                        score = len(c) / max_len * 0.7  # Length component
-                        if len(c.strip()) > 10:
-                            score += 0.3  # Non-empty bonus
-                        rewards.append(score)
-                    return rewards
+            # For answer-based rewards, build prompt→answer lookup from dataset
+            prompt_to_answer = None
+            if reward_type in ("answer_match", "answer_and_format"):
+                if "answer" in train_dataset.column_names:
+                    prompt_to_answer = {}
+                    for row in train_dataset:
+                        prompt_to_answer[row["prompt"]] = str(row["answer"])
+                    logger.info(f"Built prompt→answer lookup with {len(prompt_to_answer)} entries")
+                else:
+                    raise ValueError(
+                        f"Reward type '{reward_type}' requires an 'answer' column in the dataset. "
+                        f"Map your ground-truth column to 'answer' in column mapping."
+                    )
 
+            reward_fn = build_reward_function(
+                reward_type=reward_type,
+                prompt_to_answer=prompt_to_answer,
+                answer_extraction_pattern=getattr(config, 'grpo_answer_pattern', r'\\boxed\{(.*?)\}'),
+                answer_case_sensitive=getattr(config, 'grpo_answer_case_sensitive', False),
+                format_pattern=getattr(config, 'grpo_format_pattern', None),
+                accuracy_weight=getattr(config, 'grpo_accuracy_weight', 0.8),
+                format_weight=getattr(config, 'grpo_format_weight', 0.2),
+            )
             logger.info(f"Using reward function: {reward_type}")
 
             loss_fn = GRPOLoss(

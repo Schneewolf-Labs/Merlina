@@ -213,7 +213,8 @@ class DatasetManager {
             'map-chosen',
             'map-rejected',
             'map-system',
-            'map-reasoning'
+            'map-reasoning',
+            'map-answer'
         ];
 
         selects.forEach(selectId => {
@@ -470,12 +471,14 @@ class DatasetManager {
         const rejectedCol = document.getElementById('map-rejected')?.value;
         const systemCol = document.getElementById('map-system')?.value;
         const reasoningCol = document.getElementById('map-reasoning')?.value;
+        const answerCol = document.getElementById('map-answer')?.value;
 
         if (promptCol) mapping[promptCol] = 'prompt';
         if (chosenCol) mapping[chosenCol] = 'chosen';
         if (rejectedCol) mapping[rejectedCol] = 'rejected';
         if (systemCol) mapping[systemCol] = 'system';
         if (reasoningCol) mapping[reasoningCol] = 'reasoning';
+        if (answerCol) mapping[answerCol] = 'answer';
 
         return mapping;
     }

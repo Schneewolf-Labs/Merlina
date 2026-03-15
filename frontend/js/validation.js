@@ -241,6 +241,15 @@ class Validator {
             if (!hasRejected && PAIRED_PREFERENCE_MODES.includes(trainingMode)) {
                 errors.push('Rejected column must be mapped (required for preference optimization)');
             }
+
+            // Answer column required for answer-based GRPO rewards
+            if (trainingMode === 'grpo') {
+                const grpoRewardType = document.getElementById('grpo-reward-type')?.value;
+                const hasAnswer = Object.values(config.column_mapping).includes('answer');
+                if ((grpoRewardType === 'answer_match' || grpoRewardType === 'answer_and_format') && !hasAnswer) {
+                    errors.push('Answer column must be mapped for answer-based reward functions. Map your ground-truth column to "answer".');
+                }
+            }
         }
 
         return errors;

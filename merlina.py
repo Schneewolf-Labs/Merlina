@@ -201,7 +201,7 @@ class DatasetConfig(BaseModel):
     # Column mapping (if dataset uses different column names)
     column_mapping: Optional[dict] = Field(
         None,
-        description="Map dataset columns to expected names (system, prompt, chosen, rejected)"
+        description="Map dataset columns to expected names (system, prompt, chosen, rejected, answer). The 'answer' column is used by GRPO answer_match reward."
     )
 
     # Messages format conversion
@@ -264,7 +264,12 @@ class TrainingConfig(BaseModel):
     grpo_epsilon: float = Field(0.2, ge=0.01, le=1.0, description="REINFORCE clip ratio (GRPO)")
     grpo_max_new_tokens: int = Field(512, ge=64, le=4096, description="Max tokens to generate per completion (GRPO)")
     grpo_temperature: float = Field(1.0, ge=0.1, le=2.0, description="Sampling temperature for generation (GRPO)")
-    grpo_reward_type: str = Field("length", description="Reward function type: 'length', 'format', or 'combined' (GRPO)")
+    grpo_reward_type: str = Field("length", description="Reward function type: 'length', 'format', 'combined', 'answer_match', 'regex', or 'answer_and_format' (GRPO)")
+    grpo_answer_pattern: str = Field(r"\\boxed\{(.*?)\}", description="Regex with capture group to extract answer from completion (for answer_match/answer_and_format)")
+    grpo_answer_case_sensitive: bool = Field(False, description="Whether answer comparison is case-sensitive")
+    grpo_format_pattern: Optional[str] = Field(None, description="Regex pattern completions should match (for regex/answer_and_format)")
+    grpo_accuracy_weight: float = Field(0.8, ge=0.0, le=1.0, description="Weight for answer accuracy in answer_and_format composite")
+    grpo_format_weight: float = Field(0.2, ge=0.0, le=1.0, description="Weight for format matching in answer_and_format composite")
 
     # Dataset configuration
     dataset: DatasetConfig = Field(
