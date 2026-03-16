@@ -207,7 +207,7 @@ class Validator {
     /**
      * Validate dataset configuration
      * @param {Object} config - Dataset configuration
-     * @param {string} trainingMode - Training mode ('sft' or 'orpo')
+     * @param {string} trainingMode - Training mode ('sft', 'orpo', 'grpo', etc.)
      */
     static validateDatasetConfig(config, trainingMode = 'orpo') {
         const errors = [];
@@ -234,11 +234,21 @@ class Validator {
             const hasRejected = Object.values(config.column_mapping).includes('rejected');
 
             if (!hasPrompt) errors.push('Prompt column must be mapped');
-            if (!hasChosen) errors.push('Chosen column must be mapped');
-            // Rejected is required for paired preference modes (not SFT or KTO)
+            // GRPO only needs prompts (completions generated during training)
+            if (!hasChosen && trainingMode !== 'grpo') errors.push('Chosen column must be mapped');
+            // Rejected is required for paired preference modes (not SFT, KTO, or GRPO)
             const PAIRED_PREFERENCE_MODES = ['orpo', 'dpo', 'simpo', 'cpo', 'ipo'];
             if (!hasRejected && PAIRED_PREFERENCE_MODES.includes(trainingMode)) {
                 errors.push('Rejected column must be mapped (required for preference optimization)');
+            }
+
+            // Answer column required for answer-based GRPO rewards
+            if (trainingMode === 'grpo') {
+                const grpoRewardType = document.getElementById('grpo-reward-type')?.value;
+                const hasAnswer = Object.values(config.column_mapping).includes('answer');
+                if ((grpoRewardType === 'answer_match' || grpoRewardType === 'answer_and_format') && !hasAnswer) {
+                    errors.push('Answer column must be mapped for answer-based reward functions. Map your ground-truth column to "answer".');
+                }
             }
         }
 

@@ -38,6 +38,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Version tracking and changelog management
 - Automated version bumping tools
 
+## [1.5.0] - 2026-03-15 "Grimoire Rewards"
+
+### Added
+- **GRPO Answer Match Reward (R1-style)**: Compare model-extracted answers against ground-truth values from dataset
+  - Configurable answer extraction regex (supports `\boxed{}`, `#### ...`, `<answer>...</answer>`, etc.)
+  - Case-sensitive/insensitive comparison
+  - Requires mapping a ground-truth column to "answer" in dataset column mapping
+- **GRPO Regex Reward**: Score completions based on matching a custom regex pattern
+  - Great for enforcing structured output (e.g. `<think>...</think>` tags, JSON format)
+- **GRPO Answer + Format Composite Reward**: Weighted combination of answer accuracy and format matching
+  - Configurable accuracy/format weights (default: 0.8/0.2)
+  - Mirrors DeepSeek-R1's dual reward signal approach
+- New `src/reward_functions.py` module with factory pattern for building reward functions
+- "Answer" column support in dataset column mapping for GRPO ground-truth data
+- Frontend UI for configuring new reward types with contextual field visibility
+- Frontend validation for answer column mapping when answer-based rewards are selected
+- 31 new unit tests for all reward function types
+
+### Changed
+- GRPO reward function dropdown expanded from 3 to 6 options
+- Reward function construction moved from inline closures to dedicated module
+- Dataset column mapping now supports optional "answer" target column
+
 ## [1.2.0] - 2024-12-15 "Magical Memories"
 
 ### Added

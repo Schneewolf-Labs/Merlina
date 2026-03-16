@@ -208,12 +208,15 @@ class DatasetPipeline:
 
     def _validate_schema(self, dataset: Dataset):
         """Validate that dataset has required columns based on training mode"""
+        # GRPO only needs prompts (completions are generated during training)
+        if self.training_mode == 'grpo':
+            required_columns = {'prompt'}
         # For SFT and KTO modes, rejected is not required
-        if self.training_mode in ('sft', 'kto'):
+        elif self.training_mode in ('sft', 'kto'):
             required_columns = {'prompt', 'chosen'}
         else:
             required_columns = {'prompt', 'chosen', 'rejected'}
-        optional_columns = {'system', 'reasoning', 'rejected'}
+        optional_columns = {'system', 'reasoning', 'rejected', 'chosen'}
 
         available_columns = set(dataset.column_names)
         missing_required = required_columns - available_columns
