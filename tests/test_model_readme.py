@@ -299,11 +299,13 @@ def test_readme_keyword_tags_orpo():
 
     assert "tags:" in readme, "README should have tags field"
     assert "- merlina" in readme, "Should include merlina tag"
+    assert "- grimoire" in readme, "Should include grimoire tag"
     assert "- text-generation" in readme, "Should include text-generation tag"
     assert "- orpo" in readme, "Should include orpo tag for ORPO mode"
 
     print("  ✓ tags field present in frontmatter")
     print("  ✓ merlina tag present")
+    print("  ✓ grimoire tag present")
     print("  ✓ text-generation tag present")
     print("  ✓ orpo tag present")
     print()
@@ -320,12 +322,14 @@ def test_readme_keyword_tags_sft():
 
     assert "tags:" in readme, "README should have tags field"
     assert "- merlina" in readme, "Should include merlina tag"
+    assert "- grimoire" in readme, "Should include grimoire tag"
     assert "- text-generation" in readme, "Should include text-generation tag"
     assert "- sft" in readme, "Should include sft tag for SFT mode"
     assert "- orpo" not in readme, "Should not include orpo tag for SFT mode"
 
     print("  ✓ tags field present in frontmatter")
     print("  ✓ merlina tag present")
+    print("  ✓ grimoire tag present")
     print("  ✓ text-generation tag present")
     print("  ✓ sft tag present")
     print("  ✓ orpo tag correctly excluded")
