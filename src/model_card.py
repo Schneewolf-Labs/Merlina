@@ -48,6 +48,7 @@ def generate_model_readme(config: Any, training_mode: str) -> str:
     # Add keyword tags for discoverability
     frontmatter_lines.append("tags:")
     frontmatter_lines.append("- merlina")
+    frontmatter_lines.append("- grimoire")
     frontmatter_lines.append("- text-generation")
     frontmatter_lines.append(f"- {training_mode.lower()}")  # sft or orpo
 
