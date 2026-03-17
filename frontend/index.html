@@ -364,13 +364,16 @@
                         <button type="button" id="load-config-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
                             📂 Load Config
                         </button>
+                        <button type="button" id="load-from-job-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
+                            🔄 From Job
+                        </button>
                         <button type="button" id="manage-configs-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
                             🗂️ Manage
                         </button>
                     </div>
 
                     <small style="color: rgba(255,255,255,0.9); display: block; text-align: center;">
-                        Save your current settings for later reuse
+                        Save your current settings or load from a previous job
                     </small>
                 </div>
 
@@ -920,6 +923,18 @@
                 <h2 id="load-config-modal-title">Load Configuration</h2>
                 <div id="config-list" style="margin: 20px 0;">
                     <p style="text-align: center; color: #888;">Loading configurations...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Load from Job Modal -->
+        <div id="load-from-job-modal" class="modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="load-from-job-modal-title">
+            <div class="modal-content" style="max-width: 700px;">
+                <button class="close" onclick="document.getElementById('load-from-job-modal').style.display='none'" aria-label="Close modal" type="button">&times;</button>
+                <h2 id="load-from-job-modal-title">Load Configuration from Previous Job</h2>
+                <p style="color: #888; margin-bottom: 15px;">Click a job to load its training configuration into the form.</p>
+                <div id="job-history-list" style="margin: 20px 0; max-height: 500px; overflow-y: auto;">
+                    <p style="text-align: center; color: #888;">Loading job history...</p>
                 </div>
             </div>
         </div>
