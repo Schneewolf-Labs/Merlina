@@ -126,8 +126,8 @@ class ConfigManager {
             use_4bit: document.getElementById('use-4bit')?.checked ?? true,
             max_length: parseInt(document.getElementById('max-length')?.value || 2048),
             max_prompt_length: parseInt(document.getElementById('max-prompt-length')?.value || 1024),
-            num_train_epochs: parseInt(document.getElementById('epochs')?.value || 2),
-            per_device_train_batch_size: parseInt(document.getElementById('batch-size')?.value || 1),
+            num_epochs: parseInt(document.getElementById('epochs')?.value || 2),
+            batch_size: parseInt(document.getElementById('batch-size')?.value || 1),
             gradient_accumulation_steps: parseInt(document.getElementById('grad-accum')?.value || 16),
             learning_rate: parseFloat(document.getElementById('learning-rate')?.value || 0.000005),
             warmup_ratio: parseFloat(document.getElementById('warmup-ratio')?.value || 0.05),
@@ -363,8 +363,8 @@ class ConfigManager {
         this.setInputValue('training-mode', config.training_mode || 'orpo');
         this.setInputValue('max-length', config.max_length || 2048);
         this.setInputValue('max-prompt-length', config.max_prompt_length || 1024);
-        this.setInputValue('epochs', config.num_train_epochs || 2);
-        this.setInputValue('batch-size', config.per_device_train_batch_size || 1);
+        this.setInputValue('epochs', config.num_epochs || config.num_train_epochs || 2);
+        this.setInputValue('batch-size', config.batch_size || config.per_device_train_batch_size || 1);
         this.setInputValue('grad-accum', config.gradient_accumulation_steps || 16);
         this.setInputValue('learning-rate', config.learning_rate || 0.000005);
         this.setInputValue('warmup-ratio', config.warmup_ratio || 0.05);
