@@ -40,7 +40,8 @@ from dataset_handlers import (
     UploadedDatasetLoader,
     get_formatter,
     get_chat_template_for_format,
-    create_loader_from_config
+    create_loader_from_config,
+    create_additional_loaders_from_config
 )
 from src.job_manager import JobManager
 from src.websocket_manager import websocket_manager
@@ -592,6 +593,14 @@ def run_training_sync(
             hf_token=config.hf_token
         )
 
+        # Create additional loaders for dataset concatenation
+        additional_loaders, additional_column_mappings, additional_convert_messages = \
+            create_additional_loaders_from_config(
+                dataset_config=config.dataset,
+                uploaded_datasets=uploaded_datasets,
+                hf_token=config.hf_token
+            )
+
         # Get formatter
         formatter = get_formatter(
             format_type=config.dataset.format.format_type,
@@ -609,7 +618,10 @@ def run_training_sync(
             seed=config.seed,  # Use config seed instead of hardcoded 42
             shuffle=config.shuffle_dataset,  # Use config shuffle setting
             training_mode=config.training_mode,
-            convert_messages_format=config.dataset.convert_messages_format
+            convert_messages_format=config.dataset.convert_messages_format,
+            additional_loaders=additional_loaders,
+            additional_column_mappings=additional_column_mappings,
+            additional_convert_messages=additional_convert_messages
         )
 
         train_dataset, eval_dataset = pipeline.prepare()

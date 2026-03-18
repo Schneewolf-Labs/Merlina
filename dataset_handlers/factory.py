@@ -5,7 +5,7 @@ This module centralizes the creation of loaders to eliminate code duplication
 across merlina.py and training_runner.py.
 """
 
-from typing import Dict, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any
 import logging
 
 from .base import DatasetLoader, DatasetPipeline
@@ -143,6 +143,48 @@ def create_loader_from_config(
     )
 
 
+def create_additional_loaders_from_config(
+    dataset_config: Any,
+    uploaded_datasets: Optional[Dict[str, Tuple[bytes, str]]] = None,
+    hf_token: Optional[str] = None
+) -> Tuple[List[DatasetLoader], List[Optional[dict]], List[bool]]:
+    """
+    Create loaders, column mappings, and convert flags for additional datasets.
+
+    Args:
+        dataset_config: Dataset configuration with optional additional_datasets field
+        uploaded_datasets: Dict mapping dataset_id to (content, filename) tuples
+        hf_token: HuggingFace API token for private datasets
+
+    Returns:
+        Tuple of (loaders, column_mappings, convert_messages_flags)
+    """
+    additional_datasets = getattr(dataset_config, 'additional_datasets', None)
+    if not additional_datasets:
+        return [], [], []
+
+    loaders = []
+    column_mappings = []
+    convert_flags = []
+
+    for i, additional in enumerate(additional_datasets):
+        source = getattr(additional, 'source', None)
+        if not source:
+            raise LoaderCreationError(f"Additional dataset {i} missing source configuration")
+
+        loader = create_loader_from_config(
+            source_config=source,
+            uploaded_datasets=uploaded_datasets,
+            hf_token=hf_token
+        )
+        loaders.append(loader)
+        column_mappings.append(getattr(additional, 'column_mapping', None))
+        convert_flags.append(getattr(additional, 'convert_messages_format', True))
+
+    logger.info(f"Created {len(loaders)} additional dataset loaders for concatenation")
+    return loaders, column_mappings, convert_flags
+
+
 def create_pipeline_from_config(
     dataset_config: Any,
     uploaded_datasets: Optional[Dict[str, Tuple[bytes, str]]] = None,
@@ -168,12 +210,16 @@ def create_pipeline_from_config(
     Raises:
         LoaderCreationError: If configuration is invalid
     """
-    # Create loader
+    # Create primary loader
     loader = create_loader_from_config(
         source_config=dataset_config.source,
         uploaded_datasets=uploaded_datasets,
         hf_token=hf_token
     )
+
+    # Create additional loaders for concatenation
+    additional_loaders, additional_column_mappings, additional_convert_messages = \
+        create_additional_loaders_from_config(dataset_config, uploaded_datasets, hf_token)
 
     # Get format configuration
     format_config = dataset_config.format
@@ -194,6 +240,7 @@ def create_pipeline_from_config(
     test_size = getattr(dataset_config, 'test_size', 0.1)
     max_samples = getattr(dataset_config, 'max_samples', None)
     training_mode = getattr(dataset_config, 'training_mode', 'orpo')
+    convert_messages_format = getattr(dataset_config, 'convert_messages_format', True)
 
     # Create pipeline
     return DatasetPipeline(
@@ -204,5 +251,9 @@ def create_pipeline_from_config(
         max_samples=max_samples,
         seed=seed,
         shuffle=shuffle,
-        training_mode=training_mode
+        training_mode=training_mode,
+        convert_messages_format=convert_messages_format,
+        additional_loaders=additional_loaders,
+        additional_column_mappings=additional_column_mappings,
+        additional_convert_messages=additional_convert_messages
     )

@@ -20,6 +20,7 @@ from .validators import validate_dataset_schema, DatasetValidationError
 from .factory import (
     create_loader,
     create_loader_from_config,
+    create_additional_loaders_from_config,
     create_pipeline_from_config,
     LoaderCreationError
 )
@@ -44,6 +45,7 @@ __all__ = [
     'DatasetValidationError',
     'create_loader',
     'create_loader_from_config',
+    'create_additional_loaders_from_config',
     'create_pipeline_from_config',
     'LoaderCreationError',
 ]

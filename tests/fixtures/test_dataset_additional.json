@@ -1,0 +1,19 @@
+[
+  {
+    "system": "You are a geography expert.",
+    "prompt": "What is the largest continent?",
+    "chosen": "Asia is the largest continent by both area and population.",
+    "rejected": "Africa is the largest."
+  },
+  {
+    "system": "You are a science teacher.",
+    "prompt": "What is photosynthesis?",
+    "chosen": "Photosynthesis is the process by which green plants use sunlight to convert carbon dioxide and water into glucose and oxygen.",
+    "rejected": "It's when plants eat food."
+  },
+  {
+    "prompt": "What color is the sky?",
+    "chosen": "The sky appears blue due to Rayleigh scattering of sunlight by the atmosphere.",
+    "rejected": "Green."
+  }
+]

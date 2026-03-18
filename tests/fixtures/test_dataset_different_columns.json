@@ -1,0 +1,12 @@
+[
+  {
+    "question": "How do you say hello in Spanish?",
+    "answer": "In Spanish, hello is 'Hola'.",
+    "bad_answer": "It's 'Bonjour'."
+  },
+  {
+    "question": "What is the speed of light?",
+    "answer": "The speed of light is approximately 299,792,458 meters per second.",
+    "bad_answer": "About 100 mph."
+  }
+]

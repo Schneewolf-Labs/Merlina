@@ -13,6 +13,8 @@ class DatasetManager {
         this.uploadedDatasetId = null;
         this.datasetColumns = null;
         this.datasetSamples = null;
+        this.additionalDatasets = []; // Array of additional dataset configs
+        this.additionalDatasetCounter = 0;
 
         this.toast = new Toast();
         this.setupEventListeners();
@@ -55,6 +57,12 @@ class DatasetManager {
         const previewFormattedBtn = document.getElementById('preview-formatted-button');
         if (previewFormattedBtn) {
             previewFormattedBtn.addEventListener('click', () => this.handlePreviewFormatted());
+        }
+
+        // Add additional dataset button
+        const addDatasetBtn = document.getElementById('add-dataset-button');
+        if (addDatasetBtn) {
+            addDatasetBtn.addEventListener('click', () => this.addAdditionalDataset());
         }
     }
 
@@ -445,6 +453,12 @@ class DatasetManager {
             config.convert_messages_format = true;  // Default to true
         }
 
+        // Add additional datasets for concatenation
+        const additionalConfigs = this.getAdditionalDatasetsConfig();
+        if (additionalConfigs.length > 0) {
+            config.additional_datasets = additionalConfigs;
+        }
+
         // Get training mode for validation and include in config
         // For previews, use 'sft' mode to skip rejected column requirement
         const trainingMode = forPreview ? 'sft' : (document.getElementById('training-mode')?.value || 'orpo');
@@ -457,6 +471,206 @@ class DatasetManager {
         }
 
         return config;
+    }
+
+    /**
+     * Add an additional dataset entry to the UI
+     */
+    addAdditionalDataset() {
+        const id = this.additionalDatasetCounter++;
+        const listEl = document.getElementById('additional-datasets-list');
+        if (!listEl) return;
+
+        const entry = document.createElement('div');
+        entry.className = 'additional-dataset-entry';
+        entry.id = `additional-dataset-${id}`;
+        entry.style.cssText = 'background: #f5f7fa; border: 1px solid var(--light-purple); border-radius: 10px; padding: 15px; margin-bottom: 10px; position: relative;';
+
+        entry.innerHTML = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                <strong style="color: var(--primary-purple);">Dataset #${id + 2}</strong>
+                <button type="button" class="remove-dataset-btn" data-id="${id}"
+                    style="background: var(--danger); color: white; border: none; border-radius: 5px; padding: 4px 10px; cursor: pointer; font-size: 0.85em;">
+                    Remove
+                </button>
+            </div>
+            <div class="form-group" style="margin-bottom: 10px;">
+                <label>Source Type</label>
+                <select class="magic-select additional-source-type" data-id="${id}">
+                    <option value="huggingface">HuggingFace Dataset</option>
+                    <option value="upload">Upload File</option>
+                    <option value="local_file">Local File Path</option>
+                </select>
+            </div>
+            <div class="additional-hf-config" data-id="${id}">
+                <div class="form-group" style="margin-bottom: 10px;">
+                    <label>HuggingFace Repository ID</label>
+                    <input type="text" class="magic-input additional-hf-repo" data-id="${id}" placeholder="username/dataset-name">
+                </div>
+                <div class="form-group" style="margin-bottom: 10px;">
+                    <label>Split</label>
+                    <input type="text" class="magic-input additional-hf-split" data-id="${id}" value="train">
+                </div>
+            </div>
+            <div class="additional-upload-config" data-id="${id}" style="display: none;">
+                <div class="form-group" style="margin-bottom: 10px;">
+                    <label>Upload Dataset File</label>
+                    <input type="file" class="magic-input additional-upload-file" data-id="${id}" accept=".json,.jsonl,.csv,.parquet">
+                </div>
+                <button type="button" class="action-button additional-upload-btn" data-id="${id}" style="margin-bottom: 10px;">
+                    Upload
+                </button>
+                <div class="additional-upload-status" data-id="${id}"></div>
+            </div>
+            <div class="additional-local-config" data-id="${id}" style="display: none;">
+                <div class="form-group" style="margin-bottom: 10px;">
+                    <label>File Path</label>
+                    <input type="text" class="magic-input additional-local-path" data-id="${id}" placeholder="/path/to/dataset.json">
+                </div>
+                <div class="form-group" style="margin-bottom: 10px;">
+                    <label>File Format</label>
+                    <select class="magic-select additional-local-format" data-id="${id}">
+                        <option value="">Auto-detect</option>
+                        <option value="json">JSON</option>
+                        <option value="csv">CSV</option>
+                        <option value="parquet">Parquet</option>
+                    </select>
+                </div>
+            </div>
+            <div class="form-row" style="gap: 10px;">
+                <div class="form-group" style="flex: 1;">
+                    <label>Column Mapping (Optional)</label>
+                    <input type="text" class="magic-input additional-col-mapping" data-id="${id}"
+                        placeholder='e.g. {"input":"prompt","output":"chosen"}'>
+                    <small style="color: #888; font-size: 0.85em;">JSON mapping of source columns to standard names</small>
+                </div>
+                <div class="form-group" style="flex: 0 0 auto; display: flex; align-items: center; padding-top: 20px;">
+                    <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.9em;">
+                        <input type="checkbox" class="additional-convert-messages" data-id="${id}" checked>
+                        <span>Auto-convert messages</span>
+                    </label>
+                </div>
+            </div>
+        `;
+
+        listEl.appendChild(entry);
+        this.additionalDatasets.push({ id, uploadedDatasetId: null });
+
+        // Setup source type toggle for this entry
+        const sourceTypeSelect = entry.querySelector('.additional-source-type');
+        sourceTypeSelect.addEventListener('change', (e) => {
+            const entryId = e.target.dataset.id;
+            entry.querySelector(`.additional-hf-config[data-id="${entryId}"]`).style.display =
+                e.target.value === 'huggingface' ? 'block' : 'none';
+            entry.querySelector(`.additional-upload-config[data-id="${entryId}"]`).style.display =
+                e.target.value === 'upload' ? 'block' : 'none';
+            entry.querySelector(`.additional-local-config[data-id="${entryId}"]`).style.display =
+                e.target.value === 'local_file' ? 'block' : 'none';
+        });
+
+        // Setup remove button
+        entry.querySelector('.remove-dataset-btn').addEventListener('click', () => {
+            this.removeAdditionalDataset(id);
+        });
+
+        // Setup upload button
+        const uploadBtn = entry.querySelector('.additional-upload-btn');
+        if (uploadBtn) {
+            uploadBtn.addEventListener('click', () => this.handleAdditionalUpload(id));
+        }
+    }
+
+    /**
+     * Remove an additional dataset entry
+     */
+    removeAdditionalDataset(id) {
+        const entry = document.getElementById(`additional-dataset-${id}`);
+        if (entry) entry.remove();
+        this.additionalDatasets = this.additionalDatasets.filter(d => d.id !== id);
+    }
+
+    /**
+     * Handle upload for an additional dataset
+     */
+    async handleAdditionalUpload(id) {
+        const fileInput = document.querySelector(`.additional-upload-file[data-id="${id}"]`);
+        const statusEl = document.querySelector(`.additional-upload-status[data-id="${id}"]`);
+        const file = fileInput?.files[0];
+
+        if (!file) {
+            this.toast.error('Please select a file to upload');
+            return;
+        }
+
+        try {
+            const data = await MerlinaAPI.uploadDataset(file);
+            const entry = this.additionalDatasets.find(d => d.id === id);
+            if (entry) entry.uploadedDatasetId = data.dataset_id;
+
+            if (statusEl) {
+                statusEl.innerHTML = `<div style="color: green; font-size: 0.85em;">Uploaded: ${sanitizeHTML(data.filename)} (ID: ${sanitizeHTML(data.dataset_id)})</div>`;
+            }
+            this.toast.success('Additional dataset uploaded!');
+        } catch (error) {
+            if (statusEl) {
+                statusEl.innerHTML = `<div style="color: red; font-size: 0.85em;">Upload failed: ${sanitizeHTML(error.message)}</div>`;
+            }
+            this.toast.error(`Upload failed: ${error.message}`);
+        }
+    }
+
+    /**
+     * Get additional datasets configuration array
+     */
+    getAdditionalDatasetsConfig() {
+        const configs = [];
+
+        for (const dataset of this.additionalDatasets) {
+            const id = dataset.id;
+            const entry = document.getElementById(`additional-dataset-${id}`);
+            if (!entry) continue;
+
+            const sourceType = entry.querySelector('.additional-source-type')?.value;
+            let source = { source_type: sourceType };
+
+            if (sourceType === 'huggingface') {
+                const repoId = entry.querySelector('.additional-hf-repo')?.value?.trim();
+                if (!repoId) continue; // Skip empty entries
+                source.repo_id = repoId;
+                source.split = entry.querySelector('.additional-hf-split')?.value || 'train';
+            } else if (sourceType === 'upload') {
+                if (!dataset.uploadedDatasetId) continue;
+                source.dataset_id = dataset.uploadedDatasetId;
+            } else if (sourceType === 'local_file') {
+                const filePath = entry.querySelector('.additional-local-path')?.value?.trim();
+                if (!filePath) continue;
+                source.file_path = filePath;
+                const format = entry.querySelector('.additional-local-format')?.value;
+                if (format) source.file_format = format;
+            }
+
+            // Parse column mapping
+            let columnMapping = null;
+            const colMappingStr = entry.querySelector('.additional-col-mapping')?.value?.trim();
+            if (colMappingStr) {
+                try {
+                    columnMapping = JSON.parse(colMappingStr);
+                } catch (e) {
+                    this.toast.error(`Invalid column mapping JSON for Dataset #${id + 2}`);
+                    throw new Error(`Invalid column mapping JSON for Dataset #${id + 2}`);
+                }
+            }
+
+            const convertMessages = entry.querySelector('.additional-convert-messages')?.checked ?? true;
+
+            configs.push({
+                source: source,
+                column_mapping: columnMapping,
+                convert_messages_format: convertMessages
+            });
+        }
+
+        return configs;
     }
 
     /**

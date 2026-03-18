@@ -38,6 +38,7 @@ from dataset_handlers import (
     UploadedDatasetLoader,
     get_formatter,
     create_loader_from_config,
+    create_additional_loaders_from_config,
     LoaderCreationError
 )
 
@@ -179,6 +180,19 @@ class DatasetFormat(BaseModel):
     )
 
 
+class AdditionalDatasetSource(BaseModel):
+    """Configuration for an additional dataset to concatenate with the primary dataset"""
+    source: DatasetSource = Field(..., description="Dataset source configuration")
+    column_mapping: Optional[dict] = Field(
+        None,
+        description="Column mapping for this additional dataset"
+    )
+    convert_messages_format: bool = Field(
+        True,
+        description="Automatically detect and convert messages format for this dataset"
+    )
+
+
 class DatasetConfig(BaseModel):
     """Complete dataset configuration"""
     source: DatasetSource = Field(
@@ -208,6 +222,12 @@ class DatasetConfig(BaseModel):
     convert_messages_format: bool = Field(
         True,
         description="Automatically detect and convert messages format to standard format"
+    )
+
+    # Additional datasets to concatenate
+    additional_datasets: Optional[list[AdditionalDatasetSource]] = Field(
+        None,
+        description="Additional datasets to concatenate with the primary dataset. Each can have its own source, column mapping, and messages format conversion setting."
     )
 
     # Additional options
@@ -982,6 +1002,10 @@ async def preview_dataset(config: DatasetConfig):
             enable_thinking=config.format.enable_thinking
         )
 
+        # Create additional loaders for concatenation
+        additional_loaders, additional_column_mappings, additional_convert_messages = \
+            create_additional_loaders_from_config(config, uploaded_datasets)
+
         # Create pipeline
         pipeline = DatasetPipeline(
             loader=loader,
@@ -990,7 +1014,10 @@ async def preview_dataset(config: DatasetConfig):
             test_size=config.test_size,
             max_samples=config.max_samples,
             training_mode=config.training_mode,
-            convert_messages_format=config.convert_messages_format
+            convert_messages_format=config.convert_messages_format,
+            additional_loaders=additional_loaders,
+            additional_column_mappings=additional_column_mappings,
+            additional_convert_messages=additional_convert_messages
         )
 
         # Preview raw data
@@ -1054,6 +1081,10 @@ async def preview_formatted_dataset(config: DatasetConfig):
                 enable_thinking=config.format.enable_thinking
             )
 
+        # Create additional loaders for concatenation
+        additional_loaders, additional_column_mappings, additional_convert_messages = \
+            create_additional_loaders_from_config(config, uploaded_datasets)
+
         # Create pipeline
         pipeline = DatasetPipeline(
             loader=loader,
@@ -1062,7 +1093,10 @@ async def preview_formatted_dataset(config: DatasetConfig):
             test_size=config.test_size,
             max_samples=config.max_samples,
             training_mode=config.training_mode,
-            convert_messages_format=config.convert_messages_format
+            convert_messages_format=config.convert_messages_format,
+            additional_loaders=additional_loaders,
+            additional_column_mappings=additional_column_mappings,
+            additional_convert_messages=additional_convert_messages
         )
 
         # Preview formatted data
