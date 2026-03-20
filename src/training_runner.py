@@ -767,10 +767,12 @@ def run_training_sync(
             if config.eval_steps < 1:
                 import math
                 num_gpus = get_num_gpus()
-                effective_batch = config.batch_size * config.gradient_accumulation_steps * num_gpus
-                steps_per_epoch = math.ceil(len(train_dataset) / effective_batch)
+                # Match Grimoire's step calculation: DataLoader uses drop_last=True
+                # so dataloader length is floor division, then ceil by grad_accum
+                batches_per_epoch = len(train_dataset) // (config.batch_size * num_gpus)
+                steps_per_epoch = math.ceil(batches_per_epoch / config.gradient_accumulation_steps)
                 total_steps = steps_per_epoch * config.num_epochs
-                eval_steps = max(1, int(total_steps * config.eval_steps))
+                eval_steps = max(1, round(total_steps * config.eval_steps))
                 logger.info(
                     f"Eval steps: {eval_steps} (ratio={config.eval_steps}, "
                     f"dataset={len(train_dataset)}, batch={config.batch_size}, "
