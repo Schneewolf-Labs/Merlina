@@ -9,7 +9,7 @@ python-multipart>=0.0.6
 torch>=2.0.0
 transformers>=4.36.0
 accelerate>=0.24.0
-grimoire @ git+https://github.com/Schneewolf-Labs/grimoire.git
+grimoire-rl @ git+https://github.com/Schneewolf-Labs/grimoire.git
 peft>=0.6.0
 bitsandbytes>=0.41.0
 datasets>=2.14.0
