@@ -176,9 +176,9 @@ def generate_wandb_run_name(config: Any) -> str:
     """
     Generate a descriptive W&B run name from training configuration.
 
-    Format: [model_name]-[lora_r]-[lr]-[batch]-[epochs]ep-[optimizer]-[attention]
-    Example: llama3-8b-r64-5e-6LR-256B-2ep-adamw8bit-flash2
-    Example (no LoRA): llama3-8b-full-5e-6LR-256B-2ep-adamw8bit-flash2
+    Format: [model_name]-[training_mode]-[lora_r]-[lr]-[batch]-[epochs]ep-[optimizer]-[attention]
+    Example: llama3-8b-orpo-r64-5e-6LR-256B-2ep-adamw8bit-flash2
+    Example (no LoRA): llama3-8b-sft-full-5e-6LR-256B-2ep-adamw8bit-flash2
 
     Args:
         config: Training configuration object
@@ -213,9 +213,10 @@ def generate_wandb_run_name(config: Any) -> str:
     }
     attn = attn_map.get(config.attn_implementation, config.attn_implementation)
 
-    # Build run name - include LoRA rank or "full" if not using LoRA
+    # Build run name - include training mode and LoRA rank or "full" if not using LoRA
     parts = [
         model_name,
+        config.training_mode.lower(),
         f"r{config.lora_r}" if config.use_lora else "full",
         f"{lr_str}LR",
         f"{effective_batch}B",
