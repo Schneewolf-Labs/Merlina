@@ -88,7 +88,7 @@ def generate_model_readme(config: Any, training_mode: str) -> str:
     ]
 
     # Add preference-specific params
-    preference_modes = {"orpo", "dpo", "simpo", "cpo", "ipo"}
+    preference_modes = {"orpo", "dpo", "simpo", "cpo", "ipo", "kto"}
     if training_mode.lower() in preference_modes:
         config_lines.append(f"| Beta | {config.beta} |")
         config_lines.append(f"| Max Prompt Length | {config.max_prompt_length} |")
@@ -234,7 +234,7 @@ def generate_wandb_run_name(config: Any) -> str:
     if config.gradient_checkpointing:
         suffixes.append("gc")
     # Only add beta for preference modes (SFT doesn't use beta)
-    preference_modes = {"orpo", "dpo", "simpo", "cpo", "ipo"}
+    preference_modes = {"orpo", "dpo", "simpo", "cpo", "ipo", "kto"}
     if config.beta != 0.1 and config.training_mode in preference_modes:
         suffixes.append(f"beta{config.beta}")
 
