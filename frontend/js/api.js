@@ -258,15 +258,15 @@ class MerlinaAPI {
         }, LONG_TIMEOUT);
     }
 
-    static async previewDataset(config) {
-        return this.fetch('/dataset/preview', {
+    static async previewDataset(config, offset = 0, limit = 10) {
+        return this.fetch(`/dataset/preview?offset=${offset}&limit=${limit}`, {
             method: 'POST',
             body: JSON.stringify(config)
         }, LONG_TIMEOUT);
     }
 
-    static async previewFormattedDataset(config) {
-        return this.fetch('/dataset/preview-formatted', {
+    static async previewFormattedDataset(config, offset = 0, limit = 5) {
+        return this.fetch(`/dataset/preview-formatted?offset=${offset}&limit=${limit}`, {
             method: 'POST',
             body: JSON.stringify(config)
         }, LONG_TIMEOUT);
