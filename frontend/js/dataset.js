@@ -16,7 +16,7 @@ class DatasetManager {
 
         // Preview navigation state
         this.previewOffset = 0;
-        this.previewLimit = 5;
+        this.previewLimit = 1;
         this.previewTotalCount = 0;
         this.previewType = null; // 'raw' or 'formatted'
 
@@ -362,7 +362,7 @@ class DatasetManager {
     async handlePreview() {
         this.previewType = 'raw';
         this.previewOffset = 0;
-        this.previewLimit = parseInt(document.getElementById('preview-limit').value) || 5;
+        this.previewLimit = parseInt(document.getElementById('preview-limit').value) || 1;
         await this.loadPreview();
     }
 
@@ -426,7 +426,7 @@ class DatasetManager {
     async handlePreviewFormatted() {
         this.previewType = 'formatted';
         this.previewOffset = 0;
-        this.previewLimit = parseInt(document.getElementById('preview-limit').value) || 5;
+        this.previewLimit = parseInt(document.getElementById('preview-limit').value) || 1;
         await this.loadFormattedPreview();
     }
 
@@ -715,7 +715,7 @@ class DatasetManager {
             return;
         }
 
-        this.previewLimit = parseInt(e.target.value) || 5;
+        this.previewLimit = parseInt(e.target.value) || 1;
         // Reset to beginning when changing limit
         this.previewOffset = 0;
         await this.loadPreview();

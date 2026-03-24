@@ -320,18 +320,8 @@
                     </div>
 
                     <!-- Preview Controls -->
+                    <input type="hidden" id="preview-limit" value="1">
                     <div style="display: flex; gap: 10px; margin-bottom: 15px; align-items: center; flex-wrap: wrap;">
-                        <div style="display: flex; gap: 5px; align-items: center;">
-                            <label for="preview-limit" style="font-size: 0.9em; color: var(--primary-purple); white-space: nowrap;">Samples:</label>
-                            <select id="preview-limit" class="magic-input" style="width: 80px; padding: 5px;">
-                                <option value="1">1</option>
-                                <option value="3">3</option>
-                                <option value="5" selected>5</option>
-                                <option value="10">10</option>
-                                <option value="20">20</option>
-                                <option value="50">50</option>
-                            </select>
-                        </div>
                         <div style="display: flex; gap: 5px; align-items: center; flex: 1;">
                             <label for="preview-index" style="font-size: 0.9em; color: var(--primary-purple); white-space: nowrap;">Jump to:</label>
                             <input type="number" id="preview-index" min="1" value="1" class="magic-input" style="width: 100px; padding: 5px;">
