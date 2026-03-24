@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-03-24 "Crystal Ball"
+
+### Added
+- **VLM Support**: Auto-detects vision-language models (Qwen-VL, LLaVA, etc.) and loads with correct `AutoModelForVision2Seq` class, preserving vision capabilities. Manual override via `model_type` dropdown (Auto/CausalLM/VLM).
+- **Suggested Settings Presets**: Paper-backed recommended hyperparameters for all 7 training methods. "Apply Suggested Settings" button fills in optimal learning rate, beta, epochs, etc. per method. Available via `GET /presets/{mode}` API.
+- **Multi-Dataset Concatenation**: Add multiple HuggingFace datasets to combine for training. Each additional source supports its own column mapping. All sources concatenated before formatting and splitting.
+- **Dataset Deduplication**: Remove duplicate samples before training with configurable strategies (prompt, chosen, prompt+chosen, exact match). Toggle in Advanced Options.
+- **Dataset Previewer Navigation**: Browse dataset samples one at a time with Prev/Next buttons, jump-to-index, and position indicator. Preview endpoints support `offset`/`limit` pagination.
+- **Section Navigation UI**: Sticky tabbed banner (Model, Dataset, Training, Jobs) replaces scrolling through one long page. Auto-switches to Jobs tab after submitting training.
+- **Output Name Generator**: "Generate" button creates model names from base model + dataset + training method (e.g. `Qwen2.5-7B-Instruct-MyDataset-ORPO`).
+- Per-source `column_mapping` field on `DatasetSource` for multi-dataset workflows.
+- `GET /presets` endpoint listing all available presets.
+
+### Changed
+- SimPO suggested beta is 2.0 (was defaulting to 0.1, matching DPO — 20x too low per the SimPO paper).
+- IPO suggested beta is 0.01 (was 0.1 — IPO's beta has inverted meaning, smaller = stronger margin).
+- SFT suggested learning rate is 2e-4 for LoRA (was 5e-6 — LoRA rates should be ~10x full fine-tuning).
+- KTO suggested batch_size is 4 (per-step batch must be >= 4 for stable KL estimation per the KTO paper).
+- All preference methods suggest 1 epoch and lora_dropout=0 (paper consensus: preference methods overfit fast, dropout interferes with preference signal).
+- Jobs section is always accessible via nav tab (no longer auto-hidden when empty).
+
+### Fixed
+- VLM models (e.g. `Qwen3_5ForConditionalGeneration`) were silently loaded as text-only `Qwen3_5ForCausalLM`, stripping vision components. Fixed in both training and LoRA merge paths.
+
+
+
 ## [1.3.0] - 2026-03-14 "Seven Spells"
 
 ### Added
