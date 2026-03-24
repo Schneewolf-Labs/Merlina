@@ -285,6 +285,18 @@ Merlina supports loading models from two sources:
 - HuggingFace models: Checks for gated models and required tokens
 - Both: Automatically detected via `is_local_model_path()` function
 
+### Model Type Detection (VLM Support)
+
+Merlina supports both text-only LLMs and vision-language models (VLMs). The `model_type` configuration parameter controls which AutoModel class is used for loading:
+
+- **`auto`** (default): Auto-detects by checking the model's config for `vision_config` or VLM architecture patterns (`ForConditionalGeneration`, `ForVision`, `ImageText`). Works for most models.
+- **`causal_lm`**: Forces `AutoModelForCausalLM` (text-only LLM).
+- **`vlm`**: Forces `AutoModelForVision2Seq` (vision-language model). Use this for models like Qwen-VL, LLaVA, etc. to preserve vision capabilities.
+
+**Why this matters**: Using `AutoModelForCausalLM` on a VLM (e.g., `Qwen3_5ForConditionalGeneration`) causes transformers to load the text-only variant (`Qwen3_5ForCausalLM`), stripping vision components.
+
+**Implementation**: `_detect_is_vlm()` and `_get_auto_model_class()` in `src/training_runner.py`. Both model loading (for training) and model reloading (for LoRA merge before upload) use the correct class.
+
 ### Job Queue System (v1.1)
 
 Jobs are managed through a priority queue system with configurable concurrency:

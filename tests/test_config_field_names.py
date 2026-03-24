@@ -65,7 +65,7 @@ class TestTrainingConfigFieldNames:
         """
         # Fields the frontend JS builds in getConfig()
         frontend_fields = {
-            "base_model", "output_name", "training_mode",
+            "base_model", "output_name", "model_type", "training_mode",
             "use_lora", "lora_r", "lora_alpha", "lora_dropout",
             "target_modules", "modules_to_save",
             "use_4bit", "max_length", "max_prompt_length",

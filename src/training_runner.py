@@ -21,7 +21,9 @@ from datetime import datetime
 from typing import Optional, Dict, Any, Callable
 
 from transformers import (
+    AutoConfig,
     AutoModelForCausalLM,
+    AutoModelForVision2Seq,
     AutoTokenizer,
     BitsAndBytesConfig,
 )
@@ -48,6 +50,53 @@ from src.preflight_checks import is_local_model_path
 from src.utils import get_num_gpus, calculate_effective_batch_size, get_torch_dtype
 
 logger = logging.getLogger(__name__)
+
+# VLM architecture detection patterns
+_VLM_ARCH_PATTERNS = ['ForConditionalGeneration', 'ForVision', 'ImageText']
+
+
+def _detect_is_vlm(model_name: str) -> bool:
+    """Detect if a model is a VLM by checking its config for vision components."""
+    try:
+        auto_config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+        # Check for vision config (most reliable indicator)
+        if hasattr(auto_config, 'vision_config') or hasattr(auto_config, 'visual'):
+            return True
+        # Check architecture name patterns
+        architectures = getattr(auto_config, 'architectures', []) or []
+        if architectures:
+            arch = architectures[0]
+            if any(p in arch for p in _VLM_ARCH_PATTERNS):
+                return True
+    except Exception as e:
+        logger.debug(f"Could not auto-detect model type for {model_name}: {e}")
+    return False
+
+
+def _get_auto_model_class(model_name: str, model_type: str = "auto"):
+    """Return the appropriate AutoModel class for loading.
+
+    Args:
+        model_name: HuggingFace model ID or local path.
+        model_type: "auto" (detect), "causal_lm", or "vlm".
+
+    Returns:
+        (auto_model_class, is_vlm) tuple.
+    """
+    if model_type == "vlm":
+        is_vlm = True
+    elif model_type == "causal_lm":
+        is_vlm = False
+    else:
+        # Auto-detect
+        is_vlm = _detect_is_vlm(model_name)
+
+    if is_vlm:
+        logger.info("Model type: VLM — using AutoModelForVision2Seq")
+        return AutoModelForVision2Seq, True
+    else:
+        logger.info("Model type: Causal LM — using AutoModelForCausalLM")
+        return AutoModelForCausalLM, False
 
 
 def _run_background_upload(
@@ -107,11 +156,14 @@ def _run_background_upload(
 
             try:
                 # Force CPU-only loading to avoid GPU OOM when another job is training
-                base_model_reload = AutoModelForCausalLM.from_pretrained(
+                model_type = getattr(config, 'model_type', 'auto')
+                reload_cls, _ = _get_auto_model_class(config.base_model, model_type)
+                base_model_reload = reload_cls.from_pretrained(
                     config.base_model,
                     low_cpu_mem_usage=True,
                     torch_dtype=torch.bfloat16,
                     device_map="cpu",  # Force CPU to avoid GPU conflicts
+                    trust_remote_code=True,
                 )
 
                 model_merged = PeftModel.from_pretrained(
@@ -543,7 +595,10 @@ def run_training_sync(
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
-        model = AutoModelForCausalLM.from_pretrained(
+        model_type = getattr(config, 'model_type', 'auto')
+        auto_model_cls, is_vlm = _get_auto_model_class(config.base_model, model_type)
+
+        model = auto_model_cls.from_pretrained(
             config.base_model,
             quantization_config=bnb_config,
             attn_implementation=attn_implementation,

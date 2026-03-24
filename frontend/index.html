@@ -43,6 +43,15 @@
                         <input type="text" id="base-model" placeholder="meta-llama/Meta-Llama-3-8B-Instruct" class="magic-input" required>
                         <small style="color: #888; font-size: 0.85em;">Examples: meta-llama/Llama-3.2-3B-Instruct, mistralai/Mistral-7B-Instruct-v0.3, Qwen/Qwen2.5-7B-Instruct</small>
                     </div>
+                    <div class="form-group">
+                        <label>🧠 Model Type</label>
+                        <select id="model-type" class="magic-select">
+                            <option value="auto" selected>Auto-detect</option>
+                            <option value="causal_lm">Text LLM (CausalLM)</option>
+                            <option value="vlm">Vision-Language Model (VLM)</option>
+                        </select>
+                        <small style="color: #888; font-size: 0.85em;">Auto-detect works for most models. Select VLM for vision models like Qwen-VL to preserve vision capabilities.</small>
+                    </div>
                 </div>
 
                 <div class="spell-section">

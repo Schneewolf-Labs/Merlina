@@ -120,6 +120,7 @@ class ConfigManager {
         const config = {
             base_model: document.getElementById('base-model')?.value || '',
             output_name: document.getElementById('output-name')?.value || '',
+            model_type: document.getElementById('model-type')?.value || 'auto',
             training_mode: trainingMode,
             use_lora: useLora,
             ...loraConfig,
@@ -349,6 +350,7 @@ class ConfigManager {
         // Basic settings
         this.setInputValue('base-model', config.base_model);
         this.setInputValue('output-name', config.output_name);
+        this.setInputValue('model-type', config.model_type || 'auto');
         this.setCheckboxValue('use-lora', config.use_lora);
         this.setCheckboxValue('use-4bit', config.use_4bit);
 

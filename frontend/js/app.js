@@ -176,6 +176,7 @@ class MerlinaApp {
         const config = {
             base_model: document.getElementById('base-model')?.value || '',
             output_name: document.getElementById('output-name')?.value || '',
+            model_type: document.getElementById('model-type')?.value || 'auto',
 
             // Dataset
             dataset: datasetConfig,

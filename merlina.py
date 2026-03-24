@@ -248,6 +248,12 @@ class TrainingConfig(BaseModel):
     max_length: int = Field(2048, ge=512, le=8192)
     max_prompt_length: int = Field(1024, ge=256, le=4096)
 
+    # Model type
+    model_type: str = Field(
+        "auto",
+        description="Model type: 'auto' (detect from config), 'causal_lm' (text-only LLM), or 'vlm' (vision-language model)"
+    )
+
     # Training mode
     training_mode: str = Field(
         "orpo",
