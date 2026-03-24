@@ -367,6 +367,24 @@
                             <small style="color: #888; font-size: 0.85em;">Limit dataset size for testing</small>
                         </div>
                     </div>
+                    <div class="form-row" style="margin-top: 10px;">
+                        <div class="form-group" style="flex: 1;">
+                            <label style="display: flex; align-items: center; cursor: pointer; user-select: none;">
+                                <input type="checkbox" id="deduplicate" style="margin-right: 10px; width: 18px; height: 18px; cursor: pointer;">
+                                <span>Remove Duplicate Samples</span>
+                            </label>
+                            <small style="color: #888; font-size: 0.85em;">Removes duplicates before training. Useful when combining multiple datasets.</small>
+                        </div>
+                        <div class="form-group" style="flex: 1;">
+                            <label>Deduplication Strategy</label>
+                            <select id="dedupe-strategy" class="magic-select">
+                                <option value="prompt_chosen" selected>Prompt + Chosen</option>
+                                <option value="prompt">Prompt Only</option>
+                                <option value="chosen">Chosen Only</option>
+                                <option value="exact">Exact Match (All Fields)</option>
+                            </select>
+                        </div>
+                    </div>
                 </div>
             </section>
 

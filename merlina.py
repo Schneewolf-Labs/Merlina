@@ -223,6 +223,13 @@ class DatasetConfig(BaseModel):
         description="Automatically detect and convert messages format to standard format"
     )
 
+    # Deduplication
+    deduplicate: bool = Field(False, description="Remove duplicate samples before training")
+    dedupe_strategy: str = Field(
+        "prompt_chosen",
+        description="Deduplication strategy: 'prompt', 'chosen', 'prompt_chosen', or 'exact'"
+    )
+
     # Additional options
     test_size: float = Field(0.01, ge=0.001, le=0.5, description="Fraction of data for evaluation")
     max_samples: Optional[int] = Field(None, description="Limit dataset size (for testing)")

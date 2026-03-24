@@ -505,6 +505,10 @@ class DatasetManager {
             config.max_samples = parseInt(maxSamples);
         }
 
+        // Deduplication
+        config.deduplicate = document.getElementById('deduplicate')?.checked ?? false;
+        config.dedupe_strategy = document.getElementById('dedupe-strategy')?.value || 'prompt_chosen';
+
         // Add model name for tokenizer format
         const baseModel = document.getElementById('base-model')?.value?.trim();
         if (baseModel) {

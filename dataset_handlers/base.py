@@ -8,6 +8,7 @@ from typing import Optional, Callable
 from datasets import Dataset, concatenate_datasets
 import logging
 from .messages_converter import has_messages_format, convert_messages_dataset
+from .deduplication import deduplicate_dataset, DedupeStrategy
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,8 @@ class DatasetPipeline:
         training_mode: str = "orpo",
         convert_messages_format: bool = True,
         additional_loaders: Optional[list[tuple]] = None,
+        deduplicate: bool = False,
+        dedupe_strategy: DedupeStrategy = "prompt_chosen",
     ):
         """
         Initialize dataset pipeline.
@@ -83,6 +86,12 @@ class DatasetPipeline:
             convert_messages_format: Whether to automatically detect and convert messages format
             additional_loaders: List of (loader, column_mapping, convert_messages_format) tuples
                                for additional datasets to concatenate with the primary source
+            deduplicate: Whether to remove duplicate samples from the dataset
+            dedupe_strategy: Strategy for identifying duplicates:
+                - "prompt": Based on prompt field only
+                - "chosen": Based on chosen field only
+                - "prompt_chosen": Based on combined prompt+chosen (default)
+                - "exact": Based on all fields
         """
         self.loader = loader
         self.formatter = formatter
@@ -94,6 +103,8 @@ class DatasetPipeline:
         self.training_mode = training_mode
         self.convert_messages_format = convert_messages_format
         self.additional_loaders = additional_loaders or []
+        self.deduplicate = deduplicate
+        self.dedupe_strategy = dedupe_strategy
 
     def _load_and_map_source(self, loader, column_mapping, convert_messages):
         """Load a single source and apply its column mapping + messages conversion."""
@@ -144,6 +155,11 @@ class DatasetPipeline:
         # Validate schema
         logger.info("Validating dataset schema...")
         self._validate_schema(dataset)
+
+        # Deduplicate if enabled
+        if self.deduplicate:
+            logger.info(f"Deduplicating dataset (strategy='{self.dedupe_strategy}')...")
+            dataset = deduplicate_dataset(dataset, strategy=self.dedupe_strategy)
 
         # Limit samples if requested
         if self.max_samples and len(dataset) > self.max_samples:

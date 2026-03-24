@@ -17,6 +17,12 @@ from .formatters import (
     CHAT_TEMPLATES,
 )
 from .validators import validate_dataset_schema, DatasetValidationError
+from .deduplication import (
+    has_duplicates,
+    count_duplicates,
+    deduplicate_dataset,
+    DedupeStrategy
+)
 from .factory import (
     create_loader,
     create_loader_from_config,
@@ -46,4 +52,8 @@ __all__ = [
     'create_loader_from_config',
     'create_pipeline_from_config',
     'LoaderCreationError',
+    'has_duplicates',
+    'count_duplicates',
+    'deduplicate_dataset',
+    'DedupeStrategy',
 ]

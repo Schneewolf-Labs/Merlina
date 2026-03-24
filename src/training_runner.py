@@ -680,6 +680,8 @@ def run_training_sync(
             training_mode=config.training_mode,
             convert_messages_format=config.dataset.convert_messages_format,
             additional_loaders=additional_loaders if additional_loaders else None,
+            deduplicate=config.dataset.deduplicate,
+            dedupe_strategy=config.dataset.dedupe_strategy,
         )
 
         train_dataset, eval_dataset = pipeline.prepare()
