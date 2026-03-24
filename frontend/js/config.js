@@ -568,6 +568,34 @@ class ConfigManager {
             if (config.dataset.test_size) {
                 this.setInputValue('test-size', config.dataset.test_size);
             }
+
+            // Restore additional sources
+            if (config.dataset.additional_sources && config.dataset.additional_sources.length > 0) {
+                // Clear existing additional datasets
+                const listEl = document.getElementById('additional-datasets-list');
+                if (listEl) listEl.innerHTML = '';
+
+                // Use the DatasetManager to add entries
+                const dsManager = window.datasetManager;
+                if (dsManager) {
+                    for (const src of config.dataset.additional_sources) {
+                        dsManager.addAdditionalDataset();
+                        const entries = listEl.querySelectorAll('.additional-dataset-entry');
+                        const lastEntry = entries[entries.length - 1];
+                        if (lastEntry) {
+                            const repoInput = lastEntry.querySelector('.additional-ds-repo');
+                            const splitInput = lastEntry.querySelector('.additional-ds-split');
+                            const colmapInput = lastEntry.querySelector('.additional-ds-colmap');
+                            if (repoInput) repoInput.value = src.repo_id || '';
+                            if (splitInput) splitInput.value = src.split || 'train';
+                            if (colmapInput && src.column_mapping) {
+                                colmapInput.value = Object.entries(src.column_mapping)
+                                    .map(([k, v]) => `${k}=${v}`).join(', ');
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // Optional fields

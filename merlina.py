@@ -162,6 +162,12 @@ class DatasetSource(BaseModel):
     # For uploaded datasets (handled separately via upload endpoint)
     dataset_id: Optional[str] = Field(None, description="ID of previously uploaded dataset")
 
+    # Per-source column mapping (overrides DatasetConfig.column_mapping for this source)
+    column_mapping: Optional[dict] = Field(
+        None,
+        description="Map this dataset's columns to expected names (system, prompt, chosen, rejected)"
+    )
+
 
 class DatasetFormat(BaseModel):
     """Configuration for dataset formatting"""
@@ -188,7 +194,12 @@ class DatasetConfig(BaseModel):
             repo_id="schneewolflabs/Athanorlite-DPO",
             split="train"
         ),
-        description="Dataset source configuration"
+        description="Primary dataset source configuration"
+    )
+
+    additional_sources: list[DatasetSource] = Field(
+        default_factory=list,
+        description="Additional dataset sources to concatenate with the primary source"
     )
 
     format: DatasetFormat = Field(
@@ -199,10 +210,11 @@ class DatasetConfig(BaseModel):
     # Optional: model name for tokenizer-based formatting in preview
     model_name: Optional[str] = Field(None, description="Model name (required for tokenizer format preview)")
 
-    # Column mapping (if dataset uses different column names)
+    # Column mapping for the primary source (if dataset uses different column names)
     column_mapping: Optional[dict] = Field(
         None,
-        description="Map dataset columns to expected names (system, prompt, chosen, rejected)"
+        description="Map primary dataset columns to expected names (system, prompt, chosen, rejected). "
+                    "Additional sources use their own column_mapping field."
     )
 
     # Messages format conversion

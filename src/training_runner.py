@@ -640,12 +640,26 @@ def run_training_sync(
 
         logger.info(f"Loading dataset with config: {config.dataset.source.source_type}")
 
-        # Create loader using factory
+        # Create primary loader using factory
         loader = create_loader_from_config(
             source_config=config.dataset.source,
             uploaded_datasets=uploaded_datasets,
             hf_token=config.hf_token
         )
+
+        # Create additional loaders if configured
+        additional_loaders = []
+        if config.dataset.additional_sources:
+            logger.info(f"Creating loaders for {len(config.dataset.additional_sources)} additional dataset(s)")
+            for extra_source in config.dataset.additional_sources:
+                extra_loader = create_loader_from_config(
+                    source_config=extra_source,
+                    uploaded_datasets=uploaded_datasets,
+                    hf_token=config.hf_token
+                )
+                extra_mapping = extra_source.column_mapping if hasattr(extra_source, 'column_mapping') else None
+                extra_convert = config.dataset.convert_messages_format
+                additional_loaders.append((extra_loader, extra_mapping, extra_convert))
 
         # Get formatter
         formatter = get_formatter(
@@ -661,10 +675,11 @@ def run_training_sync(
             column_mapping=config.dataset.column_mapping,
             test_size=config.dataset.test_size,
             max_samples=config.dataset.max_samples,
-            seed=config.seed,  # Use config seed instead of hardcoded 42
-            shuffle=config.shuffle_dataset,  # Use config shuffle setting
+            seed=config.seed,
+            shuffle=config.shuffle_dataset,
             training_mode=config.training_mode,
-            convert_messages_format=config.dataset.convert_messages_format
+            convert_messages_format=config.dataset.convert_messages_format,
+            additional_loaders=additional_loaders if additional_loaders else None,
         )
 
         train_dataset, eval_dataset = pipeline.prepare()

@@ -56,6 +56,86 @@ class DatasetManager {
         if (previewFormattedBtn) {
             previewFormattedBtn.addEventListener('click', () => this.handlePreviewFormatted());
         }
+
+        // Add dataset button
+        const addDatasetBtn = document.getElementById('add-dataset-btn');
+        if (addDatasetBtn) {
+            addDatasetBtn.addEventListener('click', () => this.addAdditionalDataset());
+        }
+
+        this.additionalDatasetCounter = 0;
+    }
+
+    /**
+     * Add an additional dataset source entry to the UI
+     */
+    addAdditionalDataset() {
+        this.additionalDatasetCounter++;
+        const id = this.additionalDatasetCounter;
+        const container = document.getElementById('additional-datasets-list');
+        if (!container) return;
+
+        const entry = document.createElement('div');
+        entry.className = 'additional-dataset-entry';
+        entry.dataset.id = id;
+        entry.style.cssText = 'border: 1px solid var(--light-purple); border-radius: 10px; padding: 15px; margin-bottom: 10px; position: relative; background: #faf8ff;';
+        entry.innerHTML = `
+            <button type="button" class="remove-dataset-btn" data-id="${id}" style="position: absolute; top: 8px; right: 8px; background: none; border: none; cursor: pointer; font-size: 1.2em; color: #999;" title="Remove dataset">&times;</button>
+            <div class="form-group" style="margin-bottom: 8px;">
+                <label style="font-size: 0.9em;">HuggingFace Repository ID</label>
+                <input type="text" class="magic-input additional-ds-repo" placeholder="username/dataset-name">
+            </div>
+            <div class="form-row" style="gap: 10px;">
+                <div class="form-group" style="flex: 1;">
+                    <label style="font-size: 0.9em;">Split</label>
+                    <input type="text" class="magic-input additional-ds-split" value="train">
+                </div>
+                <div class="form-group" style="flex: 2;">
+                    <label style="font-size: 0.9em;">Column Mapping (optional, comma-separated key=value)</label>
+                    <input type="text" class="magic-input additional-ds-colmap" placeholder="e.g. input=prompt,output=chosen,bad=rejected">
+                </div>
+            </div>
+        `;
+        container.appendChild(entry);
+
+        // Add remove handler
+        entry.querySelector('.remove-dataset-btn').addEventListener('click', () => {
+            entry.remove();
+        });
+    }
+
+    /**
+     * Get additional dataset sources from the UI
+     */
+    getAdditionalSources() {
+        const entries = document.querySelectorAll('.additional-dataset-entry');
+        const sources = [];
+        for (const entry of entries) {
+            const repoId = entry.querySelector('.additional-ds-repo')?.value?.trim();
+            if (!repoId) continue;
+
+            const source = {
+                source_type: 'huggingface',
+                repo_id: repoId,
+                split: entry.querySelector('.additional-ds-split')?.value?.trim() || 'train',
+            };
+
+            // Parse column mapping if provided
+            const colmapStr = entry.querySelector('.additional-ds-colmap')?.value?.trim();
+            if (colmapStr) {
+                const mapping = {};
+                for (const pair of colmapStr.split(',')) {
+                    const [key, value] = pair.split('=').map(s => s.trim());
+                    if (key && value) mapping[key] = value;
+                }
+                if (Object.keys(mapping).length > 0) {
+                    source.column_mapping = mapping;
+                }
+            }
+
+            sources.push(source);
+        }
+        return sources;
     }
 
     /**
@@ -443,6 +523,12 @@ class DatasetManager {
             config.convert_messages_format = convertMessagesCheckbox.checked;
         } else {
             config.convert_messages_format = true;  // Default to true
+        }
+
+        // Add additional dataset sources
+        const additionalSources = this.getAdditionalSources();
+        if (additionalSources.length > 0) {
+            config.additional_sources = additionalSources;
         }
 
         // Get training mode for validation and include in config

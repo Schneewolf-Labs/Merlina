@@ -5,7 +5,7 @@ Base classes for dataset handling
 import os
 from abc import ABC, abstractmethod
 from typing import Optional, Callable
-from datasets import Dataset
+from datasets import Dataset, concatenate_datasets
 import logging
 from .messages_converter import has_messages_format, convert_messages_dataset
 
@@ -64,15 +64,16 @@ class DatasetPipeline:
         seed: int = 42,
         shuffle: bool = True,
         training_mode: str = "orpo",
-        convert_messages_format: bool = True
+        convert_messages_format: bool = True,
+        additional_loaders: Optional[list[tuple]] = None,
     ):
         """
         Initialize dataset pipeline.
 
         Args:
-            loader: DatasetLoader instance to load the dataset
+            loader: DatasetLoader instance for the primary dataset
             formatter: DatasetFormatter instance to format rows
-            column_mapping: Map dataset columns to expected names
+            column_mapping: Map primary dataset columns to expected names
                            e.g., {'input': 'prompt', 'output_good': 'chosen'}
             test_size: Fraction of data to use for evaluation
             max_samples: Optional limit on number of samples (for testing)
@@ -80,6 +81,8 @@ class DatasetPipeline:
             shuffle: Whether to shuffle the dataset before splitting
             training_mode: Training mode ('sft' or 'orpo'). For SFT, rejected is optional.
             convert_messages_format: Whether to automatically detect and convert messages format
+            additional_loaders: List of (loader, column_mapping, convert_messages_format) tuples
+                               for additional datasets to concatenate with the primary source
         """
         self.loader = loader
         self.formatter = formatter
@@ -90,28 +93,53 @@ class DatasetPipeline:
         self.shuffle = shuffle
         self.training_mode = training_mode
         self.convert_messages_format = convert_messages_format
+        self.additional_loaders = additional_loaders or []
+
+    def _load_and_map_source(self, loader, column_mapping, convert_messages):
+        """Load a single source and apply its column mapping + messages conversion."""
+        dataset = loader.load()
+        logger.info(f"  Loaded {len(dataset)} samples from {loader.get_source_info().get('source_type', 'unknown')}")
+
+        if convert_messages and has_messages_format(dataset):
+            logger.info("  Detected messages format, converting to standard format...")
+            dataset = convert_messages_dataset(dataset)
+
+        if column_mapping:
+            logger.info(f"  Applying column mapping: {column_mapping}")
+            dataset = self._apply_column_mapping_with(dataset, column_mapping)
+
+        return dataset
 
     def prepare(self) -> tuple[Dataset, Dataset]:
         """
         Load, validate, format, and split dataset.
+        If additional_loaders are configured, loads and concatenates all sources.
 
         Returns:
             Tuple of (train_dataset, eval_dataset)
         """
-        logger.info("Loading dataset...")
-        dataset = self.loader.load()
+        # Load primary source
+        logger.info("Loading primary dataset...")
+        dataset = self._load_and_map_source(
+            self.loader, self.column_mapping, self.convert_messages_format
+        )
 
-        logger.info(f"Dataset loaded with {len(dataset)} samples")
+        # Load and concatenate additional sources
+        if self.additional_loaders:
+            all_datasets = [dataset]
+            for i, (extra_loader, extra_mapping, extra_convert) in enumerate(self.additional_loaders):
+                logger.info(f"Loading additional dataset {i + 1}/{len(self.additional_loaders)}...")
+                extra_dataset = self._load_and_map_source(extra_loader, extra_mapping, extra_convert)
+                all_datasets.append(extra_dataset)
 
-        # Convert messages format if detected and enabled
-        if self.convert_messages_format and has_messages_format(dataset):
-            logger.info("Detected messages format, converting to standard format...")
-            dataset = convert_messages_dataset(dataset)
+            # Concatenate all datasets
+            total_before = sum(len(d) for d in all_datasets)
+            dataset = concatenate_datasets(all_datasets)
+            logger.info(
+                f"Concatenated {len(all_datasets)} datasets: {total_before} total samples"
+            )
 
-        # Apply column mapping if provided
-        if self.column_mapping:
-            logger.info(f"Applying column mapping: {self.column_mapping}")
-            dataset = self._apply_column_mapping(dataset)
+        logger.info(f"Dataset ready with {len(dataset)} samples")
 
         # Validate schema
         logger.info("Validating dataset schema...")
@@ -198,12 +226,15 @@ class DatasetPipeline:
         return [dict(row) for row in formatted]
 
     def _apply_column_mapping(self, dataset: Dataset) -> Dataset:
+        """Apply column name mapping to dataset using self.column_mapping"""
+        return self._apply_column_mapping_with(dataset, self.column_mapping)
+
+    @staticmethod
+    def _apply_column_mapping_with(dataset: Dataset, column_mapping: dict) -> Dataset:
         """Apply column name mapping to dataset"""
-        # Rename columns according to mapping
-        for old_name, new_name in self.column_mapping.items():
+        for old_name, new_name in column_mapping.items():
             if old_name in dataset.column_names and old_name != new_name:
                 dataset = dataset.rename_column(old_name, new_name)
-
         return dataset
 
     def _validate_schema(self, dataset: Dataset):
