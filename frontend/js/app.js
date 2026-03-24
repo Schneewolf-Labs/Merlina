@@ -62,6 +62,9 @@ class MerlinaApp {
         // Setup preset button
         this.setupPresetButton();
 
+        // Setup section navigation
+        this.setupSectionNav();
+
         // Setup name generator
         this.setupNameGenerator();
 
@@ -145,6 +148,9 @@ class MerlinaApp {
             if (outputNameInput) {
                 outputNameInput.value = '';
             }
+
+            // Switch to Jobs tab
+            this.showSection('jobs-section');
 
         } catch (error) {
             console.error('Failed to submit training:', error);
@@ -626,6 +632,45 @@ class MerlinaApp {
 
         trainingMode.addEventListener('change', (e) => updateFields(e.target.value));
         updateFields(trainingMode.value);
+    }
+
+    /**
+     * Setup section navigation banner
+     */
+    setupSectionNav() {
+        const navBtns = document.querySelectorAll('.section-nav-btn');
+        if (!navBtns.length) return;
+
+        navBtns.forEach(btn => {
+            btn.addEventListener('click', () => {
+                const targetId = btn.dataset.section;
+                this.showSection(targetId);
+            });
+        });
+    }
+
+    /**
+     * Switch to a specific section
+     */
+    showSection(sectionId) {
+        // Hide all nav sections
+        document.querySelectorAll('.nav-section').forEach(section => {
+            section.style.display = 'none';
+        });
+
+        // Show target section
+        const target = document.getElementById(sectionId);
+        if (target) {
+            target.style.display = 'block';
+        }
+
+        // Update nav button active state
+        document.querySelectorAll('.section-nav-btn').forEach(btn => {
+            btn.classList.toggle('active', btn.dataset.section === sectionId);
+        });
+
+        // Scroll to top
+        window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
     /**

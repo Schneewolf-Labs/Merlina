@@ -30,10 +30,30 @@
             </div>
         </header>
 
+        <!-- Section Navigation Banner -->
+        <nav id="section-nav" class="section-nav">
+            <button class="section-nav-btn active" data-section="model-section">
+                <span class="nav-step">1</span>
+                <span class="nav-label">Model</span>
+            </button>
+            <button class="section-nav-btn" data-section="dataset-section">
+                <span class="nav-step">2</span>
+                <span class="nav-label">Dataset</span>
+            </button>
+            <button class="section-nav-btn" data-section="config-section">
+                <span class="nav-step">3</span>
+                <span class="nav-label">Training</span>
+            </button>
+            <button class="section-nav-btn" data-section="jobs-section">
+                <span class="nav-step">4</span>
+                <span class="nav-label">Jobs</span>
+            </button>
+        </nav>
+
         <!-- Main Content -->
         <main id="main-content" role="main">
             <!-- Model Selection (STEP 1) -->
-            <section id="model-section" class="card">
+            <section id="model-section" class="card nav-section">
                 <h2>🎯 Step 1: Select Your Base Model</h2>
 
                 <div class="spell-section">
@@ -100,7 +120,7 @@
             </section>
 
             <!-- Dataset Configuration (STEP 2) -->
-            <section id="dataset-section" class="card">
+            <section id="dataset-section" class="card nav-section" style="display: none;">
                 <h2>📚 Step 2: Configure Your Dataset</h2>
 
                 <!-- Dataset Source Selection -->
@@ -415,7 +435,7 @@
             </section>
 
             <!-- Training Configuration (STEP 3) -->
-            <section id="config-section" class="card">
+            <section id="config-section" class="card nav-section" style="display: none;">
                 <h2>✨ Step 3: Configure Training Parameters</h2>
 
                 <!-- Config Management Section -->
@@ -887,7 +907,7 @@
             </section>
 
             <!-- Active Jobs -->
-            <section id="jobs-section" class="card" style="display: none;">
+            <section id="jobs-section" class="card nav-section" style="display: none;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                     <h2 style="margin: 0;">🔮 Active Spells</h2>
                     <button id="clear-all-jobs-btn" class="action-button" style="background: #dc2626; color: white; padding: 8px 16px; font-size: 0.9em; max-width: 150px;">

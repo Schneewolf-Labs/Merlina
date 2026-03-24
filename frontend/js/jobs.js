@@ -67,10 +67,9 @@ class JobManager {
             const jobsSection = document.getElementById('jobs-section');
             const jobsContainer = document.getElementById('jobs-container');
 
-            if (Object.keys(jobs).length > 0) {
-                jobsSection.style.display = 'block';
-                jobsContainer.innerHTML = '';
+            jobsContainer.innerHTML = '';
 
+            if (Object.keys(jobs).length > 0) {
                 for (const [jobId, job] of Object.entries(jobs)) {
                     // Update local tracking
                     if (this.activeJobs[jobId]) {
@@ -83,8 +82,6 @@ class JobManager {
                     const jobCard = JobCardRenderer.create(jobId, job, jobName);
                     jobsContainer.appendChild(jobCard);
                 }
-            } else {
-                jobsSection.style.display = 'none';
             }
         } catch (error) {
             console.error('Failed to load jobs:', error);
