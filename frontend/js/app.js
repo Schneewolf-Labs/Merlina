@@ -59,6 +59,9 @@ class MerlinaApp {
         // Setup training mode toggle
         this.setupTrainingModeToggle();
 
+        // Setup preset button
+        this.setupPresetButton();
+
         // Setup advanced settings toggle
         this.setupAdvancedToggle();
 
@@ -620,6 +623,72 @@ class MerlinaApp {
 
         trainingMode.addEventListener('change', (e) => updateFields(e.target.value));
         updateFields(trainingMode.value);
+    }
+
+    /**
+     * Setup "Apply Suggested Settings" button
+     */
+    setupPresetButton() {
+        const btn = document.getElementById('apply-preset-btn');
+        if (!btn) return;
+
+        btn.addEventListener('click', async () => {
+            const mode = document.getElementById('training-mode')?.value;
+            if (!mode) return;
+
+            btn.disabled = true;
+            btn.textContent = '⏳ Loading...';
+
+            try {
+                const response = await fetch(`${window.location.origin}/presets/${mode}`);
+                if (!response.ok) {
+                    throw new Error(`No preset available for ${mode}`);
+                }
+                const preset = await response.json();
+                const settings = preset.settings;
+
+                // Map preset keys to form element IDs
+                const fieldMap = {
+                    learning_rate: 'learning-rate',
+                    num_epochs: 'epochs',
+                    batch_size: 'batch-size',
+                    gradient_accumulation_steps: 'grad-accum',
+                    warmup_ratio: 'warmup-ratio',
+                    weight_decay: 'weight-decay',
+                    lora_dropout: 'lora-dropout',
+                    max_grad_norm: 'max-grad-norm',
+                    lr_scheduler_type: 'lr-scheduler-type',
+                    beta: 'beta',
+                    gamma: 'gamma',
+                    label_smoothing: 'label-smoothing',
+                };
+
+                const applied = [];
+                for (const [key, elementId] of Object.entries(fieldMap)) {
+                    if (settings[key] !== undefined) {
+                        const el = document.getElementById(elementId);
+                        if (el) {
+                            el.value = settings[key];
+                            applied.push(key);
+                        }
+                    }
+                }
+
+                // Show notes
+                const notesEl = document.getElementById('preset-notes');
+                if (notesEl && preset.notes) {
+                    notesEl.textContent = preset.notes;
+                    notesEl.style.display = 'block';
+                }
+
+                this.toast.success(`Applied ${applied.length} suggested settings for ${mode.toUpperCase()}`);
+            } catch (error) {
+                this.toast.error(`Failed to load preset: ${error.message}`);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '📋 Apply Suggested Settings';
+            }
+        });
     }
 
     /**

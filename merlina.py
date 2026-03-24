@@ -48,6 +48,7 @@ from src.preflight_checks import validate_config
 from src.config_manager import ConfigManager
 from src.job_queue import JobQueue, JobPriority
 from src.gpu_utils import get_gpu_manager
+from src.presets import get_preset, get_all_presets
 
 # Import configuration
 from config import settings
@@ -473,6 +474,29 @@ async def api_info():
 async def get_version():
     """Get detailed version information"""
     return get_version_info()
+
+
+@app.get("/presets")
+async def list_presets():
+    """List recommended presets for all training modes."""
+    return get_all_presets()
+
+
+@app.get("/presets/{training_mode}")
+async def get_training_preset(training_mode: str):
+    """Get recommended hyperparameters for a training mode.
+
+    Returns paper-backed defaults for learning_rate, beta, epochs, etc.
+    """
+    preset = get_preset(training_mode)
+    if preset is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No preset for training mode '{training_mode}'. "
+                   f"Available: sft, orpo, dpo, simpo, cpo, ipo, kto"
+        )
+    return preset
+
 
 @app.post("/validate", response_model=dict)
 async def validate_training_config(config: TrainingConfig):
