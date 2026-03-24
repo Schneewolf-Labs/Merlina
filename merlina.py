@@ -220,6 +220,23 @@ class DatasetConfig(BaseModel):
 
 # Pydantic models
 class TrainingConfig(BaseModel):
+    # Trainer type: "grimoire" for LLMs, "atelier" for diffusion models
+    trainer_type: str = Field(
+        "grimoire",
+        description="Trainer backend: 'grimoire' (LLM) or 'atelier' (diffusion)"
+    )
+
+    # Atelier-specific settings (ignored when trainer_type="grimoire")
+    adapter_type: str = Field(
+        "qwen_edit",
+        description="Diffusion adapter: 'qwen_edit' or 'sdxl' (atelier only)"
+    )
+    image_size: int = Field(1024, ge=256, le=2048, description="Target image size for diffusion training")
+    cache_embeddings: bool = Field(False, description="Pre-compute and cache embeddings to disk (atelier only)")
+    cache_dir: str = Field("./embeddings_cache", description="Directory for cached embeddings")
+    model_weights_path: Optional[str] = Field(None, description="Path to custom model weights (SDXL only)")
+    sft_weight: float = Field(0.1, ge=0.0, le=1.0, description="SFT regularization weight for Diffusion DPO")
+
     # Model settings
     base_model: str = Field(
         "meta-llama/Meta-Llama-3-8B-Instruct",
@@ -335,12 +352,20 @@ class JobStatus(BaseModel):
 if FRONTEND_DIR.exists():
     @app.get("/")
     async def serve_frontend():
-        """Serve the main HTML page"""
+        """Serve the main HTML page (LLM training)"""
         return FileResponse(FRONTEND_DIR / "index.html")
-    
+
+    @app.get("/diffusion")
+    async def serve_diffusion_frontend():
+        """Serve the diffusion training page"""
+        diffusion_page = FRONTEND_DIR / "diffusion.html"
+        if diffusion_page.exists():
+            return FileResponse(diffusion_page)
+        raise HTTPException(status_code=404, detail="Diffusion training page not found")
+
     # Mount the frontend directory to serve static files
     app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
-    
+
     # Also serve CSS, JS modules, and images from root for simplicity
     @app.get("/styles.css")
     async def serve_css():
@@ -552,9 +577,6 @@ async def create_training_job(config: TrainingConfig, priority: Optional[str] = 
     job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     job_manager.create_job(job_id, config.model_dump())
 
-    # Import training runner
-    from src.training_runner import run_training_sync
-
     # Get the current event loop for WebSocket updates
     try:
         loop = asyncio.get_running_loop()
@@ -563,10 +585,16 @@ async def create_training_job(config: TrainingConfig, priority: Optional[str] = 
 
     # Define callback that will be executed by worker
     def training_callback(job_id: str, config_dict: dict):
-        """Wrapper to convert config dict back to TrainingConfig"""
+        """Wrapper to convert config dict back to TrainingConfig and dispatch to correct runner"""
         from pydantic import TypeAdapter
         config_obj = TypeAdapter(TrainingConfig).validate_python(config_dict)
-        run_training_sync(job_id, config_obj, job_manager, uploaded_datasets, loop)
+
+        if config_obj.trainer_type == "atelier":
+            from src.atelier_training_runner import run_atelier_training_sync
+            run_atelier_training_sync(job_id, config_obj, job_manager, uploaded_datasets, loop)
+        else:
+            from src.training_runner import run_training_sync
+            run_training_sync(job_id, config_obj, job_manager, uploaded_datasets, loop)
 
     # Submit job to queue
     position = job_queue.submit(

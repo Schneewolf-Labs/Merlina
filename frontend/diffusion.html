@@ -1,0 +1,1480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Merlina - Diffusion model training with LoRA adapters for image generation models">
+    <meta name="theme-color" content="#c042ff">
+    <title>Merlina - Diffusion Training</title>
+    <link rel="stylesheet" href="styles.css">
+    <!-- Prevent flash of wrong theme -->
+    <script>
+        (function() {
+            const theme = localStorage.getItem('merlina-theme') ||
+                (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+            document.documentElement.setAttribute('data-theme', theme);
+        })();
+    </script>
+</head>
+<body>
+    <!-- Skip link for keyboard navigation -->
+    <a href="#main-content" class="skip-link">Skip to main content</a>
+
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <div class="logo">
+                <img src="merlina.png" alt="Merlina" class="wizard-hat" style="width: 48px; height: 48px;">
+                <h1>Merlina</h1>
+                <span class="tagline">Diffusion Training</span>
+            </div>
+            <nav style="text-align: center; margin-top: 10px; font-size: 0.95em;">
+                <a href="/" style="color: var(--text-secondary); text-decoration: none; padding: 6px 14px; border-radius: 20px; transition: all 0.2s;">LLM Training</a>
+                <span style="color: var(--text-muted); margin: 0 4px;">|</span>
+                <a href="/diffusion" class="active" style="color: white; background: var(--primary-purple); text-decoration: none; padding: 6px 14px; border-radius: 20px; font-weight: bold; transition: all 0.2s;">Diffusion Training</a>
+            </nav>
+        </header>
+
+        <!-- Main Content -->
+        <main id="main-content" role="main">
+
+            <!-- ============================================ -->
+            <!-- STEP 1: Model Configuration                  -->
+            <!-- ============================================ -->
+            <section id="model-section" class="card">
+                <h2>🎯 Step 1: Model Configuration</h2>
+
+                <div class="spell-section">
+                    <h3>🖼️ Adapter Type</h3>
+                    <div class="form-group">
+                        <label>Diffusion Architecture</label>
+                        <select id="adapter-type" class="magic-select">
+                            <option value="qwen_edit" selected>Qwen-Image-Edit (DiT)</option>
+                            <option value="sdxl">Stable Diffusion XL (UNet)</option>
+                        </select>
+                        <small style="color: var(--text-muted); font-size: 0.85em;">Select the diffusion model architecture to fine-tune</small>
+                    </div>
+                </div>
+
+                <div class="spell-section">
+                    <h3>🤖 Model Configuration</h3>
+                    <div class="form-group">
+                        <label>Base Model (HuggingFace Tag or Path)</label>
+                        <input type="text" id="base-model" value="Qwen/Qwen-Image-Edit" class="magic-input" required>
+                        <small style="color: var(--text-muted); font-size: 0.85em;">HuggingFace model ID or local path to the diffusion model</small>
+                    </div>
+                    <div class="form-group" id="model-weights-field" style="display: none;">
+                        <label>Model Weights Path (Optional)</label>
+                        <input type="text" id="model-weights-path" placeholder="/path/to/custom/weights.safetensors" class="magic-input">
+                        <small style="color: var(--text-muted); font-size: 0.85em;">For SDXL: path to custom checkpoint weights (e.g., civitai models)</small>
+                    </div>
+                </div>
+
+                <div class="spell-section">
+                    <h3>🔑 API Tokens (Optional)</h3>
+                    <div class="form-group">
+                        <label>HuggingFace Token</label>
+                        <input type="password" id="hf-token-preload" placeholder="For gated models" class="magic-input">
+                        <small style="color: var(--text-muted); font-size: 0.85em;">Required for gated models</small>
+                    </div>
+                </div>
+
+                <!-- GPU Selection -->
+                <div class="spell-section">
+                    <h3>🎮 GPU Selection</h3>
+                    <button type="button" id="refresh-gpu-button" class="action-button" style="width: 100%; margin-bottom: 15px; background: var(--primary-purple); color: white;">
+                        🔄 Refresh GPU List
+                    </button>
+
+                    <div id="gpu-list-container" style="margin-top: 15px;">
+                        <div style="text-align: center; padding: 20px; color: var(--text-muted);">
+                            Click "Refresh GPU List" to see available GPUs
+                        </div>
+                    </div>
+
+                    <div class="form-group" style="margin-top: 15px;">
+                        <label>Selected GPUs for Training</label>
+                        <select id="gpu-selection" class="magic-select" multiple style="min-height: 60px;">
+                            <option value="">Auto (use all available)</option>
+                        </select>
+                        <small style="color: var(--text-muted); font-size: 0.85em;">Hold Ctrl/Cmd to select multiple GPUs. Leave empty for auto-selection.</small>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============================================ -->
+            <!-- STEP 2: Dataset Configuration                -->
+            <!-- ============================================ -->
+            <section id="dataset-section" class="card">
+                <h2>📚 Step 2: Configure Your Dataset</h2>
+
+                <div class="spell-section">
+                    <h3>🔮 HuggingFace Image Dataset</h3>
+                    <div class="form-group">
+                        <label>HuggingFace Repository ID</label>
+                        <input type="text" id="hf-repo-id" value="nbeerbower/NikuX1-DPO" class="magic-input">
+                        <small style="color: var(--text-muted); font-size: 0.85em;">Example: username/dataset-name (image dataset with chosen/rejected pairs or single images)</small>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Split</label>
+                            <input type="text" id="hf-split" value="train" class="magic-input">
+                        </div>
+                        <div class="form-group">
+                            <label>Max Samples (Optional)</label>
+                            <input type="number" id="max-samples" placeholder="Use all" class="magic-input">
+                            <small style="color: var(--text-muted); font-size: 0.85em;">Limit dataset size for testing</small>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Image Size (px)</label>
+                        <input type="number" id="image-size" value="1024" min="256" max="2048" step="64" class="magic-input">
+                        <small style="color: var(--text-muted); font-size: 0.85em;">Images will be resized to this dimension (square)</small>
+                    </div>
+                </div>
+
+                <!-- Dataset Preview -->
+                <div class="spell-section">
+                    <h3>👁️ Dataset Preview</h3>
+                    <button type="button" id="preview-dataset-button" class="action-button" style="width: 100%; margin-bottom: 15px;">
+                        🔍 Preview Dataset
+                    </button>
+                    <div id="dataset-preview" style="margin-top: 15px; display: none;">
+                        <div style="padding: 15px; border-radius: 10px; border: 1px solid var(--border-color); background: var(--card-bg);">
+                            <pre id="dataset-preview-content" style="margin: 0; font-size: 0.85em; white-space: pre-wrap; color: var(--text-primary);"></pre>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Embedding Cache -->
+                <div class="spell-section">
+                    <h3>⚡ Embedding Cache</h3>
+                    <div class="form-group">
+                        <label style="display: flex; align-items: center; cursor: pointer; user-select: none;">
+                            <input type="checkbox" id="cache-embeddings" style="margin-right: 10px; width: 20px; height: 20px; cursor: pointer;">
+                            <span style="font-weight: bold; color: var(--primary-purple);">Cache Text/Image Embeddings</span>
+                        </label>
+                        <small style="color: var(--text-muted); font-size: 0.85em; margin-top: 5px; display: block;">
+                            Pre-compute and cache embeddings to disk. Speeds up training significantly but uses more disk space.
+                        </small>
+                    </div>
+                    <div id="cache-dir-config" style="display: none; margin-top: 10px;">
+                        <div class="form-group">
+                            <label>Cache Directory</label>
+                            <input type="text" id="cache-dir" value="./embeddings_cache" class="magic-input">
+                            <small style="color: var(--text-muted); font-size: 0.85em;">Directory to store cached embeddings</small>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============================================ -->
+            <!-- STEP 3: Training Configuration               -->
+            <!-- ============================================ -->
+            <section id="config-section" class="card">
+                <h2>✨ Step 3: Configure Training Parameters</h2>
+
+                <form id="training-form">
+                    <!-- Training Mode -->
+                    <div class="spell-section">
+                        <h3>🎯 Training Mode</h3>
+                        <div class="form-group">
+                            <label>Training Method</label>
+                            <select id="training-mode" class="magic-select">
+                                <option value="flow_matching" selected>Flow Matching (MSE)</option>
+                                <option value="epsilon">Epsilon Prediction</option>
+                                <option value="diffusion_dpo">Diffusion DPO</option>
+                                <option value="diffusion_orpo">Diffusion ORPO</option>
+                                <option value="diffusion_simpo">Diffusion SimPO</option>
+                                <option value="diffusion_cpo">Diffusion CPO</option>
+                                <option value="diffusion_ipo">Diffusion IPO</option>
+                                <option value="diffusion_kto">Diffusion KTO</option>
+                            </select>
+                            <small id="training-mode-description" style="color: var(--text-muted); font-size: 0.85em; display: block; margin-top: 8px;"></small>
+                        </div>
+
+                        <!-- Preference Parameters (shown/hidden based on mode) -->
+                        <div id="beta-field" class="form-group" style="display: none; margin-top: 15px;">
+                            <label>Beta (Preference Strength)</label>
+                            <input type="number" id="beta" value="0.1" min="0.01" max="10" step="0.01" class="magic-input">
+                            <small style="color: var(--text-muted); font-size: 0.85em;">Controls the strength of preference optimization</small>
+                        </div>
+                        <div id="gamma-field" class="form-group" style="display: none; margin-top: 15px;">
+                            <label>SimPO Gamma (Reward Margin)</label>
+                            <input type="number" id="gamma" value="0.5" min="0" max="5" step="0.1" class="magic-input">
+                            <small style="color: var(--text-muted); font-size: 0.85em;">Target margin between chosen and rejected rewards</small>
+                        </div>
+                        <div id="label-smoothing-field" class="form-group" style="display: none; margin-top: 15px;">
+                            <label>Label Smoothing</label>
+                            <input type="number" id="label-smoothing" value="0.0" min="0" max="0.5" step="0.01" class="magic-input">
+                            <small style="color: var(--text-muted); font-size: 0.85em;">Smoothing coefficient for preference loss</small>
+                        </div>
+                        <div id="sft-weight-field" class="form-group" style="display: none; margin-top: 15px;">
+                            <label>SFT Weight</label>
+                            <input type="number" id="sft-weight" value="0.1" min="0" max="1" step="0.01" class="magic-input">
+                            <small style="color: var(--text-muted); font-size: 0.85em;">Weight for the SFT loss component in DPO</small>
+                        </div>
+                    </div>
+
+                    <!-- Output Name -->
+                    <div class="form-group">
+                        <label>🏷️ Output Model Name</label>
+                        <input type="text" id="output-name" placeholder="my-diffusion-lora" class="magic-input" required>
+                        <small style="color: var(--text-muted); font-size: 0.85em;">Name for your fine-tuned LoRA adapter</small>
+                    </div>
+
+                    <!-- Core Training Parameters -->
+                    <div class="spell-section">
+                        <h3>⚗️ Training Parameters</h3>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Number of Epochs</label>
+                                <input type="number" id="epochs" value="50" min="1" max="1000" class="magic-input">
+                            </div>
+                            <div class="form-group">
+                                <label>Batch Size</label>
+                                <input type="number" id="batch-size" value="1" min="1" max="32" class="magic-input">
+                            </div>
+                            <div class="form-group">
+                                <label>Learning Rate</label>
+                                <input type="number" id="learning-rate" value="0.0001" step="0.00001" class="magic-input">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Gradient Accumulation Steps</label>
+                            <input type="number" id="grad-accum" value="1" min="1" max="128" class="magic-input">
+                            <small style="color: var(--text-muted); font-size: 0.85em;">Accumulate gradients over multiple steps to simulate larger batch sizes</small>
+                        </div>
+                    </div>
+
+                    <!-- LoRA Configuration -->
+                    <div class="spell-section">
+                        <h3>🪄 LoRA Configuration</h3>
+
+                        <div class="form-group" style="margin-bottom: 20px;">
+                            <label style="display: flex; align-items: center; cursor: pointer; user-select: none;">
+                                <input type="checkbox" id="use-lora" checked style="margin-right: 10px; width: 20px; height: 20px; cursor: pointer;">
+                                <span style="font-weight: bold; color: var(--primary-purple);">Enable LoRA (Low-Rank Adaptation)</span>
+                            </label>
+                            <small style="color: var(--text-muted); font-size: 0.85em; margin-top: 5px; display: block;">
+                                When enabled, trains only LoRA adapters (faster, less VRAM). When disabled, trains the full model.
+                            </small>
+                        </div>
+
+                        <div id="lora-settings" style="display: block;">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>LoRA Rank (r)</label>
+                                    <input type="number" id="lora-r" value="64" min="4" max="512" class="magic-input">
+                                    <small style="color: var(--text-muted); font-size: 0.85em;">Higher rank = more parameters, more capacity</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>LoRA Alpha</label>
+                                    <input type="number" id="lora-alpha" value="128" min="4" max="512" class="magic-input">
+                                    <small style="color: var(--text-muted); font-size: 0.85em;">Scaling factor (typically 2x rank)</small>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>Target Modules</label>
+                                <input type="text" id="target-modules" value="to_k,to_q,to_v,to_out.0" class="magic-input">
+                                <small style="color: var(--text-muted); font-size: 0.85em;">Comma-separated list of attention modules to apply LoRA to</small>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Advanced Training Settings (Collapsible) -->
+                    <div class="spell-section">
+                        <button type="button" id="toggle-advanced" class="toggle-advanced-btn">
+                            <span>⚙️ Show Advanced Settings</span>
+                        </button>
+
+                        <div class="advanced-section" style="display: none; margin-top: 15px;">
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Weight Decay</label>
+                                    <input type="number" id="weight-decay" value="0.01" min="0" max="0.5" step="0.001" class="magic-input">
+                                    <small style="color: var(--text-muted); font-size: 0.85em;">L2 regularization</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>Warmup Ratio</label>
+                                    <input type="number" id="warmup-ratio" value="0.1" min="0" max="0.5" step="0.01" class="magic-input">
+                                    <small style="color: var(--text-muted); font-size: 0.85em;">Fraction of steps for LR warmup</small>
+                                </div>
+                                <div class="form-group">
+                                    <label>Max Grad Norm</label>
+                                    <input type="number" id="max-grad-norm" value="1.0" min="0.01" max="10.0" step="0.01" class="magic-input">
+                                    <small style="color: var(--text-muted); font-size: 0.85em;">Gradient clipping threshold</small>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>LR Scheduler</label>
+                                    <select id="lr-scheduler-type" class="magic-select">
+                                        <option value="cosine" selected>Cosine</option>
+                                        <option value="linear">Linear</option>
+                                        <option value="cosine_with_restarts">Cosine with Restarts</option>
+                                        <option value="polynomial">Polynomial</option>
+                                        <option value="constant">Constant</option>
+                                        <option value="constant_with_warmup">Constant with Warmup</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Optimizer</label>
+                                    <select id="optimizer-type" class="magic-select">
+                                        <option value="adamw" selected>AdamW</option>
+                                        <option value="adamw_8bit">AdamW 8-bit</option>
+                                        <option value="paged_adamw_8bit">Paged AdamW 8-bit</option>
+                                        <option value="sgd">SGD</option>
+                                        <option value="adafactor">Adafactor</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label>Logging Steps</label>
+                                    <input type="number" id="logging-steps" value="10" min="1" max="1000" class="magic-input">
+                                    <small style="color: var(--text-muted); font-size: 0.85em;">Log metrics every N steps</small>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label>Random Seed</label>
+                                    <input type="number" id="seed" value="42" min="0" max="99999" class="magic-input">
+                                    <small style="color: var(--text-muted); font-size: 0.85em;">For reproducibility</small>
+                                </div>
+                                <div class="form-group" style="display: flex; align-items: center; padding-top: 20px;">
+                                    <label style="display: flex; align-items: center; cursor: pointer; user-select: none;">
+                                        <input type="checkbox" id="gradient-checkpointing" checked style="margin-right: 10px; width: 20px; height: 20px; cursor: pointer;">
+                                        <span style="font-weight: bold; color: var(--primary-purple);">Gradient Checkpointing</span>
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ============================================ -->
+                    <!-- STEP 4: W&B & Hub                            -->
+                    <!-- ============================================ -->
+                    <div class="spell-section">
+                        <h3>🌟 Logging & Publishing</h3>
+
+                        <!-- W&B Toggle -->
+                        <div class="checkbox-group">
+                            <label class="magic-checkbox">
+                                <input type="checkbox" id="use-wandb">
+                                <span>Report to Weights & Biases 📊</span>
+                            </label>
+                        </div>
+
+                        <div id="wandb-config" style="margin-top: 15px; display: none;">
+                            <div style="padding: 15px; background: var(--info-light); border-radius: 10px; border-left: 3px solid #7c3aed;">
+                                <h4 style="margin-top: 0; color: #7c3aed; font-size: 0.95em;">📊 Weights & Biases Configuration</h4>
+                                <div class="form-group">
+                                    <label>W&B API Key</label>
+                                    <input type="password" id="wandb-key" placeholder="Your Weights & Biases API key" class="magic-input">
+                                    <small style="color: var(--text-muted); font-size: 0.85em;">Get your API key from <a href="https://wandb.ai/authorize" target="_blank" style="color: #7c3aed;">wandb.ai/authorize</a></small>
+                                </div>
+                                <div class="form-row">
+                                    <div class="form-group">
+                                        <label>Project Name</label>
+                                        <input type="text" id="wandb-project" placeholder="merlina-diffusion" class="magic-input">
+                                    </div>
+                                    <div class="form-group">
+                                        <label>Run Name (Optional)</label>
+                                        <input type="text" id="wandb-run-name" placeholder="Auto-generated" class="magic-input">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label>Tags (comma-separated)</label>
+                                    <input type="text" id="wandb-tags" placeholder="e.g., diffusion, lora, qwen-edit" class="magic-input">
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- HuggingFace Hub Toggle -->
+                        <div class="checkbox-group" style="margin-top: 15px;">
+                            <label class="magic-checkbox">
+                                <input type="checkbox" id="push-hub">
+                                <span>Push to HuggingFace Hub 🤗</span>
+                            </label>
+                        </div>
+
+                        <div id="hf-hub-config" style="margin-top: 15px; display: none;">
+                            <div style="padding: 15px; background: var(--warning-light); border-radius: 10px; border-left: 3px solid #f97316;">
+                                <h4 style="margin-top: 0; color: #f97316; font-size: 0.95em;">🤗 HuggingFace Hub Configuration</h4>
+                                <div class="form-group">
+                                    <label>HuggingFace Token</label>
+                                    <input type="password" id="hf-token" placeholder="Your HuggingFace token" class="magic-input">
+                                    <small style="color: var(--text-muted); font-size: 0.85em;">Required to push models</small>
+                                </div>
+                                <label class="magic-checkbox" style="margin-top: 10px;">
+                                    <input type="checkbox" id="hf-hub-private" checked>
+                                    <span>🔒 Make Repository Private</span>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Submit Button -->
+                    <button type="submit" class="cast-button">
+                        <span class="button-icon">🪄</span>
+                        Cast Diffusion Training Spell
+                    </button>
+                </form>
+            </section>
+
+            <!-- ============================================ -->
+            <!-- Active Jobs                                  -->
+            <!-- ============================================ -->
+            <section id="jobs-section" class="card" style="display: none;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h2 style="margin: 0;">🔮 Active Spells</h2>
+                    <button id="clear-all-jobs-btn" class="action-button" style="background: #dc2626; color: white; padding: 8px 16px; font-size: 0.9em; max-width: 150px;">
+                        🗑️ Clear All Jobs
+                    </button>
+                </div>
+                <div id="jobs-container"></div>
+            </section>
+        </main>
+
+        <!-- Job Monitoring Modal -->
+        <div id="job-modal" class="modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="job-modal-title">
+            <div class="modal-content">
+                <button class="close" aria-label="Close modal" type="button">&times;</button>
+                <h2 id="job-modal-title">Spell Progress</h2>
+                <div id="job-details">
+                    <div class="job-header">
+                        <h3 id="job-name"></h3>
+                        <span id="job-id" class="job-id"></span>
+                    </div>
+
+                    <div class="progress-section">
+                        <div class="progress-bar">
+                            <div id="progress-fill" class="progress-fill"></div>
+                            <span id="progress-text" class="progress-text">0%</span>
+                        </div>
+                        <div id="status-text" class="status-text"></div>
+                    </div>
+
+                    <div class="metrics-grid">
+                        <div class="metric-card">
+                            <span class="metric-label">Current Step</span>
+                            <span id="current-step" class="metric-value">-</span>
+                        </div>
+                        <div class="metric-card">
+                            <span class="metric-label">Loss</span>
+                            <span id="loss-value" class="metric-value">-</span>
+                        </div>
+                        <div class="metric-card">
+                            <span class="metric-label">Status</span>
+                            <span id="job-status" class="metric-value">-</span>
+                        </div>
+                        <div class="metric-card">
+                            <span class="metric-label">GPU Memory</span>
+                            <span id="gpu-memory-value" class="metric-value">-</span>
+                        </div>
+                    </div>
+
+                    <!-- Loss Chart -->
+                    <div id="loss-chart-section" style="margin-top: 20px;">
+                        <h3 style="color: var(--primary-purple); margin-bottom: 10px;">📈 Training Loss</h3>
+                        <div style="position: relative; width: 100%; height: 200px; background: var(--card-bg); border: 1px solid var(--border-color); border-radius: 10px; overflow: hidden;">
+                            <canvas id="loss-chart" style="width: 100%; height: 100%;"></canvas>
+                        </div>
+                    </div>
+
+                    <div class="action-buttons">
+                        <a id="wandb-link" href="#" target="_blank" class="action-button" style="display: none;">
+                            📊 View in W&B
+                        </a>
+                        <button id="stop-button" class="action-button danger">
+                            🛑 Stop Training
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Notification Toast -->
+        <div id="toast" class="toast" role="alert" aria-live="polite"></div>
+
+        <!-- Footer -->
+        <footer class="site-footer">
+            <p>
+                <span id="version-info" style="opacity: 0.7; font-size: 0.9em;">Loading version...</span>
+                <br>
+                Made with ❤️ by <a href="https://schneewolflabs.com/" target="_blank" rel="noopener noreferrer">Schneewolf Labs</a>
+            </p>
+        </footer>
+    </div>
+
+    <!-- ============================================ -->
+    <!-- Inline JavaScript                            -->
+    <!-- ============================================ -->
+    <script>
+    (function() {
+        'use strict';
+
+        // ==========================================
+        // Constants & Configuration
+        // ==========================================
+        const API_URL = '';
+        const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
+
+        const ADAPTER_DEFAULTS = {
+            qwen_edit: {
+                base_model: 'Qwen/Qwen-Image-Edit',
+                target_modules: 'to_k,to_q,to_v,to_out.0',
+                show_weights_path: false
+            },
+            sdxl: {
+                base_model: 'stabilityai/stable-diffusion-xl-base-1.0',
+                target_modules: 'to_k,to_q,to_v,to_out.0',
+                show_weights_path: true
+            }
+        };
+
+        const PREFERENCE_MODES = [
+            'diffusion_dpo', 'diffusion_orpo', 'diffusion_simpo',
+            'diffusion_cpo', 'diffusion_ipo', 'diffusion_kto'
+        ];
+
+        const MODE_DESCRIPTIONS = {
+            flow_matching: '<strong>Flow Matching (MSE):</strong> Standard supervised training for flow-based diffusion models. Trains the denoising network to predict the noise/velocity using MSE loss. Best for single-image fine-tuning.',
+            epsilon: '<strong>Epsilon Prediction:</strong> Standard noise-prediction training for UNet-based diffusion models (SDXL). Trains the model to predict the noise added at each timestep.',
+            diffusion_dpo: '<strong>Diffusion DPO:</strong> Direct Preference Optimization adapted for diffusion models. Uses paired chosen/rejected images to teach the model which outputs to prefer.',
+            diffusion_orpo: '<strong>Diffusion ORPO:</strong> Odds Ratio Preference Optimization for diffusion. Combines supervised learning with preference optimization in a single pass.',
+            diffusion_simpo: '<strong>Diffusion SimPO:</strong> Simple Preference Optimization for diffusion. Reference-free variant with configurable reward margin (gamma).',
+            diffusion_cpo: '<strong>Diffusion CPO:</strong> Contrastive Preference Optimization for diffusion. Reference-free contrastive learning on preference pairs.',
+            diffusion_ipo: '<strong>Diffusion IPO:</strong> Identity Preference Optimization for diffusion. Squared-loss variant that is more robust to noisy preferences.',
+            diffusion_kto: '<strong>Diffusion KTO:</strong> Kahneman-Tversky Optimization for diffusion. Uses binary feedback (good/bad) instead of paired preferences.'
+        };
+
+        // ==========================================
+        // Toast Notifications
+        // ==========================================
+        const toastEl = document.getElementById('toast');
+        let toastTimeout = null;
+
+        function showToast(message, type, duration) {
+            if (!toastEl) return;
+            duration = duration || 5000;
+            toastEl.textContent = message;
+            toastEl.className = 'toast ' + type + ' show';
+            if (toastTimeout) clearTimeout(toastTimeout);
+            toastTimeout = setTimeout(function() {
+                toastEl.classList.remove('show');
+            }, duration);
+        }
+
+        // ==========================================
+        // Adapter Type Change
+        // ==========================================
+        const adapterTypeSelect = document.getElementById('adapter-type');
+        const baseModelInput = document.getElementById('base-model');
+        const modelWeightsField = document.getElementById('model-weights-field');
+        const targetModulesInput = document.getElementById('target-modules');
+
+        adapterTypeSelect.addEventListener('change', function() {
+            const defaults = ADAPTER_DEFAULTS[this.value];
+            if (defaults) {
+                baseModelInput.value = defaults.base_model;
+                targetModulesInput.value = defaults.target_modules;
+                modelWeightsField.style.display = defaults.show_weights_path ? 'block' : 'none';
+            }
+        });
+
+        // ==========================================
+        // Training Mode Change
+        // ==========================================
+        const trainingModeSelect = document.getElementById('training-mode');
+        const betaField = document.getElementById('beta-field');
+        const gammaField = document.getElementById('gamma-field');
+        const labelSmoothingField = document.getElementById('label-smoothing-field');
+        const sftWeightField = document.getElementById('sft-weight-field');
+        const modeDescriptionEl = document.getElementById('training-mode-description');
+
+        function updateTrainingModeFields(mode) {
+            const isPreference = PREFERENCE_MODES.includes(mode);
+
+            // Beta: shown for all preference modes
+            betaField.style.display = isPreference ? 'block' : 'none';
+
+            // Gamma: SimPO only
+            gammaField.style.display = mode === 'diffusion_simpo' ? 'block' : 'none';
+
+            // Label smoothing: DPO and CPO
+            labelSmoothingField.style.display = (mode === 'diffusion_dpo' || mode === 'diffusion_cpo') ? 'block' : 'none';
+
+            // SFT Weight: DPO only
+            sftWeightField.style.display = mode === 'diffusion_dpo' ? 'block' : 'none';
+
+            // Description
+            if (modeDescriptionEl) {
+                modeDescriptionEl.innerHTML = MODE_DESCRIPTIONS[mode] || '';
+            }
+        }
+
+        trainingModeSelect.addEventListener('change', function() {
+            updateTrainingModeFields(this.value);
+        });
+        updateTrainingModeFields(trainingModeSelect.value);
+
+        // ==========================================
+        // LoRA Toggle
+        // ==========================================
+        const useLoraCheckbox = document.getElementById('use-lora');
+        const loraSettings = document.getElementById('lora-settings');
+
+        useLoraCheckbox.addEventListener('change', function() {
+            loraSettings.style.display = this.checked ? 'block' : 'none';
+        });
+
+        // ==========================================
+        // Embedding Cache Toggle
+        // ==========================================
+        const cacheEmbeddingsCheckbox = document.getElementById('cache-embeddings');
+        const cacheDirConfig = document.getElementById('cache-dir-config');
+
+        cacheEmbeddingsCheckbox.addEventListener('change', function() {
+            cacheDirConfig.style.display = this.checked ? 'block' : 'none';
+        });
+
+        // ==========================================
+        // Advanced Settings Toggle
+        // ==========================================
+        const toggleAdvancedBtn = document.getElementById('toggle-advanced');
+        const advancedSections = document.querySelectorAll('.advanced-section');
+        let advancedVisible = false;
+
+        toggleAdvancedBtn.addEventListener('click', function() {
+            advancedVisible = !advancedVisible;
+            advancedSections.forEach(function(section) {
+                section.style.display = advancedVisible ? 'block' : 'none';
+            });
+            var span = toggleAdvancedBtn.querySelector('span');
+            if (span) {
+                span.textContent = advancedVisible ? '⚙️ Hide Advanced Settings' : '⚙️ Show Advanced Settings';
+            }
+        });
+
+        // ==========================================
+        // W&B Toggle
+        // ==========================================
+        const useWandbCheckbox = document.getElementById('use-wandb');
+        const wandbConfig = document.getElementById('wandb-config');
+
+        useWandbCheckbox.addEventListener('change', function() {
+            wandbConfig.style.display = this.checked ? 'block' : 'none';
+        });
+
+        // ==========================================
+        // HF Hub Toggle
+        // ==========================================
+        const pushHubCheckbox = document.getElementById('push-hub');
+        const hfHubConfig = document.getElementById('hf-hub-config');
+
+        pushHubCheckbox.addEventListener('change', function() {
+            hfHubConfig.style.display = this.checked ? 'block' : 'none';
+        });
+
+        // ==========================================
+        // GPU Management
+        // ==========================================
+        const refreshGpuBtn = document.getElementById('refresh-gpu-button');
+        const gpuListContainer = document.getElementById('gpu-list-container');
+        const gpuSelection = document.getElementById('gpu-selection');
+
+        refreshGpuBtn.addEventListener('click', async function() {
+            refreshGpuBtn.disabled = true;
+            refreshGpuBtn.textContent = '🔄 Loading...';
+            gpuListContainer.innerHTML = '<div style="text-align: center; padding: 20px; color: var(--text-muted);">Loading GPU information...</div>';
+
+            try {
+                const response = await fetch(API_URL + '/gpu/list');
+                if (!response.ok) throw new Error('Failed to fetch GPU list');
+                const data = await response.json();
+
+                if (data.status === 'no_cuda') {
+                    gpuListContainer.innerHTML = '<div style="padding: 15px; background: var(--warning-light); border-radius: 10px; border: 1px solid var(--warning);"><strong>No CUDA Available:</strong> ' + escapeHtml(data.message) + '</div>';
+                    gpuSelection.innerHTML = '<option value="">No GPUs available</option>';
+                    gpuSelection.disabled = true;
+                } else if (data.gpus && data.gpus.length > 0) {
+                    gpuListContainer.innerHTML = data.gpus.map(function(gpu) {
+                        return '<div class="gpu-card">' +
+                            '<div class="gpu-header"><div class="gpu-name"><strong>GPU ' + gpu.index + ':</strong> ' + escapeHtml(gpu.name) + '</div></div>' +
+                            '<div class="gpu-stats">' +
+                            '<div class="gpu-stat"><span class="gpu-stat-label">Memory</span><span class="gpu-stat-value">' + gpu.used_memory_mb + ' / ' + gpu.total_memory_mb + ' MB</span></div>' +
+                            (gpu.temperature_c !== null ? '<div class="gpu-stat"><span class="gpu-stat-label">Temp</span><span class="gpu-stat-value">' + gpu.temperature_c + '°C</span></div>' : '') +
+                            '</div></div>';
+                    }).join('');
+
+                    gpuSelection.innerHTML = '<option value="">Auto (use all available)</option>';
+                    data.gpus.forEach(function(gpu) {
+                        var opt = document.createElement('option');
+                        opt.value = gpu.index;
+                        opt.textContent = 'GPU ' + gpu.index + ': ' + gpu.name + ' (' + gpu.free_memory_mb + ' MB free)';
+                        gpuSelection.appendChild(opt);
+                    });
+                    gpuSelection.disabled = false;
+                    showToast('Found ' + data.gpus.length + ' GPU(s)', 'success');
+                } else {
+                    gpuListContainer.innerHTML = '<div style="text-align: center; padding: 20px; color: var(--text-muted);">No GPUs detected</div>';
+                }
+            } catch (error) {
+                gpuListContainer.innerHTML = '<div style="padding: 15px; background: var(--danger-light); border-radius: 10px; color: var(--danger);"><strong>Error:</strong> ' + escapeHtml(error.message) + '</div>';
+                showToast('Failed to load GPU information', 'error');
+            } finally {
+                refreshGpuBtn.disabled = false;
+                refreshGpuBtn.textContent = '🔄 Refresh GPU List';
+            }
+        });
+
+        function getSelectedGPUs() {
+            if (!gpuSelection) return null;
+            var selected = Array.from(gpuSelection.selectedOptions)
+                .map(function(opt) { return opt.value; })
+                .filter(function(val) { return val !== ''; });
+            return selected.length > 0 ? selected.map(Number) : null;
+        }
+
+        // ==========================================
+        // Dataset Preview
+        // ==========================================
+        const previewBtn = document.getElementById('preview-dataset-button');
+        const datasetPreview = document.getElementById('dataset-preview');
+        const datasetPreviewContent = document.getElementById('dataset-preview-content');
+
+        previewBtn.addEventListener('click', async function() {
+            previewBtn.disabled = true;
+            previewBtn.textContent = '🔍 Loading...';
+
+            var config = {
+                source: {
+                    source_type: 'huggingface',
+                    repo_id: document.getElementById('hf-repo-id').value,
+                    split: document.getElementById('hf-split').value
+                }
+            };
+
+            var maxSamples = document.getElementById('max-samples').value;
+            if (maxSamples) {
+                config.max_samples = parseInt(maxSamples);
+            }
+
+            try {
+                var response = await fetch(API_URL + '/dataset/preview', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+
+                if (!response.ok) {
+                    var errorData = await response.json();
+                    throw new Error(errorData.detail || 'Failed to preview dataset');
+                }
+
+                var data = await response.json();
+                datasetPreview.style.display = 'block';
+
+                var info = 'Dataset: ' + config.source.repo_id + '\n';
+                info += 'Total Samples: ' + (data.total_rows || 'unknown') + '\n';
+                info += 'Columns: ' + (data.columns || []).join(', ') + '\n';
+                info += '\n--- Sample Data ---\n';
+
+                if (data.samples && data.samples.length > 0) {
+                    data.samples.forEach(function(sample, idx) {
+                        info += '\n[Sample ' + (idx + 1) + ']\n';
+                        for (var key in sample) {
+                            var val = sample[key];
+                            if (typeof val === 'string' && val.length > 200) {
+                                val = val.substring(0, 200) + '...';
+                            } else if (typeof val === 'object') {
+                                val = JSON.stringify(val).substring(0, 200);
+                            }
+                            info += '  ' + key + ': ' + val + '\n';
+                        }
+                    });
+                }
+
+                datasetPreviewContent.textContent = info;
+                showToast('Dataset preview loaded', 'success');
+            } catch (error) {
+                showToast('Failed to preview dataset: ' + error.message, 'error');
+                datasetPreview.style.display = 'block';
+                datasetPreviewContent.textContent = 'Error: ' + error.message;
+            } finally {
+                previewBtn.disabled = false;
+                previewBtn.textContent = '🔍 Preview Dataset';
+            }
+        });
+
+        // ==========================================
+        // Form Submission - Start Training
+        // ==========================================
+        const trainingForm = document.getElementById('training-form');
+
+        trainingForm.addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            var outputName = document.getElementById('output-name').value.trim();
+            if (!outputName) {
+                showToast('Please enter an output model name', 'error');
+                document.getElementById('output-name').focus();
+                return;
+            }
+
+            // Parse target modules
+            var targetModulesStr = document.getElementById('target-modules').value || '';
+            var targetModules = targetModulesStr.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length > 0; });
+
+            // Parse wandb tags
+            var wandbTagsStr = document.getElementById('wandb-tags').value || '';
+            var wandbTags = wandbTagsStr ? wandbTagsStr.split(',').map(function(t) { return t.trim(); }).filter(function(t) { return t; }) : null;
+
+            // Build max_samples
+            var maxSamplesVal = document.getElementById('max-samples').value;
+            var maxSamples = maxSamplesVal ? parseInt(maxSamplesVal) : null;
+
+            // Build dataset config
+            var trainingMode = document.getElementById('training-mode').value;
+
+            var datasetConfig = {
+                source: {
+                    source_type: 'huggingface',
+                    repo_id: document.getElementById('hf-repo-id').value,
+                    split: document.getElementById('hf-split').value
+                },
+                max_samples: maxSamples,
+                test_size: 0.01,
+                training_mode: trainingMode
+            };
+
+            // Build the full training config
+            var config = {
+                trainer_type: 'atelier',
+                adapter_type: document.getElementById('adapter-type').value,
+                base_model: document.getElementById('base-model').value,
+                output_name: outputName,
+                training_mode: trainingMode,
+                image_size: parseInt(document.getElementById('image-size').value || 1024),
+                cache_embeddings: document.getElementById('cache-embeddings').checked,
+                cache_dir: document.getElementById('cache-dir').value || './embeddings_cache',
+                num_epochs: parseInt(document.getElementById('epochs').value || 50),
+                batch_size: parseInt(document.getElementById('batch-size').value || 1),
+                learning_rate: parseFloat(document.getElementById('learning-rate').value || 0.0001),
+                gradient_accumulation_steps: parseInt(document.getElementById('grad-accum').value || 1),
+
+                // LoRA
+                use_lora: document.getElementById('use-lora').checked,
+                lora_r: parseInt(document.getElementById('lora-r').value || 64),
+                lora_alpha: parseInt(document.getElementById('lora-alpha').value || 128),
+                target_modules: targetModules,
+
+                // Dataset
+                dataset: datasetConfig,
+
+                // Preference parameters
+                beta: parseFloat(document.getElementById('beta').value || 0.1),
+                gamma: parseFloat(document.getElementById('gamma').value || 0.5),
+                label_smoothing: parseFloat(document.getElementById('label-smoothing').value || 0.0),
+                sft_weight: parseFloat(document.getElementById('sft-weight').value || 0.1),
+
+                // Advanced
+                weight_decay: parseFloat(document.getElementById('weight-decay').value || 0.01),
+                warmup_ratio: parseFloat(document.getElementById('warmup-ratio').value || 0.1),
+                max_grad_norm: parseFloat(document.getElementById('max-grad-norm').value || 1.0),
+                lr_scheduler_type: document.getElementById('lr-scheduler-type').value || 'cosine',
+                optimizer_type: document.getElementById('optimizer-type').value || 'adamw',
+                gradient_checkpointing: document.getElementById('gradient-checkpointing').checked,
+                seed: parseInt(document.getElementById('seed').value || 42),
+                logging_steps: parseInt(document.getElementById('logging-steps').value || 10),
+
+                // GPU
+                gpu_ids: getSelectedGPUs(),
+
+                // W&B
+                use_wandb: document.getElementById('use-wandb').checked,
+                wandb_key: document.getElementById('wandb-key').value || null,
+                wandb_project: document.getElementById('wandb-project').value || null,
+                wandb_run_name: document.getElementById('wandb-run-name').value || null,
+                wandb_tags: wandbTags,
+
+                // Hub
+                push_to_hub: document.getElementById('push-hub').checked,
+                hf_token: document.getElementById('hf-token').value || document.getElementById('hf-token-preload').value || null,
+                hf_hub_private: document.getElementById('hf-hub-private').checked
+            };
+
+            // Add optional model weights path for SDXL
+            var weightsPath = document.getElementById('model-weights-path').value;
+            if (weightsPath) {
+                config.model_weights_path = weightsPath;
+            }
+
+            // Confirmation
+            var proceed = confirm(
+                'Ready to start diffusion training?\n\n' +
+                'Model: ' + config.base_model + '\n' +
+                'Mode: ' + config.training_mode + '\n' +
+                'Epochs: ' + config.num_epochs + '\n' +
+                'Batch Size: ' + config.batch_size + '\n' +
+                'Learning Rate: ' + config.learning_rate + '\n' +
+                'LoRA: ' + (config.use_lora ? 'r=' + config.lora_r + ', alpha=' + config.lora_alpha : 'Disabled') + '\n\n' +
+                'Proceed?'
+            );
+
+            if (!proceed) return;
+
+            // Disable form
+            setFormEnabled(false);
+
+            try {
+                var response = await fetch(API_URL + '/train', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(config)
+                });
+
+                if (!response.ok) {
+                    var errorData = await response.json();
+                    throw new Error(errorData.detail || 'Failed to submit training job');
+                }
+
+                var data = await response.json();
+                showToast('Training spell cast! Job ID: ' + data.job_id, 'success');
+
+                // Track job
+                activeJobs[data.job_id] = {
+                    name: outputName,
+                    status: 'started',
+                    config: config
+                };
+
+                // Reload jobs
+                await loadJobs();
+
+                // Open monitoring modal
+                showJobDetails(data.job_id);
+
+                // Clear output name
+                document.getElementById('output-name').value = '';
+
+            } catch (error) {
+                showToast('Failed to start training: ' + error.message, 'error');
+            } finally {
+                setFormEnabled(true);
+            }
+        });
+
+        function setFormEnabled(enabled) {
+            var inputs = trainingForm.querySelectorAll('input, select, button, textarea');
+            inputs.forEach(function(input) {
+                input.disabled = !enabled;
+            });
+        }
+
+        // ==========================================
+        // Job Management
+        // ==========================================
+        var activeJobs = {};
+        var currentJobId = null;
+        var pollInterval = null;
+        var wsSocket = null;
+        var lossHistory = [];
+
+        // Job modal elements
+        var jobModal = document.getElementById('job-modal');
+        var jobModalClose = jobModal.querySelector('.close');
+
+        jobModalClose.addEventListener('click', function() {
+            closeJobModal();
+        });
+
+        window.addEventListener('click', function(e) {
+            if (e.target === jobModal) {
+                closeJobModal();
+            }
+        });
+
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' && jobModal.style.display !== 'none') {
+                closeJobModal();
+            }
+        });
+
+        // Stop button
+        var stopButton = document.getElementById('stop-button');
+        stopButton.addEventListener('click', async function() {
+            if (!currentJobId) return;
+
+            var confirmed = confirm(
+                'Stop training gracefully?\n\n' +
+                'The training will complete the current step, save a checkpoint, and exit.\n' +
+                'This cannot be undone.'
+            );
+            if (!confirmed) return;
+
+            try {
+                var response = await fetch(API_URL + '/jobs/' + currentJobId + '/stop', { method: 'POST' });
+                if (!response.ok) throw new Error('Failed to stop job');
+                var data = await response.json();
+
+                if (data.status === 'success') {
+                    showToast('Stop request sent. Training will stop after current step.', 'success');
+                    stopButton.disabled = true;
+                    stopButton.textContent = '⏸️ Stopping...';
+                } else {
+                    showToast(data.message || 'Could not stop job', 'warning');
+                }
+            } catch (error) {
+                showToast('Failed to stop training: ' + error.message, 'error');
+            }
+        });
+
+        // Clear all jobs
+        var clearAllBtn = document.getElementById('clear-all-jobs-btn');
+        clearAllBtn.addEventListener('click', async function() {
+            var confirmed = confirm('Are you sure you want to delete ALL jobs?\n\nThis action cannot be undone!');
+            if (!confirmed) return;
+
+            try {
+                var response = await fetch(API_URL + '/jobs', { method: 'DELETE' });
+                if (!response.ok) throw new Error('Failed to clear jobs');
+                showToast('All jobs cleared successfully', 'success');
+                activeJobs = {};
+                closeJobModal();
+                await loadJobs();
+            } catch (error) {
+                showToast('Failed to clear jobs: ' + error.message, 'error');
+            }
+        });
+
+        // Event delegation for job cards
+        var jobsContainer = document.getElementById('jobs-container');
+        jobsContainer.addEventListener('click', function(e) {
+            var card = e.target.closest('.job-card');
+            if (!card) return;
+
+            var jobId = card.dataset.jobId;
+            var actionEl = e.target.closest('[data-action]');
+            var action = actionEl ? actionEl.dataset.action : null;
+
+            if (action === 'delete-job') {
+                e.stopPropagation();
+                deleteJob(jobId);
+            } else {
+                showJobDetails(jobId);
+            }
+        });
+
+        async function loadJobs() {
+            try {
+                var response = await fetch(API_URL + '/jobs');
+                if (!response.ok) throw new Error('Failed to load jobs');
+                var jobs = await response.json();
+
+                var jobsSection = document.getElementById('jobs-section');
+                var container = document.getElementById('jobs-container');
+
+                if (Object.keys(jobs).length > 0) {
+                    jobsSection.style.display = 'block';
+                    container.innerHTML = '';
+
+                    for (var jobId in jobs) {
+                        var job = jobs[jobId];
+                        if (activeJobs[jobId]) {
+                            activeJobs[jobId].status = job.status;
+                            activeJobs[jobId].progress = job.progress;
+                        }
+
+                        var jobName = (activeJobs[jobId] && activeJobs[jobId].name) || jobId;
+                        var progressPercent = Math.round((job.progress || 0) * 100);
+                        var statusClass = 'status-' + job.status;
+
+                        var cardHtml = '<div class="job-card" data-job-id="' + escapeHtml(jobId) + '">' +
+                            '<div class="job-card-header">' +
+                            '<div style="flex: 1; cursor: pointer;" data-action="view-job">' +
+                            '<h4>' + escapeHtml(jobName) + '</h4>' +
+                            '<span class="job-status-badge ' + statusClass + '">' + escapeHtml(job.status) + '</span>' +
+                            '</div>' +
+                            '<button class="delete-job-btn" data-action="delete-job" title="Delete job">🗑️</button>' +
+                            '</div>' +
+                            '<div class="progress-bar" style="cursor: pointer;" data-action="view-job">' +
+                            '<div class="progress-fill" style="width: ' + progressPercent + '%"></div>' +
+                            '<span class="progress-text">' + progressPercent + '%</span>' +
+                            '</div></div>';
+
+                        container.insertAdjacentHTML('beforeend', cardHtml);
+                    }
+                } else {
+                    jobsSection.style.display = 'none';
+                }
+            } catch (error) {
+                console.error('Failed to load jobs:', error);
+            }
+        }
+
+        async function deleteJob(jobId) {
+            var confirmed = confirm('Are you sure you want to delete job ' + jobId + '?');
+            if (!confirmed) return;
+
+            try {
+                var response = await fetch(API_URL + '/jobs/' + jobId, { method: 'DELETE' });
+                if (!response.ok) throw new Error('Failed to delete job');
+                showToast('Job deleted successfully', 'success');
+                delete activeJobs[jobId];
+                if (currentJobId === jobId) closeJobModal();
+                await loadJobs();
+            } catch (error) {
+                showToast('Failed to delete job: ' + error.message, 'error');
+            }
+        }
+
+        function showJobDetails(jobId) {
+            currentJobId = jobId;
+            lossHistory = [];
+            jobModal.style.display = 'flex';
+            document.body.style.overflow = 'hidden';
+
+            var jobName = (activeJobs[jobId] && activeJobs[jobId].name) || jobId;
+            document.getElementById('job-name').textContent = jobName;
+            document.getElementById('job-id').textContent = jobId;
+
+            // Reset stop button
+            stopButton.disabled = false;
+            stopButton.textContent = '🛑 Stop Training';
+
+            // Try WebSocket, fall back to polling
+            startWebSocketMonitoring(jobId);
+        }
+
+        function closeJobModal() {
+            stopMonitoring();
+            jobModal.style.display = 'none';
+            document.body.style.overflow = '';
+            currentJobId = null;
+
+            stopButton.disabled = false;
+            stopButton.textContent = '🛑 Stop Training';
+        }
+
+        // ==========================================
+        // WebSocket Monitoring
+        // ==========================================
+        function startWebSocketMonitoring(jobId) {
+            if (wsSocket) {
+                wsSocket.close();
+                wsSocket = null;
+            }
+
+            var wsUrl = WS_URL + '/ws/' + jobId;
+            console.log('Connecting to WebSocket:', wsUrl);
+
+            try {
+                wsSocket = new WebSocket(wsUrl);
+
+                wsSocket.onopen = function() {
+                    console.log('WebSocket connected for job:', jobId);
+                };
+
+                wsSocket.onmessage = function(event) {
+                    try {
+                        var data = JSON.parse(event.data);
+                        handleWebSocketMessage(data);
+                    } catch (err) {
+                        console.error('Failed to parse WS message:', err);
+                    }
+                };
+
+                wsSocket.onerror = function(error) {
+                    console.warn('WebSocket error, falling back to polling:', error);
+                    startPollingMonitoring(jobId);
+                };
+
+                wsSocket.onclose = function(event) {
+                    console.log('WebSocket closed:', event.code);
+                    if (event.code !== 1000 && currentJobId) {
+                        // Unexpected close, fall back to polling
+                        startPollingMonitoring(jobId);
+                    }
+                };
+            } catch (error) {
+                console.warn('WebSocket not available, using polling');
+                startPollingMonitoring(jobId);
+            }
+
+            // Also do an initial fetch
+            fetchJobStatus();
+        }
+
+        function handleWebSocketMessage(data) {
+            switch (data.type) {
+                case 'status_update':
+                    updateJobUI(data);
+                    updateJobCard(data.job_id || currentJobId, data);
+                    break;
+                case 'metrics':
+                    updateJobUI(data.metrics || data);
+                    break;
+                case 'completed':
+                    showToast('Training completed successfully!', 'success');
+                    stopMonitoring();
+                    loadJobs();
+                    break;
+                case 'error':
+                    showToast(data.message || 'Unknown error', 'error');
+                    break;
+                case 'ping':
+                    if (wsSocket && wsSocket.readyState === WebSocket.OPEN) {
+                        wsSocket.send(JSON.stringify({ type: 'pong' }));
+                    }
+                    break;
+            }
+        }
+
+        function startPollingMonitoring(jobId) {
+            if (pollInterval) clearInterval(pollInterval);
+            fetchJobStatus();
+            pollInterval = setInterval(fetchJobStatus, 3000);
+        }
+
+        async function fetchJobStatus() {
+            if (!currentJobId) return;
+
+            try {
+                var response = await fetch(API_URL + '/status/' + currentJobId);
+                if (!response.ok) throw new Error('Failed to fetch status');
+                var status = await response.json();
+                updateJobUI(status);
+                updateJobCard(currentJobId, status);
+
+                if (['completed', 'failed', 'stopped'].includes(status.status)) {
+                    stopMonitoring();
+                    await loadJobs();
+                }
+            } catch (error) {
+                console.error('Failed to fetch job status:', error);
+            }
+        }
+
+        function stopMonitoring() {
+            if (wsSocket) {
+                wsSocket.close(1000, 'Client closed');
+                wsSocket = null;
+            }
+            if (pollInterval) {
+                clearInterval(pollInterval);
+                pollInterval = null;
+            }
+        }
+
+        function updateJobUI(status) {
+            // Progress bar
+            var progressPercent = Math.round((status.progress || 0) * 100);
+            var progressFill = document.getElementById('progress-fill');
+            var progressText = document.getElementById('progress-text');
+            if (progressFill) progressFill.style.width = progressPercent + '%';
+            if (progressText) progressText.textContent = progressPercent + '%';
+
+            // Status text
+            var statusText = document.getElementById('status-text');
+            if (statusText) statusText.textContent = 'Status: ' + (status.status || '-');
+
+            // Metrics
+            var currentStepEl = document.getElementById('current-step');
+            var lossValueEl = document.getElementById('loss-value');
+            var jobStatusEl = document.getElementById('job-status');
+            var gpuMemoryEl = document.getElementById('gpu-memory-value');
+
+            if (currentStepEl) currentStepEl.textContent = status.current_step || '-';
+            if (lossValueEl) lossValueEl.textContent = status.loss ? status.loss.toFixed(4) : '-';
+            if (jobStatusEl) jobStatusEl.textContent = status.status || '-';
+            if (gpuMemoryEl) gpuMemoryEl.textContent = status.gpu_memory ? status.gpu_memory.toFixed(2) + ' GB' : '-';
+
+            // Loss chart
+            if (status.loss && typeof status.loss === 'number') {
+                lossHistory.push({ step: status.current_step || lossHistory.length, loss: status.loss });
+                drawLossChart();
+            }
+
+            // W&B link
+            var wandbLink = document.getElementById('wandb-link');
+            if (wandbLink && 'wandb_url' in status) {
+                if (status.wandb_url) {
+                    wandbLink.style.display = 'block';
+                    wandbLink.href = status.wandb_url;
+                } else {
+                    wandbLink.style.display = 'none';
+                }
+            }
+
+            // Stop button state
+            if (status.status === 'completed') {
+                stopButton.disabled = true;
+                showToast('Training completed successfully!', 'success');
+            } else if (status.status === 'failed') {
+                stopButton.disabled = true;
+                showToast('Training failed: ' + (status.error || 'Unknown error'), 'error');
+            } else if (status.status === 'stopped') {
+                stopButton.disabled = true;
+                showToast('Training stopped at step ' + (status.current_step || '?'), 'warning');
+            } else if (status.status === 'stopping') {
+                stopButton.disabled = true;
+                stopButton.textContent = '⏸️ Stopping...';
+            } else if (['training', 'initializing', 'loading_model', 'loading_dataset'].includes(status.status)) {
+                stopButton.disabled = false;
+                stopButton.textContent = '🛑 Stop Training';
+            }
+        }
+
+        function updateJobCard(jobId, data) {
+            var card = document.querySelector('[data-job-id="' + jobId + '"]');
+            if (!card) return;
+
+            var badge = card.querySelector('.job-status-badge');
+            var fill = card.querySelector('.progress-fill');
+            var text = card.querySelector('.progress-text');
+
+            if (badge && data.status) {
+                badge.className = 'job-status-badge status-' + data.status;
+                badge.textContent = data.status;
+            }
+            if (fill && text && data.progress !== undefined) {
+                var pct = Math.round((data.progress || 0) * 100);
+                fill.style.width = pct + '%';
+                text.textContent = pct + '%';
+            }
+        }
+
+        // ==========================================
+        // Loss Chart (Simple Canvas)
+        // ==========================================
+        function drawLossChart() {
+            var canvas = document.getElementById('loss-chart');
+            if (!canvas || lossHistory.length < 2) return;
+
+            var ctx = canvas.getContext('2d');
+            var rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width * (window.devicePixelRatio || 1);
+            canvas.height = rect.height * (window.devicePixelRatio || 1);
+            ctx.scale(window.devicePixelRatio || 1, window.devicePixelRatio || 1);
+
+            var w = rect.width;
+            var h = rect.height;
+            var padding = { top: 20, right: 20, bottom: 30, left: 50 };
+            var chartW = w - padding.left - padding.right;
+            var chartH = h - padding.top - padding.bottom;
+
+            // Clear
+            ctx.clearRect(0, 0, w, h);
+
+            // Get loss range
+            var losses = lossHistory.map(function(p) { return p.loss; });
+            var minLoss = Math.min.apply(null, losses);
+            var maxLoss = Math.max.apply(null, losses);
+            var lossRange = maxLoss - minLoss || 1;
+
+            // Add 10% padding to range
+            minLoss -= lossRange * 0.1;
+            maxLoss += lossRange * 0.1;
+            lossRange = maxLoss - minLoss;
+
+            // Draw grid lines
+            ctx.strokeStyle = 'rgba(192, 66, 255, 0.1)';
+            ctx.lineWidth = 1;
+            for (var i = 0; i <= 4; i++) {
+                var y = padding.top + (i / 4) * chartH;
+                ctx.beginPath();
+                ctx.moveTo(padding.left, y);
+                ctx.lineTo(padding.left + chartW, y);
+                ctx.stroke();
+
+                // Y-axis labels
+                var labelVal = maxLoss - (i / 4) * lossRange;
+                ctx.fillStyle = 'var(--text-muted)';
+                ctx.font = '10px sans-serif';
+                ctx.textAlign = 'right';
+                ctx.fillText(labelVal.toFixed(3), padding.left - 5, y + 3);
+            }
+
+            // Draw loss line
+            ctx.strokeStyle = '#c042ff';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+
+            lossHistory.forEach(function(point, idx) {
+                var x = padding.left + (idx / (lossHistory.length - 1)) * chartW;
+                var y = padding.top + ((maxLoss - point.loss) / lossRange) * chartH;
+
+                if (idx === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            });
+            ctx.stroke();
+
+            // Draw gradient fill
+            var gradient = ctx.createLinearGradient(0, padding.top, 0, padding.top + chartH);
+            gradient.addColorStop(0, 'rgba(192, 66, 255, 0.3)');
+            gradient.addColorStop(1, 'rgba(192, 66, 255, 0.02)');
+
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            lossHistory.forEach(function(point, idx) {
+                var x = padding.left + (idx / (lossHistory.length - 1)) * chartW;
+                var y = padding.top + ((maxLoss - point.loss) / lossRange) * chartH;
+                if (idx === 0) {
+                    ctx.moveTo(x, y);
+                } else {
+                    ctx.lineTo(x, y);
+                }
+            });
+            ctx.lineTo(padding.left + chartW, padding.top + chartH);
+            ctx.lineTo(padding.left, padding.top + chartH);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        // ==========================================
+        // Version Loading
+        // ==========================================
+        async function loadVersion() {
+            try {
+                var response = await fetch(API_URL + '/version');
+                if (!response.ok) return;
+                var data = await response.json();
+                var el = document.getElementById('version-info');
+                if (el && data) {
+                    var text = data.release_name
+                        ? 'Merlina v' + data.version + ' - ' + data.release_name
+                        : 'Merlina v' + data.version;
+                    el.textContent = text;
+                    el.title = 'Released: ' + data.release_date;
+                }
+            } catch (error) {
+                var el = document.getElementById('version-info');
+                if (el) el.textContent = 'Merlina';
+            }
+        }
+
+        // ==========================================
+        // Utility Functions
+        // ==========================================
+        function escapeHtml(str) {
+            if (!str) return '';
+            var div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        // ==========================================
+        // Initialize
+        // ==========================================
+        loadJobs();
+        loadVersion();
+
+        console.log('Merlina Diffusion Training initialized');
+    })();
+    </script>
+</body>
+</html>

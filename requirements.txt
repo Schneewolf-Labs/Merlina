@@ -10,9 +10,14 @@ torch>=2.0.0
 transformers>=4.36.0
 accelerate>=0.24.0
 grimoire-rl @ git+https://github.com/Schneewolf-Labs/grimoire.git
+atelier @ git+https://github.com/Schneewolf-Labs/atelier.git
 peft>=0.6.0
 bitsandbytes>=0.41.0
 datasets>=2.14.0
+
+# Diffusion models
+diffusers>=0.25.0
+Pillow>=10.0.0
 
 # Utilities
 wandb>=0.15.0
