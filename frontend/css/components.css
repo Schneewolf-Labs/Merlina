@@ -517,6 +517,46 @@ textarea.magic-input {
     font-size: var(--font-size-xs);
 }
 
+/* Job status badges for load-from-job modal */
+.job-status-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: var(--font-size-xs);
+    font-weight: bold;
+    text-transform: capitalize;
+}
+
+.status-completed {
+    background: var(--success);
+    color: white;
+}
+
+.status-failed {
+    background: var(--danger);
+    color: white;
+}
+
+.status-stopped {
+    background: var(--warning);
+    color: #333;
+}
+
+.status-running {
+    background: var(--primary-purple);
+    color: white;
+}
+
+.status-queued {
+    background: #888;
+    color: white;
+}
+
+.status-default {
+    background: #ccc;
+    color: #333;
+}
+
 .config-actions {
     display: flex;
     gap: var(--space-sm);

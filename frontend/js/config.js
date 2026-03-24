@@ -12,6 +12,7 @@ class ConfigManager {
         this.toast = new Toast();
         this.saveModal = new Modal('save-config-modal');
         this.loadModal = new Modal('load-config-modal');
+        this.loadFromJobModal = new Modal('load-from-job-modal');
         this.manageModal = new Modal('manage-configs-modal');
 
         this.setupEventListeners();
@@ -31,6 +32,12 @@ class ConfigManager {
         const loadBtn = document.getElementById('load-config-btn');
         if (loadBtn) {
             loadBtn.addEventListener('click', () => this.showLoadModal());
+        }
+
+        // Load from job button
+        const loadFromJobBtn = document.getElementById('load-from-job-btn');
+        if (loadFromJobBtn) {
+            loadFromJobBtn.addEventListener('click', () => this.showLoadFromJobModal());
         }
 
         // Manage configs button
@@ -53,6 +60,128 @@ class ConfigManager {
     async showLoadModal() {
         this.loadModal.show();
         await this.loadConfigsList();
+    }
+
+    /**
+     * Show load from job modal
+     */
+    async showLoadFromJobModal() {
+        this.loadFromJobModal.show();
+        await this.loadJobHistoryList();
+    }
+
+    /**
+     * Load job history list for the load-from-job modal
+     */
+    async loadJobHistoryList() {
+        const listEl = document.getElementById('job-history-list');
+        if (!listEl) return;
+
+        LoadingManager.showSkeleton(listEl, 3);
+
+        try {
+            const result = await MerlinaAPI.getJobHistory(50, 0);
+            const jobs = result.jobs;
+
+            if (jobs.length === 0) {
+                listEl.innerHTML = '<p class="empty-state">No previous jobs found.</p>';
+                return;
+            }
+
+            listEl.innerHTML = jobs.map(job => {
+                const summary = job.config_summary || {};
+                const statusClass = this.getJobStatusClass(job.status);
+                const date = new Date(job.created_at).toLocaleString();
+
+                return `
+                    <div class="config-item job-history-item" data-job-id="${sanitizeHTML(job.job_id)}">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <h4>${sanitizeHTML(summary.output_name || job.job_id)}</h4>
+                            <span class="job-status-badge ${statusClass}">${sanitizeHTML(job.status)}</span>
+                        </div>
+                        ${summary.base_model ? `<p style="margin: 4px 0; font-size: 0.9em; opacity: 0.8;">Model: ${sanitizeHTML(summary.base_model)}</p>` : ''}
+                        <div class="config-meta">
+                            ${summary.training_mode ? `<span class="config-tag">${sanitizeHTML(summary.training_mode.toUpperCase())}</span>` : ''}
+                            <span class="config-date">${date}</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            // Add click handlers
+            listEl.querySelectorAll('.job-history-item').forEach(item => {
+                item.addEventListener('click', () => {
+                    const jobId = item.dataset.jobId;
+                    this.loadConfigFromJob(jobId);
+                });
+            });
+
+        } catch (error) {
+            console.error('Failed to load job history:', error);
+            listEl.innerHTML = '<p class="error-state">Error loading job history</p>';
+        }
+    }
+
+    /**
+     * Get CSS class for job status badge
+     */
+    getJobStatusClass(status) {
+        const classMap = {
+            completed: 'status-completed',
+            failed: 'status-failed',
+            stopped: 'status-stopped',
+            training: 'status-running',
+            running: 'status-running',
+            queued: 'status-queued'
+        };
+        return classMap[status] || 'status-default';
+    }
+
+    /**
+     * Load config from a previous job and populate form
+     */
+    async loadConfigFromJob(jobId) {
+        try {
+            const result = await MerlinaAPI.getJobConfig(jobId);
+            const config = this.normalizeJobConfig(result.config);
+
+            this.populateForm(config);
+
+            this.toast.success('Configuration loaded from previous job!');
+            this.loadFromJobModal.hide();
+
+        } catch (error) {
+            console.error('Failed to load job config:', error);
+            this.toast.error(`Failed to load job configuration: ${error.message}`);
+        }
+    }
+
+    /**
+     * Normalize a stored job config (Pydantic field names) to the format populateForm expects.
+     * The stored config uses Pydantic model field names (e.g., num_epochs, batch_size)
+     * while populateForm expects the names from getCurrentConfig (e.g., num_train_epochs,
+     * per_device_train_batch_size).
+     */
+    normalizeJobConfig(config) {
+        const normalized = { ...config };
+
+        // Map Pydantic field names to form-expected names
+        if ('num_epochs' in normalized && !('num_train_epochs' in normalized)) {
+            normalized.num_train_epochs = normalized.num_epochs;
+        }
+        if ('batch_size' in normalized && !('per_device_train_batch_size' in normalized)) {
+            normalized.per_device_train_batch_size = normalized.batch_size;
+        }
+
+        // Handle target_modules: stored as array, form expects comma-separated string
+        if (Array.isArray(normalized.target_modules)) {
+            normalized.target_modules = normalized.target_modules.join(', ');
+        }
+        if (Array.isArray(normalized.modules_to_save)) {
+            normalized.modules_to_save = normalized.modules_to_save.join(', ');
+        }
+
+        return normalized;
     }
 
     /**

@@ -297,6 +297,15 @@ class MerlinaAPI {
         return this.fetch(`/configs/${name}`, { method: 'DELETE' });
     }
 
+    // Job config endpoint (for loading config from previous job)
+    static async getJobConfig(jobId) {
+        return this.fetch(`/jobs/${jobId}/config`);
+    }
+
+    static async getJobHistory(limit = 50, offset = 0) {
+        return this.fetch(`/jobs/history?limit=${limit}&offset=${offset}`);
+    }
+
     // Version endpoint
     static async getVersion() {
         return this.fetch('/version');

@@ -669,11 +669,33 @@ async def get_job_history(limit: int = 50, offset: int = 0, status: Optional[str
                 "created_at": job.created_at,
                 "updated_at": job.updated_at,
                 "output_dir": job.output_dir,
-                "error": job.error
+                "error": job.error,
+                "config_summary": {
+                    "base_model": job.config.get("base_model", ""),
+                    "output_name": job.config.get("output_name", ""),
+                    "training_mode": job.config.get("training_mode", ""),
+                } if job.config else None
             }
             for job in jobs_list
         ],
         "count": len(jobs_list)
+    }
+
+
+@app.get("/jobs/{job_id}/config")
+async def get_job_config(job_id: str):
+    """
+    Get the training configuration used for a specific job.
+    Useful for reusing a previous job's config as a starting point for a new training run.
+    """
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    return {
+        "status": "success",
+        "job_id": job_id,
+        "config": job.config
     }
 
 
