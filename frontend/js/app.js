@@ -62,6 +62,9 @@ class MerlinaApp {
         // Setup preset button
         this.setupPresetButton();
 
+        // Setup name generator
+        this.setupNameGenerator();
+
         // Setup advanced settings toggle
         this.setupAdvancedToggle();
 
@@ -688,6 +691,33 @@ class MerlinaApp {
                 btn.disabled = false;
                 btn.textContent = '📋 Apply Suggested Settings';
             }
+        });
+    }
+
+    /**
+     * Generate an output model name from base model, dataset, and training method
+     */
+    setupNameGenerator() {
+        const btn = document.getElementById('generate-name-btn');
+        if (!btn) return;
+
+        btn.addEventListener('click', () => {
+            const baseModel = document.getElementById('base-model')?.value?.trim() || '';
+            const repoId = document.getElementById('hf-repo-id')?.value?.trim() || '';
+            const mode = document.getElementById('training-mode')?.value || 'sft';
+
+            // Extract short model name: "org/Model-Name-7B-Instruct" -> "Model-Name-7B-Instruct"
+            const modelPart = baseModel.split('/').pop() || 'model';
+
+            // Extract short dataset name: "org/dataset-name" -> "dataset-name"
+            const datasetPart = repoId.split('/').pop() || '';
+
+            const parts = [modelPart];
+            if (datasetPart) parts.push(datasetPart);
+            parts.push(mode.toUpperCase());
+
+            const name = parts.join('-');
+            document.getElementById('output-name').value = name;
         });
     }
 
