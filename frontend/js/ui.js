@@ -517,6 +517,283 @@ class MetricsDisplay {
 }
 
 /**
+ * Loss chart visualization using Chart.js
+ */
+class LossChart {
+    constructor(canvasId = 'loss-chart') {
+        this.canvasId = canvasId;
+        this.chart = null;
+        this.data = {
+            steps: [],
+            loss: [],
+            evalLoss: [],
+            learningRate: [],
+            gpuMemory: []
+        };
+        this.showLR = false;
+        this.showGPU = false;
+
+        this.setupToggleButtons();
+    }
+
+    setupToggleButtons() {
+        const lrBtn = document.getElementById('chart-toggle-lr');
+        const gpuBtn = document.getElementById('chart-toggle-gpu');
+
+        if (lrBtn) {
+            lrBtn.addEventListener('click', () => {
+                this.showLR = !this.showLR;
+                lrBtn.classList.toggle('active', this.showLR);
+                this.updateVisibility();
+            });
+        }
+        if (gpuBtn) {
+            gpuBtn.addEventListener('click', () => {
+                this.showGPU = !this.showGPU;
+                gpuBtn.classList.toggle('active', this.showGPU);
+                this.updateVisibility();
+            });
+        }
+    }
+
+    getThemeColors() {
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        return {
+            loss: '#c042ff',
+            evalLoss: '#ff6b9d',
+            lr: '#4caf50',
+            gpu: '#2196f3',
+            grid: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)',
+            text: isDark ? '#c0c0c0' : '#555'
+        };
+    }
+
+    initChart() {
+        if (this.chart) return;
+
+        const canvas = document.getElementById(this.canvasId);
+        if (!canvas || typeof Chart === 'undefined') return;
+
+        const colors = this.getThemeColors();
+
+        this.chart = new Chart(canvas, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [
+                    {
+                        label: 'Training Loss',
+                        data: [],
+                        borderColor: colors.loss,
+                        backgroundColor: colors.loss + '20',
+                        borderWidth: 2,
+                        pointRadius: 0,
+                        pointHitRadius: 8,
+                        tension: 0.3,
+                        fill: true,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'Eval Loss',
+                        data: [],
+                        borderColor: colors.evalLoss,
+                        backgroundColor: 'transparent',
+                        borderWidth: 2,
+                        borderDash: [5, 5],
+                        pointRadius: 3,
+                        pointBackgroundColor: colors.evalLoss,
+                        tension: 0.3,
+                        yAxisID: 'y'
+                    },
+                    {
+                        label: 'Learning Rate',
+                        data: [],
+                        borderColor: colors.lr,
+                        backgroundColor: 'transparent',
+                        borderWidth: 1.5,
+                        pointRadius: 0,
+                        tension: 0.3,
+                        hidden: true,
+                        yAxisID: 'y1'
+                    },
+                    {
+                        label: 'GPU Memory (GB)',
+                        data: [],
+                        borderColor: colors.gpu,
+                        backgroundColor: colors.gpu + '15',
+                        borderWidth: 1.5,
+                        pointRadius: 0,
+                        tension: 0.3,
+                        fill: true,
+                        hidden: true,
+                        yAxisID: 'y2'
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: { duration: 300 },
+                interaction: {
+                    mode: 'index',
+                    intersect: false
+                },
+                plugins: {
+                    legend: {
+                        display: true,
+                        position: 'top',
+                        labels: {
+                            color: colors.text,
+                            usePointStyle: true,
+                            pointStyle: 'line',
+                            padding: 12,
+                            font: { size: 11 },
+                            filter: (item) => !item.hidden || item.datasetIndex <= 1
+                        }
+                    },
+                    tooltip: {
+                        backgroundColor: 'rgba(0,0,0,0.8)',
+                        titleFont: { size: 12 },
+                        bodyFont: { size: 11 },
+                        padding: 10,
+                        callbacks: {
+                            title: (items) => `Step ${items[0].label}`,
+                            label: (ctx) => {
+                                const val = ctx.parsed.y;
+                                if (val === null || val === undefined) return null;
+                                if (ctx.datasetIndex === 2) return `LR: ${val.toExponential(2)}`;
+                                if (ctx.datasetIndex === 3) return `GPU: ${val.toFixed(2)} GB`;
+                                return `${ctx.dataset.label}: ${val.toFixed(4)}`;
+                            }
+                        }
+                    }
+                },
+                scales: {
+                    x: {
+                        title: { display: true, text: 'Step', color: colors.text },
+                        ticks: { color: colors.text, maxTicksLimit: 10 },
+                        grid: { color: colors.grid }
+                    },
+                    y: {
+                        title: { display: true, text: 'Loss', color: colors.text },
+                        ticks: { color: colors.text },
+                        grid: { color: colors.grid },
+                        beginAtZero: false
+                    },
+                    y1: {
+                        display: false,
+                        position: 'right',
+                        title: { display: true, text: 'Learning Rate', color: colors.text },
+                        ticks: { color: colors.text },
+                        grid: { drawOnChartArea: false }
+                    },
+                    y2: {
+                        display: false,
+                        position: 'right',
+                        title: { display: true, text: 'GPU (GB)', color: colors.text },
+                        ticks: { color: colors.text },
+                        grid: { drawOnChartArea: false },
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+    }
+
+    updateVisibility() {
+        if (!this.chart) return;
+
+        // LR dataset (index 2)
+        this.chart.data.datasets[2].hidden = !this.showLR;
+        this.chart.options.scales.y1.display = this.showLR;
+
+        // GPU dataset (index 3)
+        this.chart.data.datasets[3].hidden = !this.showGPU;
+        this.chart.options.scales.y2.display = this.showGPU;
+
+        this.chart.update('none');
+    }
+
+    /**
+     * Load historical metrics from API response
+     */
+    loadHistory(metrics) {
+        if (!metrics || metrics.length === 0) return;
+
+        this.data = { steps: [], loss: [], evalLoss: [], learningRate: [], gpuMemory: [] };
+
+        for (const m of metrics) {
+            this.data.steps.push(m.step);
+            this.data.loss.push(m.loss);
+            this.data.evalLoss.push(m.eval_loss);
+            this.data.learningRate.push(m.learning_rate);
+            this.data.gpuMemory.push(m.gpu_memory_used);
+        }
+
+        this.initChart();
+        this.syncChart();
+        this.showChart();
+    }
+
+    /**
+     * Add a single data point from real-time updates
+     */
+    addPoint(step, loss, evalLoss, learningRate, gpuMemory) {
+        if (step === null || step === undefined) return;
+        // Avoid duplicate steps
+        if (this.data.steps.length > 0 && step <= this.data.steps[this.data.steps.length - 1]) return;
+
+        this.data.steps.push(step);
+        this.data.loss.push(loss ?? null);
+        this.data.evalLoss.push(evalLoss ?? null);
+        this.data.learningRate.push(learningRate ?? null);
+        this.data.gpuMemory.push(gpuMemory ?? null);
+
+        this.initChart();
+        this.syncChart();
+        this.showChart();
+    }
+
+    syncChart() {
+        if (!this.chart) return;
+
+        this.chart.data.labels = this.data.steps;
+        this.chart.data.datasets[0].data = this.data.loss;
+        this.chart.data.datasets[1].data = this.data.evalLoss;
+        this.chart.data.datasets[2].data = this.data.learningRate;
+        this.chart.data.datasets[3].data = this.data.gpuMemory;
+
+        this.chart.update('none');
+    }
+
+    showChart() {
+        const emptyMsg = document.getElementById('loss-chart-empty');
+        const canvas = document.getElementById(this.canvasId);
+        if (this.data.steps.length > 0) {
+            if (emptyMsg) emptyMsg.style.display = 'none';
+            if (canvas) canvas.style.display = 'block';
+        }
+    }
+
+    /**
+     * Reset chart for a new job
+     */
+    reset() {
+        this.data = { steps: [], loss: [], evalLoss: [], learningRate: [], gpuMemory: [] };
+
+        if (this.chart) {
+            this.chart.destroy();
+            this.chart = null;
+        }
+
+        const emptyMsg = document.getElementById('loss-chart-empty');
+        const canvas = document.getElementById(this.canvasId);
+        if (emptyMsg) emptyMsg.style.display = 'block';
+        if (canvas) canvas.style.display = 'none';
+    }
+}
+
+/**
  * GPU display utilities
  */
 class GPUDisplay {
@@ -671,6 +948,7 @@ export {
     FormUI,
     JobCardRenderer,
     MetricsDisplay,
+    LossChart,
     GPUDisplay,
     Tooltip,
     confirm,

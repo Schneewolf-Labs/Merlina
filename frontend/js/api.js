@@ -302,6 +302,10 @@ class MerlinaAPI {
         return this.fetch(`/jobs/${jobId}/config`);
     }
 
+    static async getJobMetrics(jobId) {
+        return this.fetch(`/jobs/${jobId}/metrics`);
+    }
+
     static async getJobHistory(limit = 50, offset = 0) {
         return this.fetch(`/jobs/history?limit=${limit}&offset=${offset}`);
     }
