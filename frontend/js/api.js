@@ -265,6 +265,13 @@ class MerlinaAPI {
         }, LONG_TIMEOUT);
     }
 
+    static async getDatasetStats(config) {
+        return this.fetch('/dataset/stats', {
+            method: 'POST',
+            body: JSON.stringify(config)
+        }, LONG_TIMEOUT);
+    }
+
     static async previewFormattedDataset(config, offset = 0, limit = 5) {
         return this.fetch(`/dataset/preview-formatted?offset=${offset}&limit=${limit}`, {
             method: 'POST',
