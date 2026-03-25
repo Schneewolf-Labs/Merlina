@@ -1164,10 +1164,22 @@
             </div>
         </div>
 
+        <!-- API Key Auth Dialog (shown when server requires authentication) -->
+        <div id="api-key-dialog" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.7); z-index: 10000; align-items: center; justify-content: center;">
+            <div style="background: var(--card-bg, #1a1a2e); border: 1px solid var(--border-color, #333); border-radius: 12px; padding: 2rem; max-width: 400px; width: 90%; text-align: center;">
+                <h3 style="margin: 0 0 0.5rem 0; color: var(--accent-color, #f97316);">API Key Required</h3>
+                <p style="margin: 0 0 1rem 0; color: var(--text-secondary, #999); font-size: 0.9em;">This Merlina instance requires an API key.</p>
+                <input type="password" id="api-key-input" placeholder="Enter your API key" class="magic-input" style="width: 100%; margin-bottom: 1rem; box-sizing: border-box;">
+                <button id="api-key-submit" class="cast-btn" style="width: 100%; padding: 0.6rem;">Authenticate</button>
+                <p id="api-key-error" style="color: #ef4444; font-size: 0.85em; margin: 0.5rem 0 0 0; display: none;">Invalid API key. Please try again.</p>
+            </div>
+        </div>
+
         <!-- Footer -->
         <footer class="site-footer">
             <p>
                 <span id="version-info" style="opacity: 0.7; font-size: 0.9em;">Loading version...</span>
+                <span id="api-key-status" style="margin-left: 0.5rem; cursor: pointer; display: none;" title="API key authentication active (click to change)">🔒</span>
                 <br>
                 Made with ❤️ by <a href="https://schneewolflabs.com/" target="_blank" rel="noopener noreferrer">Schneewolf Labs</a>
             </p>

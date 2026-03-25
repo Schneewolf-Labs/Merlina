@@ -3,6 +3,19 @@
 const API_URL = '';  // Empty string = relative URLs (same origin)
 const WS_URL = `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
 
+// API key for bearer token authentication (stored in localStorage)
+function getApiKey() {
+    return localStorage.getItem('merlina_api_key') || '';
+}
+
+function setApiKey(key) {
+    if (key) {
+        localStorage.setItem('merlina_api_key', key);
+    } else {
+        localStorage.removeItem('merlina_api_key');
+    }
+}
+
 // Default timeout for API requests (30 seconds)
 const DEFAULT_TIMEOUT = 30000;
 
@@ -120,9 +133,12 @@ class MerlinaAPI {
         const { controller, timeoutId } = createTimeoutController(timeout);
 
         try {
+            const apiKey = getApiKey();
+            const authHeaders = apiKey ? { 'Authorization': `Bearer ${apiKey}` } : {};
             const response = await fetch(`${API_URL}${endpoint}`, {
                 headers: {
                     'Content-Type': 'application/json',
+                    ...authHeaders,
                     ...options.headers
                 },
                 signal: controller.signal,
@@ -247,6 +263,10 @@ class MerlinaAPI {
 
             xhr.timeout = LONG_TIMEOUT;
             xhr.open('POST', `${API_URL}/dataset/upload-file`);
+            const apiKey = getApiKey();
+            if (apiKey) {
+                xhr.setRequestHeader('Authorization', `Bearer ${apiKey}`);
+            }
             xhr.send(formData);
         });
     }
@@ -405,8 +425,10 @@ class WebSocketManager {
      * Internal method to create WebSocket connection
      */
     _createConnection() {
-        const wsUrl = `${WS_URL}/ws/${this.jobId}`;
-        console.log(`Connecting to WebSocket: ${wsUrl} (attempt ${this.reconnectAttempts + 1})`);
+        const apiKey = getApiKey();
+        const tokenParam = apiKey ? `?token=${encodeURIComponent(apiKey)}` : '';
+        const wsUrl = `${WS_URL}/ws/${this.jobId}${tokenParam}`;
+        console.log(`Connecting to WebSocket: ${WS_URL}/ws/${this.jobId} (attempt ${this.reconnectAttempts + 1})`);
 
         try {
             this.socket = new WebSocket(wsUrl);
@@ -560,4 +582,4 @@ class WebSocketManager {
     }
 }
 
-export { MerlinaAPI, WebSocketManager, APIError, ErrorType, API_URL, WS_URL };
+export { MerlinaAPI, WebSocketManager, APIError, ErrorType, API_URL, WS_URL, getApiKey, setApiKey };

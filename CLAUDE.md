@@ -646,7 +646,7 @@ nano .env
 - **Paths:** `DATA_DIR`, `MODELS_DIR`, `DATABASE_PATH` - Storage locations
 - **External Services:** `WANDB_API_KEY`, `HF_TOKEN` - API keys for W&B and HuggingFace
 - **System:** `CUDA_VISIBLE_DEVICES`, `LOG_LEVEL` - GPU selection and logging
-- **Security:** `CORS_ORIGINS`, `MAX_UPLOAD_SIZE_MB` - Access control and limits
+- **Security:** `API_KEY`, `CORS_ORIGINS`, `MAX_UPLOAD_SIZE_MB` - Authentication and access control
 
 ### Frontend URL Detection
 

@@ -79,6 +79,7 @@ class Settings(BaseSettings):
     # ==========================================
     # Security & Limits
     # ==========================================
+    api_key: Optional[str] = None  # Optional bearer token for API authentication
     cors_origins: List[str] = ["*"]
     max_upload_size_mb: int = 500
 

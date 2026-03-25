@@ -15,10 +15,10 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from datasets import load_dataset, Dataset
@@ -76,6 +76,55 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Optional API key authentication middleware
+# Paths that are always accessible without authentication
+_AUTH_EXEMPT_PREFIXES = ("/", "/styles.css", "/js/", "/css/", "/static/", "/merlina.png", "/health", "/api/docs", "/api/redoc", "/openapi.json")
+
+@app.middleware("http")
+async def api_key_auth_middleware(request: Request, call_next):
+    """Enforce bearer token auth when API_KEY is configured."""
+    if not settings.api_key:
+        return await call_next(request)
+
+    path = request.url.path
+
+    # Allow static files, frontend, health check, and docs without auth
+    if path == "/" or any(path.startswith(p) for p in _AUTH_EXEMPT_PREFIXES if p != "/"):
+        return await call_next(request)
+
+    # Check for valid bearer token
+    auth_header = request.headers.get("authorization", "")
+    if auth_header.startswith("Bearer "):
+        token = auth_header[7:]
+        if token == settings.api_key:
+            return await call_next(request)
+
+    return JSONResponse(
+        status_code=401,
+        content={"detail": "Invalid or missing API key. Provide Authorization: Bearer <key>"},
+    )
+
+if settings.api_key:
+    logger.info("API key authentication is ENABLED")
+else:
+    logger.info("API key authentication is disabled (no API_KEY set)")
+
+
+def _ws_auth_ok(websocket: WebSocket) -> bool:
+    """Check WebSocket auth via query param or header. Returns True if auth passes."""
+    if not settings.api_key:
+        return True
+    # Check query parameter first (?token=<key>)
+    token = websocket.query_params.get("token")
+    if token == settings.api_key:
+        return True
+    # Fall back to Authorization header (some WS clients support it)
+    auth_header = websocket.headers.get("authorization", "")
+    if auth_header.startswith("Bearer ") and auth_header[7:] == settings.api_key:
+        return True
+    return False
+
 
 # Initialize job manager with persistent storage
 job_manager = JobManager(db_path=settings.database_path)
@@ -849,7 +898,11 @@ async def websocket_endpoint(websocket: WebSocket, job_id: str):
     """
     WebSocket endpoint for real-time training updates.
     Connect to receive live status updates, metrics, and progress.
+    When API_KEY is set, authenticate via ?token=<key> query parameter.
     """
+    if not _ws_auth_ok(websocket):
+        await websocket.close(code=4401, reason="Unauthorized")
+        return
     await websocket_manager.connect(websocket, job_id)
     try:
         # Send initial status
@@ -2203,6 +2256,10 @@ async def inference_chat(request: InferenceChatRequest):
 @app.websocket("/ws-inference")
 async def inference_stream(websocket: WebSocket):
     """Stream inference tokens via WebSocket"""
+    if not _ws_auth_ok(websocket):
+        await websocket.close(code=4401, reason="Unauthorized")
+        return
+
     from transformers import TextIteratorStreamer
 
     await websocket.accept()

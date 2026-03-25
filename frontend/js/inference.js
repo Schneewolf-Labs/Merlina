@@ -1,6 +1,6 @@
 // Inference Module - Handles model loading and chat for testing trained models
 
-import { MerlinaAPI, WS_URL } from './api.js';
+import { MerlinaAPI, WS_URL, getApiKey } from './api.js';
 import { Toast } from './ui.js';
 
 class InferenceManager {
@@ -295,7 +295,9 @@ class InferenceManager {
             const contentEl = msgEl.querySelector('.inference-msg-content');
 
             let fullResponse = '';
-            const ws = new WebSocket(`${WS_URL}/ws-inference`);
+            const apiKey = getApiKey();
+            const tokenParam = apiKey ? `?token=${encodeURIComponent(apiKey)}` : '';
+            const ws = new WebSocket(`${WS_URL}/ws-inference${tokenParam}`);
 
             ws.onopen = () => {
                 ws.send(JSON.stringify({ messages, ...params }));

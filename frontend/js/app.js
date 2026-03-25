@@ -1,5 +1,6 @@
 // Main Application Module - Initializes and coordinates all modules
 
+import { MerlinaAPI, getApiKey, setApiKey } from './api.js';
 import { JobManager } from './jobs.js';
 import { DatasetManager } from './dataset.js';
 import { ConfigManager } from './config.js';
@@ -91,6 +92,9 @@ class MerlinaApp {
 
         // Setup keyboard shortcuts
         this.setupKeyboardShortcuts();
+
+        // Setup API key auth UI
+        this.setupApiKeyAuth();
 
         // Load version information
         this.loadVersion();
@@ -1051,13 +1055,89 @@ class MerlinaApp {
     }
 
     /**
+     * Setup API key authentication UI
+     */
+    setupApiKeyAuth() {
+        const dialog = document.getElementById('api-key-dialog');
+        const input = document.getElementById('api-key-input');
+        const submitBtn = document.getElementById('api-key-submit');
+        const errorMsg = document.getElementById('api-key-error');
+        const statusIcon = document.getElementById('api-key-status');
+
+        if (!dialog) return;
+
+        // Show lock icon if a key is already stored
+        if (getApiKey() && statusIcon) {
+            statusIcon.style.display = 'inline';
+        }
+
+        // Allow clicking the lock icon to change the key
+        if (statusIcon) {
+            statusIcon.addEventListener('click', () => {
+                dialog.style.display = 'flex';
+                if (input) input.value = '';
+                if (errorMsg) errorMsg.style.display = 'none';
+            });
+        }
+
+        const doAuth = async () => {
+            const key = input?.value?.trim();
+            if (!key) return;
+
+            setApiKey(key);
+
+            try {
+                // Test the key with a lightweight endpoint
+                await MerlinaAPI.getVersion();
+                dialog.style.display = 'none';
+                if (statusIcon) statusIcon.style.display = 'inline';
+                if (errorMsg) errorMsg.style.display = 'none';
+                // Reload jobs now that we're authenticated
+                this.jobManager.loadJobs();
+            } catch (e) {
+                if (e.statusCode === 401) {
+                    setApiKey('');
+                    if (errorMsg) errorMsg.style.display = 'block';
+                } else {
+                    // Non-auth error means the key worked (or auth isn't enabled)
+                    dialog.style.display = 'none';
+                    if (statusIcon) statusIcon.style.display = 'inline';
+                }
+            }
+        };
+
+        if (submitBtn) {
+            submitBtn.addEventListener('click', doAuth);
+        }
+        if (input) {
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') doAuth();
+            });
+        }
+
+        // Check if auth is needed by trying a protected endpoint
+        this.checkAuthRequired();
+    }
+
+    /**
+     * Check if the server requires API key auth; show dialog if so
+     */
+    async checkAuthRequired() {
+        try {
+            await MerlinaAPI.getVersion();
+        } catch (e) {
+            if (e.statusCode === 401) {
+                const dialog = document.getElementById('api-key-dialog');
+                if (dialog) dialog.style.display = 'flex';
+            }
+        }
+    }
+
+    /**
      * Load and display version information
      */
     async loadVersion() {
         try {
-            // Import MerlinaAPI from api.js
-            const { MerlinaAPI } = await import('./api.js');
-
             const versionInfo = await MerlinaAPI.getVersion();
             const versionElement = document.getElementById('version-info');
 
