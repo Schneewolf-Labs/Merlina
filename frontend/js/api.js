@@ -310,6 +310,33 @@ class MerlinaAPI {
     static async getVersion() {
         return this.fetch('/version');
     }
+
+    // Inference endpoints
+    static async listInferenceModels() {
+        return this.fetch('/inference/models');
+    }
+
+    static async loadInferenceModel(config) {
+        return this.fetch('/inference/load', {
+            method: 'POST',
+            body: JSON.stringify(config)
+        }, LONG_TIMEOUT);
+    }
+
+    static async unloadInferenceModel() {
+        return this.fetch('/inference/unload', { method: 'POST' });
+    }
+
+    static async getInferenceStatus() {
+        return this.fetch('/inference/status');
+    }
+
+    static async inferenceChat(config) {
+        return this.fetch('/inference/chat', {
+            method: 'POST',
+            body: JSON.stringify(config)
+        }, LONG_TIMEOUT);
+    }
 }
 
 /**

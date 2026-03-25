@@ -8,6 +8,7 @@ import { ModelManager } from './model.js';
 import { Toast, FormUI, Tooltip, createSparkle } from './ui.js';
 import { Validator, ValidationRules, debounce } from './validation.js';
 import { ThemeManager } from './theme.js';
+import { InferenceManager } from './inference.js';
 
 /**
  * Main Application Class
@@ -23,6 +24,7 @@ class MerlinaApp {
         this.configManager = new ConfigManager();
         this.gpuManager = new GPUManager();
         this.modelManager = new ModelManager();
+        this.inferenceManager = new InferenceManager();
 
         this.toast = new Toast();
 
@@ -33,6 +35,7 @@ class MerlinaApp {
         window.gpuManager = this.gpuManager;
         window.modelManager = this.modelManager;
         window.themeManager = this.themeManager;
+        window.inferenceManager = this.inferenceManager;
 
         // Initialize the app
         this.init();

@@ -1098,3 +1098,65 @@ textarea.magic-input {
 .manual-layers-input {
     margin-top: var(--space-sm);
 }
+
+/* ===== Inference Chat ===== */
+
+.inference-chat-messages {
+    min-height: 200px;
+    max-height: 500px;
+    overflow-y: auto;
+    border: 2px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: var(--space-md);
+    background: var(--bg-secondary, #fafafa);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-sm);
+}
+
+[data-theme="dark"] .inference-chat-messages {
+    background: var(--bg-secondary, #1a1a2e);
+}
+
+.inference-msg {
+    padding: 8px 12px;
+    border-radius: 12px;
+    max-width: 80%;
+    word-wrap: break-word;
+}
+
+.inference-msg-user {
+    align-self: flex-end;
+    background: var(--primary-purple);
+    color: white;
+    border-bottom-right-radius: 4px;
+}
+
+.inference-msg-assistant {
+    align-self: flex-start;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    color: var(--text-primary);
+    border-bottom-left-radius: 4px;
+}
+
+.inference-msg-error {
+    align-self: center;
+    background: #fde8e8;
+    border: 1px solid #dc2626;
+    color: #dc2626;
+    font-size: 0.9em;
+}
+
+.inference-msg-header {
+    font-size: 0.75em;
+    font-weight: 600;
+    margin-bottom: 2px;
+    opacity: 0.7;
+}
+
+.inference-msg-content {
+    font-size: 0.93em;
+    line-height: 1.4;
+    white-space: pre-wrap;
+}

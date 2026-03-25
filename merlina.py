@@ -357,6 +357,46 @@ class JobStatus(BaseModel):
     queue_position: Optional[int] = None
     queue_state: Optional[str] = None
 
+
+# === Inference Models ===
+
+class InferenceLoadRequest(BaseModel):
+    """Request to load a model for inference"""
+    model_name: str = Field(..., description="HuggingFace model ID, local path, or name of a trained model in models/ directory")
+    use_4bit: bool = Field(True, description="Load with 4-bit quantization")
+    hf_token: Optional[str] = Field(None, description="HuggingFace token for gated models")
+
+class InferenceChatRequest(BaseModel):
+    """Request to chat with the loaded model"""
+    messages: list[dict] = Field(..., description="Chat messages in OpenAI format [{role, content}]")
+    max_new_tokens: int = Field(512, ge=1, le=4096, description="Maximum tokens to generate")
+    temperature: float = Field(0.7, ge=0.0, le=2.0)
+    top_p: float = Field(0.9, ge=0.0, le=1.0)
+    top_k: int = Field(50, ge=0, le=200)
+    repetition_penalty: float = Field(1.1, ge=1.0, le=2.0)
+    do_sample: bool = Field(True, description="Use sampling (False = greedy decoding)")
+
+
+def _get_inference_device(model):
+    """Get the correct input device for a model loaded with device_map='auto'."""
+    if hasattr(model, 'hf_device_map'):
+        # Pick the device of the first module
+        first_device = next(iter(model.hf_device_map.values()))
+        return torch.device(first_device)
+    return model.device
+
+
+# Global inference model state (one model at a time)
+_inference_state = {
+    "model": None,
+    "tokenizer": None,
+    "model_name": None,
+    "is_lora": False,
+    "base_model_name": None,
+    "use_4bit": False,
+}
+_inference_lock = threading.Lock()
+
 # Mount static files for frontend
 if FRONTEND_DIR.exists():
     @app.get("/")
@@ -1849,6 +1889,448 @@ async def detect_model_layers(request: ModelLayersRequest):
     except Exception as e:
         logger.error(f"Failed to detect model layers: {e}")
         raise HTTPException(status_code=400, detail=f"Failed to detect layers: {str(e)}")
+
+
+# ==================== Inference Endpoints ====================
+
+@app.get("/inference/models")
+async def list_inference_models():
+    """List locally trained models available for inference"""
+    if settings.models_dir.is_absolute():
+        models_dir = settings.models_dir
+    else:
+        models_dir = SCRIPT_DIR / settings.models_dir
+    local_models = []
+
+    if models_dir.exists():
+        for model_dir in sorted(models_dir.iterdir()):
+            if not model_dir.is_dir():
+                continue
+
+            adapter_config_path = model_dir / "adapter_config.json"
+            model_info = {
+                "name": model_dir.name,
+                "path": str(model_dir),
+            }
+
+            if adapter_config_path.exists():
+                import json as _json
+                try:
+                    with open(adapter_config_path) as f:
+                        adapter_cfg = _json.load(f)
+                    model_info["is_lora"] = True
+                    model_info["base_model"] = adapter_cfg.get(
+                        "base_model_name_or_path", "unknown"
+                    )
+                    model_info["lora_rank"] = adapter_cfg.get(
+                        "r", adapter_cfg.get("lora_alpha")
+                    )
+                except Exception:
+                    model_info["is_lora"] = True
+                    model_info["base_model"] = "unknown"
+            else:
+                # Could be a full model
+                model_info["is_lora"] = False
+                model_info["base_model"] = None
+
+            local_models.append(model_info)
+
+    return {"models": local_models}
+
+
+@app.post("/inference/load")
+async def load_inference_model(request: InferenceLoadRequest):
+    """Load a model for inference."""
+
+    with _inference_lock:
+        # Unload existing model first
+        if _inference_state["model"] is not None:
+            del _inference_state["model"]
+            _inference_state["model"] = None
+            _inference_state["tokenizer"] = None
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+    model_name = request.model_name
+    is_lora = False
+    base_model_name = None
+
+    # Check if it's a trained model from models/ directory
+    if settings.models_dir.is_absolute():
+        models_dir = settings.models_dir
+    else:
+        models_dir = SCRIPT_DIR / settings.models_dir
+    local_adapter_path = models_dir / model_name
+
+    has_adapter = (
+        local_adapter_path.exists()
+        and (local_adapter_path / "adapter_config.json").exists()
+    )
+    if has_adapter:
+        # It's a LoRA adapter from our models/ directory
+        import json as _json
+        adapter_cfg_path = local_adapter_path / "adapter_config.json"
+        with open(adapter_cfg_path) as f:
+            adapter_cfg = _json.load(f)
+        base_model_name = adapter_cfg.get(
+            "base_model_name_or_path"
+        )
+        if not base_model_name:
+            raise HTTPException(
+                status_code=400,
+                detail="adapter_config.json missing "
+                       "base_model_name_or_path",
+            )
+        is_lora = True
+        logger.info(
+            f"Loading LoRA adapter '{model_name}' "
+            f"on base model '{base_model_name}'"
+        )
+    else:
+        # It's either a HuggingFace model ID or a local full model path
+        base_model_name = model_name
+        logger.info(f"Loading model: {model_name}")
+
+    try:
+        # Determine dtype
+        if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
+            torch_dtype = torch.bfloat16
+        else:
+            torch_dtype = torch.float16
+
+        # Quantization config
+        bnb_config = None
+        if request.use_4bit:
+            bnb_config = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_quant_type="nf4",
+                bnb_4bit_compute_dtype=torch_dtype,
+                bnb_4bit_use_double_quant=True,
+            )
+
+        # Load tokenizer
+        has_local_tokenizer = (
+            is_lora
+            and (local_adapter_path / "tokenizer_config.json").exists()
+        )
+        tokenizer_source = (
+            str(local_adapter_path) if has_local_tokenizer
+            else base_model_name
+        )
+        tokenizer_kwargs = {"trust_remote_code": True}
+        if request.hf_token:
+            tokenizer_kwargs["token"] = request.hf_token
+
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_source, **tokenizer_kwargs)
+        if tokenizer.pad_token is None:
+            tokenizer.pad_token = tokenizer.eos_token
+
+        # Load base model (use AutoModelForCausalLM for inference)
+        model_kwargs = {
+            "trust_remote_code": True,
+            "device_map": "auto",
+        }
+        if bnb_config:
+            model_kwargs["quantization_config"] = bnb_config
+        else:
+            model_kwargs["torch_dtype"] = torch_dtype
+        if request.hf_token:
+            model_kwargs["token"] = request.hf_token
+
+        model = AutoModelForCausalLM.from_pretrained(
+            base_model_name, **model_kwargs
+        )
+
+        # Load LoRA adapter on top
+        if is_lora:
+            model = PeftModel.from_pretrained(model, str(local_adapter_path))
+            logger.info(f"LoRA adapter loaded from {local_adapter_path}")
+
+        model.eval()
+
+        with _inference_lock:
+            _inference_state["model"] = model
+            _inference_state["tokenizer"] = tokenizer
+            _inference_state["model_name"] = model_name
+            _inference_state["is_lora"] = is_lora
+            _inference_state["base_model_name"] = base_model_name
+            _inference_state["use_4bit"] = request.use_4bit
+
+        # Get memory usage
+        gpu_mem = None
+        if torch.cuda.is_available():
+            gpu_mem = f"{torch.cuda.memory_allocated() / 1024**3:.1f} GB"
+
+        return {
+            "status": "loaded",
+            "model_name": model_name,
+            "is_lora": is_lora,
+            "base_model": base_model_name,
+            "use_4bit": request.use_4bit,
+            "gpu_memory": gpu_mem,
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to load inference model: {e}")
+        # Clean up on failure
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        raise HTTPException(
+            status_code=400,
+            detail=f"Failed to load model: {str(e)}",
+        )
+
+
+@app.post("/inference/unload")
+async def unload_inference_model():
+    """Unload the current inference model to free VRAM"""
+    with _inference_lock:
+        if _inference_state["model"] is None:
+            return {"status": "no_model", "message": "No model is currently loaded"}
+
+        model_name = _inference_state["model_name"]
+        del _inference_state["model"]
+        _inference_state["model"] = None
+        _inference_state["tokenizer"] = None
+        _inference_state["model_name"] = None
+        _inference_state["is_lora"] = False
+        _inference_state["base_model_name"] = None
+        _inference_state["use_4bit"] = False
+
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    return {
+        "status": "unloaded",
+        "message": f"Model '{model_name}' unloaded",
+    }
+
+
+@app.get("/inference/status")
+async def inference_status():
+    """Get the current inference model status"""
+    with _inference_lock:
+        if _inference_state["model"] is None:
+            return {"loaded": False}
+
+        gpu_mem = None
+        if torch.cuda.is_available():
+            gpu_mem = f"{torch.cuda.memory_allocated() / 1024**3:.1f} GB"
+
+        return {
+            "loaded": True,
+            "model_name": _inference_state["model_name"],
+            "is_lora": _inference_state["is_lora"],
+            "base_model": _inference_state["base_model_name"],
+            "use_4bit": _inference_state["use_4bit"],
+            "gpu_memory": gpu_mem,
+        }
+
+
+@app.post("/inference/chat")
+async def inference_chat(request: InferenceChatRequest):
+    """Generate a response from the loaded model"""
+    with _inference_lock:
+        model = _inference_state["model"]
+        tokenizer = _inference_state["tokenizer"]
+
+    if model is None or tokenizer is None:
+        raise HTTPException(
+            status_code=400,
+            detail="No model loaded. Use /inference/load first",
+        )
+
+    def _generate():
+        """Run generation in a thread to avoid blocking."""
+        text = tokenizer.apply_chat_template(
+            request.messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+
+        inputs = tokenizer(
+            text, return_tensors="pt"
+        ).to(_get_inference_device(model))
+
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                max_new_tokens=request.max_new_tokens,
+                temperature=(
+                    request.temperature if request.do_sample
+                    else 1.0
+                ),
+                top_p=(
+                    request.top_p if request.do_sample
+                    else 1.0
+                ),
+                top_k=(
+                    request.top_k if request.do_sample
+                    else 0
+                ),
+                repetition_penalty=request.repetition_penalty,
+                do_sample=request.do_sample,
+                pad_token_id=tokenizer.pad_token_id,
+            )
+
+        new_tokens = outputs[0][inputs["input_ids"].shape[1]:]
+        return tokenizer.decode(
+            new_tokens, skip_special_tokens=True
+        ), len(new_tokens)
+
+    try:
+        response_text, n_tokens = await asyncio.to_thread(
+            _generate
+        )
+
+        return {
+            "response": response_text,
+            "tokens_generated": n_tokens,
+            "model_name": _inference_state["model_name"],
+        }
+
+    except Exception as e:
+        logger.error(f"Inference failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Generation failed: {str(e)}",
+        )
+
+
+@app.websocket("/ws-inference")
+async def inference_stream(websocket: WebSocket):
+    """Stream inference tokens via WebSocket"""
+    from transformers import TextIteratorStreamer
+
+    await websocket.accept()
+
+    try:
+        while True:
+            data = await websocket.receive_json()
+
+            with _inference_lock:
+                model = _inference_state["model"]
+                tokenizer = _inference_state["tokenizer"]
+
+            if model is None or tokenizer is None:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "No model loaded",
+                })
+                continue
+
+            messages = data.get("messages", [])
+            max_new_tokens = data.get("max_new_tokens", 512)
+            temperature = data.get("temperature", 0.7)
+            top_p = data.get("top_p", 0.9)
+            top_k = data.get("top_k", 50)
+            repetition_penalty = data.get("repetition_penalty", 1.1)
+            do_sample = data.get("do_sample", True)
+
+            try:
+                text = tokenizer.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True
+                )
+                inputs = tokenizer(
+                    text, return_tensors="pt"
+                ).to(_get_inference_device(model))
+
+                streamer = TextIteratorStreamer(
+                    tokenizer,
+                    skip_prompt=True,
+                    skip_special_tokens=True,
+                )
+
+                generation_kwargs = {
+                    **inputs,
+                    "max_new_tokens": max_new_tokens,
+                    "temperature": temperature if do_sample else 1.0,
+                    "top_p": top_p if do_sample else 1.0,
+                    "top_k": top_k if do_sample else 0,
+                    "repetition_penalty": repetition_penalty,
+                    "do_sample": do_sample,
+                    "pad_token_id": tokenizer.pad_token_id,
+                    "streamer": streamer,
+                }
+
+                # Use an asyncio queue to bridge the
+                # blocking streamer and the async websocket
+                token_queue = asyncio.Queue()
+
+                def _generate_and_collect():
+                    """Generate tokens and push to queue."""
+                    try:
+                        gen_thread = threading.Thread(
+                            target=lambda: model.generate(
+                                **generation_kwargs
+                            )
+                        )
+                        gen_thread.start()
+                        for text in streamer:
+                            asyncio.run_coroutine_threadsafe(
+                                token_queue.put(
+                                    ("token", text)
+                                ),
+                                loop,
+                            )
+                        gen_thread.join()
+                    except Exception as exc:
+                        asyncio.run_coroutine_threadsafe(
+                            token_queue.put(("error", str(exc))),
+                            loop,
+                        )
+                    finally:
+                        asyncio.run_coroutine_threadsafe(
+                            token_queue.put(("done", None)),
+                            loop,
+                        )
+
+                loop = asyncio.get_event_loop()
+                bg = threading.Thread(
+                    target=_generate_and_collect
+                )
+                bg.start()
+
+                token_count = 0
+                while True:
+                    msg_type, payload = await token_queue.get()
+                    if msg_type == "token":
+                        token_count += 1
+                        await websocket.send_json({
+                            "type": "token",
+                            "text": payload,
+                        })
+                    elif msg_type == "error":
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": payload,
+                        })
+                        break
+                    else:  # done
+                        break
+
+                bg.join()
+                await websocket.send_json({
+                    "type": "done",
+                    "tokens_generated": token_count,
+                })
+
+            except Exception as e:
+                logger.error(f"Streaming inference failed: {e}")
+                await websocket.send_json({
+                    "type": "error",
+                    "message": str(e),
+                })
+
+    except WebSocketDisconnect:
+        logger.info("Inference WebSocket disconnected")
+    except Exception as e:
+        logger.error(f"Inference WebSocket error: {e}")
 
 
 if __name__ == "__main__":

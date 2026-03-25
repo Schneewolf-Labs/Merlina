@@ -48,6 +48,10 @@
                 <span class="nav-step">4</span>
                 <span class="nav-label">Jobs</span>
             </button>
+            <button class="section-nav-btn" data-section="inference-section">
+                <span class="nav-step">5</span>
+                <span class="nav-label">Inference</span>
+            </button>
         </nav>
 
         <!-- Main Content -->
@@ -915,6 +919,124 @@
                     </button>
                 </div>
                 <div id="jobs-container"></div>
+            </section>
+
+            <!-- Inference (STEP 5) -->
+            <section id="inference-section" class="card nav-section" style="display: none;">
+                <h2>🔮 Step 5: Test Your Model</h2>
+
+                <!-- Model Loading -->
+                <div class="spell-section">
+                    <h3>🤖 Load a Model</h3>
+
+                    <div class="form-group">
+                        <label>Model Source</label>
+                        <select id="inference-source" class="magic-select">
+                            <option value="trained">Trained Model (from models/ directory)</option>
+                            <option value="huggingface">HuggingFace Model</option>
+                            <option value="local">Local Path</option>
+                        </select>
+                    </div>
+
+                    <!-- Trained model dropdown -->
+                    <div id="inference-trained-group" class="form-group">
+                        <label>Trained Model</label>
+                        <select id="inference-trained-model" class="magic-select">
+                            <option value="">Loading models...</option>
+                        </select>
+                        <small style="color: #888; font-size: 0.85em;" id="inference-trained-info"></small>
+                    </div>
+
+                    <!-- HuggingFace / Local path input -->
+                    <div id="inference-manual-group" class="form-group" style="display: none;">
+                        <label>Model Name or Path</label>
+                        <input type="text" id="inference-model-name" class="magic-input" placeholder="meta-llama/Meta-Llama-3-8B-Instruct">
+                        <small style="color: #888; font-size: 0.85em;">HuggingFace model ID or absolute path to local model directory</small>
+                    </div>
+
+                    <div id="inference-hf-token-group" class="form-group" style="display: none;">
+                        <label>HuggingFace Token (for gated models)</label>
+                        <input type="password" id="inference-hf-token" class="magic-input" placeholder="Optional — for gated models like Llama">
+                    </div>
+
+                    <div class="form-group" style="display: flex; align-items: center; gap: 10px;">
+                        <input type="checkbox" id="inference-4bit" checked style="width: 18px; height: 18px;">
+                        <label for="inference-4bit" style="margin: 0; cursor: pointer;">4-bit Quantization (recommended, saves VRAM)</label>
+                    </div>
+
+                    <div style="display: flex; gap: 10px;">
+                        <button type="button" id="inference-load-btn" class="action-button" style="flex: 1; background: var(--primary-purple); color: white; font-weight: bold; padding: 15px;">
+                            🧙 Load Model
+                        </button>
+                        <button type="button" id="inference-unload-btn" class="action-button" style="flex: 0 0 auto; background: #dc2626; color: white; padding: 15px; display: none;">
+                            🗑️ Unload
+                        </button>
+                    </div>
+
+                    <div id="inference-model-status" style="margin-top: 15px; display: none;"></div>
+                </div>
+
+                <!-- Generation Settings -->
+                <div class="spell-section" id="inference-settings" style="display: none;">
+                    <h3>⚙️ Generation Settings</h3>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
+                        <div class="form-group">
+                            <label>Max New Tokens</label>
+                            <input type="number" id="inference-max-tokens" class="magic-input" value="512" min="1" max="4096">
+                        </div>
+                        <div class="form-group">
+                            <label>Temperature</label>
+                            <input type="number" id="inference-temperature" class="magic-input" value="0.7" min="0" max="2" step="0.05">
+                        </div>
+                        <div class="form-group">
+                            <label>Top P</label>
+                            <input type="number" id="inference-top-p" class="magic-input" value="0.9" min="0" max="1" step="0.05">
+                        </div>
+                        <div class="form-group">
+                            <label>Top K</label>
+                            <input type="number" id="inference-top-k" class="magic-input" value="50" min="0" max="200">
+                        </div>
+                        <div class="form-group">
+                            <label>Repetition Penalty</label>
+                            <input type="number" id="inference-rep-penalty" class="magic-input" value="1.1" min="1.0" max="2.0" step="0.05">
+                        </div>
+                        <div class="form-group" style="display: flex; align-items: flex-end;">
+                            <div style="display: flex; align-items: center; gap: 10px; padding-bottom: 5px;">
+                                <input type="checkbox" id="inference-do-sample" checked style="width: 18px; height: 18px;">
+                                <label for="inference-do-sample" style="margin: 0; cursor: pointer;">Sampling</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>System Prompt (optional)</label>
+                        <textarea id="inference-system-prompt" class="magic-input" rows="2" placeholder="You are a helpful assistant."></textarea>
+                    </div>
+                </div>
+
+                <!-- Chat Interface -->
+                <div class="spell-section" id="inference-chat-section" style="display: none;">
+                    <h3>💬 Chat</h3>
+
+                    <div id="inference-chat-messages" class="inference-chat-messages"></div>
+
+                    <div style="display: flex; gap: 10px; margin-top: 10px;">
+                        <textarea id="inference-chat-input" class="magic-input" rows="2" placeholder="Type your message..." style="flex: 1; resize: vertical;"></textarea>
+                        <div style="display: flex; flex-direction: column; gap: 5px;">
+                            <button type="button" id="inference-send-btn" class="action-button" style="background: var(--primary-purple); color: white; padding: 10px 20px;">
+                                Send
+                            </button>
+                            <button type="button" id="inference-clear-btn" class="action-button" style="background: #888; color: white; padding: 10px 20px; font-size: 0.85em;">
+                                Clear
+                            </button>
+                        </div>
+                    </div>
+
+                    <div style="display: flex; align-items: center; gap: 10px; margin-top: 8px;">
+                        <input type="checkbox" id="inference-stream" checked style="width: 16px; height: 16px;">
+                        <label for="inference-stream" style="margin: 0; cursor: pointer; font-size: 0.9em; color: #888;">Stream tokens (real-time output)</label>
+                    </div>
+                </div>
             </section>
         </main>
 
