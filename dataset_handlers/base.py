@@ -108,6 +108,10 @@ class DatasetPipeline:
 
     def _load_and_map_source(self, loader, column_mapping, convert_messages):
         """Load a single source and apply its column mapping + messages conversion."""
+        # For streaming loaders, set max_samples hint so they stop early
+        from .loaders import StreamingHuggingFaceLoader
+        if isinstance(loader, StreamingHuggingFaceLoader) and self.max_samples and not loader.max_samples:
+            loader.max_samples = self.max_samples
         dataset = loader.load()
         logger.info(f"  Loaded {len(dataset)} samples from {loader.get_source_info().get('source_type', 'unknown')}")
 

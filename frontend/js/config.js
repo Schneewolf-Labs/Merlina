@@ -203,6 +203,9 @@ class ConfigManager {
         if (sourceType === 'huggingface') {
             datasetSource.repo_id = document.getElementById('hf-repo-id')?.value || '';
             datasetSource.split = document.getElementById('hf-split')?.value || 'train';
+            if (document.getElementById('dataset-streaming')?.checked) {
+                datasetSource.streaming = true;
+            }
         } else if (sourceType === 'local_file') {
             datasetSource.file_path = document.getElementById('local-file-path')?.value || '';
             datasetSource.file_format = document.getElementById('local-file-format')?.value || '';
@@ -529,6 +532,7 @@ class ConfigManager {
 
                 if (source.repo_id) this.setInputValue('hf-repo-id', source.repo_id);
                 if (source.split) this.setInputValue('hf-split', source.split);
+                if (source.streaming) this.setCheckboxValue('dataset-streaming', true);
                 if (source.file_path) this.setInputValue('local-file-path', source.file_path);
                 if (source.file_format) this.setInputValue('local-file-format', source.file_format);
 

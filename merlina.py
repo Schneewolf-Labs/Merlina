@@ -162,6 +162,19 @@ class DatasetSource(BaseModel):
     # For uploaded datasets (handled separately via upload endpoint)
     dataset_id: Optional[str] = Field(None, description="ID of previously uploaded dataset")
 
+    # Streaming mode for large HuggingFace datasets
+    streaming: bool = Field(
+        False,
+        description="Use streaming mode for HuggingFace datasets. Streams rows in batches instead of "
+                    "loading the entire dataset into memory at once. Recommended for datasets with 100k+ rows."
+    )
+    streaming_batch_size: int = Field(
+        10000,
+        ge=100,
+        le=100000,
+        description="Number of rows to buffer per batch when streaming. Higher values are faster but use more memory."
+    )
+
     # Per-source column mapping (overrides DatasetConfig.column_mapping for this source)
     column_mapping: Optional[dict] = Field(
         None,
