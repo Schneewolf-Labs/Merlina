@@ -773,6 +773,70 @@ async def get_job_metrics(job_id: str):
     }
 
 
+@app.post("/jobs/{job_id}/retry", response_model=JobResponse)
+async def retry_job(job_id: str, priority: Optional[str] = "normal"):
+    """
+    Retry a failed or stopped job with the same configuration.
+    Creates a new job using the original job's config.
+    """
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status not in ("failed", "stopped"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only failed or stopped jobs can be retried. Job is '{job.status}'."
+        )
+
+    if not job.config:
+        raise HTTPException(
+            status_code=400,
+            detail="Job has no stored configuration to retry."
+        )
+
+    # Re-submit using the stored config via the existing train endpoint logic
+    from pydantic import TypeAdapter
+    config = TypeAdapter(TrainingConfig).validate_python(job.config)
+
+    # Parse priority
+    priority_map = {
+        "low": JobPriority.LOW,
+        "normal": JobPriority.NORMAL,
+        "high": JobPriority.HIGH
+    }
+    job_priority = priority_map.get(priority.lower(), JobPriority.NORMAL)
+
+    # Create new job
+    new_job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    job_manager.create_job(new_job_id, config.model_dump())
+
+    from src.training_runner import run_training_sync
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    def training_callback(job_id: str, config_dict: dict):
+        from pydantic import TypeAdapter
+        config_obj = TypeAdapter(TrainingConfig).validate_python(config_dict)
+        run_training_sync(job_id, config_obj, job_manager, uploaded_datasets, loop)
+
+    position = job_queue.submit(
+        job_id=new_job_id,
+        config=config.model_dump(),
+        callback=training_callback,
+        priority=job_priority
+    )
+
+    return JobResponse(
+        job_id=new_job_id,
+        status="queued",
+        message=f"Retrying spell! New job {new_job_id} queued at position {position} (retry of {job_id})."
+    )
+
+
 @app.post("/jobs/{job_id}/stop")
 async def stop_job(job_id: str):
     """
