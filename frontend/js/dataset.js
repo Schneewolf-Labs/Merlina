@@ -90,6 +90,12 @@ class DatasetManager {
             limitSelect.addEventListener('change', (e) => this.handleLimitChange(e));
         }
 
+        // Dataset stats button
+        const statsBtn = document.getElementById('dataset-stats-button');
+        if (statsBtn) {
+            statsBtn.addEventListener('click', () => this.handleDatasetStats());
+        }
+
         // Enter key on index input
         const indexInput = document.getElementById('preview-index');
         if (indexInput) {
@@ -497,6 +503,134 @@ class DatasetManager {
         } finally {
             LoadingManager.hide(previewBtn);
         }
+    }
+
+    /**
+     * Handle dataset stats computation
+     */
+    async handleDatasetStats() {
+        const statsBtn = document.getElementById('dataset-stats-button');
+
+        try {
+            LoadingManager.show(statsBtn, '⏳ Analyzing...');
+
+            const datasetConfig = this.getDatasetConfig(true);
+            const data = await MerlinaAPI.getDatasetStats(datasetConfig);
+
+            this.renderDatasetStats(data);
+
+            const panel = document.getElementById('dataset-stats-panel');
+            if (panel) panel.style.display = 'block';
+
+            this.toast.success(`Dataset analyzed: ${data.total_rows} rows`);
+        } catch (error) {
+            console.error('Dataset stats failed:', error);
+            this.toast.error(`Stats failed: ${error.message}`);
+        } finally {
+            LoadingManager.hide(statsBtn);
+        }
+    }
+
+    /**
+     * Render dataset statistics into the stats panel
+     */
+    renderDatasetStats(data) {
+        const container = document.getElementById('dataset-stats-content');
+        if (!container) return;
+
+        const fmt = (n) => typeof n === 'number' ? n.toLocaleString() : n;
+
+        let html = `
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 15px;">
+                <div style="background: #f5f7fa; padding: 12px; border-radius: 8px; text-align: center;">
+                    <div style="font-size: 1.4em; font-weight: bold; color: var(--primary-purple);">${fmt(data.total_rows)}</div>
+                    <div style="font-size: 0.8em; color: #666; margin-top: 2px;">Total Rows</div>
+                </div>
+                <div style="background: #f5f7fa; padding: 12px; border-radius: 8px; text-align: center;">
+                    <div style="font-size: 1.4em; font-weight: bold; color: var(--primary-purple);">${fmt(data.est_total_tokens)}</div>
+                    <div style="font-size: 0.8em; color: #666; margin-top: 2px;">Est. Tokens</div>
+                </div>
+                <div style="background: #f5f7fa; padding: 12px; border-radius: 8px; text-align: center;">
+                    <div style="font-size: 1.4em; font-weight: bold; color: var(--primary-purple);">${data.columns.length}</div>
+                    <div style="font-size: 0.8em; color: #666; margin-top: 2px;">Columns</div>
+                </div>
+            </div>
+        `;
+
+        // Field-level stats table
+        const fields = data.field_stats;
+        if (fields && Object.keys(fields).length > 0) {
+            html += `
+                <h4 style="color: var(--secondary-purple); margin-bottom: 8px; font-size: 0.95em;">Field Statistics</h4>
+                <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; font-size: 0.85em;">
+                    <thead>
+                        <tr style="background: #f0ebff; text-align: left;">
+                            <th style="padding: 8px; border-bottom: 2px solid var(--light-purple);">Field</th>
+                            <th style="padding: 8px; border-bottom: 2px solid var(--light-purple);">Avg Len</th>
+                            <th style="padding: 8px; border-bottom: 2px solid var(--light-purple);">Min</th>
+                            <th style="padding: 8px; border-bottom: 2px solid var(--light-purple);">Med</th>
+                            <th style="padding: 8px; border-bottom: 2px solid var(--light-purple);">Max</th>
+                            <th style="padding: 8px; border-bottom: 2px solid var(--light-purple);">Est. Tokens</th>
+                            <th style="padding: 8px; border-bottom: 2px solid var(--light-purple);">Empty</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            for (const [field, fs] of Object.entries(fields)) {
+                const emptyWarning = fs.empty_count > 0
+                    ? `<span style="color: var(--danger);" title="${fs.empty_count} empty values">${fmt(fs.empty_count)}</span>`
+                    : '<span style="color: #999;">0</span>';
+
+                html += `
+                    <tr style="border-bottom: 1px solid #eee;">
+                        <td style="padding: 8px; font-weight: 600; color: var(--primary-purple);">${field}</td>
+                        <td style="padding: 8px;">${fmt(fs.avg_length)}</td>
+                        <td style="padding: 8px;">${fmt(fs.min_length)}</td>
+                        <td style="padding: 8px;">${fmt(fs.median_length)}</td>
+                        <td style="padding: 8px;">${fmt(fs.max_length)}</td>
+                        <td style="padding: 8px;">${fmt(fs.est_avg_tokens)}</td>
+                        <td style="padding: 8px;">${emptyWarning}</td>
+                    </tr>
+                `;
+            }
+
+            html += `</tbody></table></div>`;
+        }
+
+        // Class balance for preference modes
+        if (data.length_balance) {
+            const lb = data.length_balance;
+            const barWidth = Math.min(lb.chosen_longer_pct, 100);
+            const barColor = lb.chosen_longer_pct >= 50 ? 'var(--success)' : 'var(--danger)';
+
+            html += `
+                <h4 style="color: var(--secondary-purple); margin: 15px 0 8px; font-size: 0.95em;">Length Balance (Chosen vs Rejected)</h4>
+                <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 10px;">
+                    <div style="background: #e8f5e9; padding: 10px; border-radius: 8px; text-align: center;">
+                        <div style="font-weight: bold; color: var(--success);">${fmt(lb.avg_chosen_length)}</div>
+                        <div style="font-size: 0.8em; color: #666;">Avg Chosen</div>
+                    </div>
+                    <div style="background: #ffebee; padding: 10px; border-radius: 8px; text-align: center;">
+                        <div style="font-weight: bold; color: var(--danger);">${fmt(lb.avg_rejected_length)}</div>
+                        <div style="font-size: 0.8em; color: #666;">Avg Rejected</div>
+                    </div>
+                    <div style="background: #f5f7fa; padding: 10px; border-radius: 8px; text-align: center;">
+                        <div style="font-weight: bold; color: var(--primary-purple);">${lb.ratio}x</div>
+                        <div style="font-size: 0.8em; color: #666;">Length Ratio</div>
+                    </div>
+                </div>
+                <div style="background: #f5f7fa; padding: 10px; border-radius: 8px;">
+                    <div style="font-size: 0.85em; color: #666; margin-bottom: 5px;">Chosen longer than rejected: <strong>${lb.chosen_longer_pct}%</strong></div>
+                    <div style="background: #e0e0e0; border-radius: 4px; height: 8px; overflow: hidden;">
+                        <div style="background: ${barColor}; height: 100%; width: ${barWidth}%; border-radius: 4px; transition: width 0.3s;"></div>
+                    </div>
+                </div>
+            `;
+        }
+
+        container.innerHTML = html;
     }
 
     /**

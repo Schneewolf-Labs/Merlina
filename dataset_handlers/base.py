@@ -261,6 +261,103 @@ class DatasetPipeline:
 
         return samples, total_length
 
+    def compute_stats(self) -> dict:
+        """
+        Compute basic statistics about the dataset: row count, average lengths,
+        token count estimates, and class balance info for preference modes.
+
+        Returns:
+            Dictionary with dataset statistics
+        """
+        dataset = self.loader.load()
+        total_rows = len(dataset)
+
+        # Convert messages format if detected and enabled
+        if self.convert_messages_format and has_messages_format(dataset):
+            dataset = convert_messages_dataset(dataset)
+
+        # Apply column mapping if provided
+        if self.column_mapping:
+            dataset = self._apply_column_mapping(dataset)
+
+        columns = set(dataset.column_names)
+        stats = {
+            "total_rows": total_rows,
+            "columns": list(dataset.column_names),
+            "training_mode": self.training_mode,
+        }
+
+        # Compute length stats for text columns
+        text_fields = ["prompt", "chosen", "rejected", "system"]
+        field_stats = {}
+
+        for field in text_fields:
+            if field not in columns:
+                continue
+
+            values = dataset[field]
+            lengths = []
+            empty_count = 0
+            total_chars = 0
+
+            for v in values:
+                if v is None or (isinstance(v, str) and v.strip() == ""):
+                    empty_count += 1
+                    lengths.append(0)
+                else:
+                    text = str(v)
+                    length = len(text)
+                    lengths.append(length)
+                    total_chars += length
+
+            if lengths:
+                lengths_sorted = sorted(lengths)
+                n = len(lengths_sorted)
+                avg_len = total_chars / max(n - empty_count, 1)
+                # Rough token estimate: ~4 chars per token for English text
+                avg_tokens = avg_len / 4.0
+
+                field_stats[field] = {
+                    "avg_length": round(avg_len, 1),
+                    "min_length": lengths_sorted[0],
+                    "max_length": lengths_sorted[-1],
+                    "median_length": lengths_sorted[n // 2],
+                    "empty_count": empty_count,
+                    "est_avg_tokens": round(avg_tokens, 0),
+                }
+
+        stats["field_stats"] = field_stats
+
+        # Class balance info for preference modes
+        if "chosen" in columns and "rejected" in columns:
+            chosen_vals = dataset["chosen"]
+            rejected_vals = dataset["rejected"]
+
+            chosen_lengths = [len(str(v)) for v in chosen_vals if v]
+            rejected_lengths = [len(str(v)) for v in rejected_vals if v]
+
+            avg_chosen = sum(chosen_lengths) / max(len(chosen_lengths), 1)
+            avg_rejected = sum(rejected_lengths) / max(len(rejected_lengths), 1)
+
+            stats["length_balance"] = {
+                "avg_chosen_length": round(avg_chosen, 1),
+                "avg_rejected_length": round(avg_rejected, 1),
+                "ratio": round(avg_chosen / max(avg_rejected, 1), 2),
+                "chosen_longer_pct": round(
+                    sum(1 for c, r in zip(chosen_lengths, rejected_lengths) if c > r)
+                    / max(len(chosen_lengths), 1) * 100, 1
+                ),
+            }
+
+        # Estimate total tokens for the dataset
+        total_est_tokens = 0
+        for field, fs in field_stats.items():
+            if field in ("prompt", "chosen"):
+                total_est_tokens += fs["est_avg_tokens"] * (total_rows - fs["empty_count"])
+        stats["est_total_tokens"] = round(total_est_tokens, 0)
+
+        return stats
+
     def _apply_column_mapping(self, dataset: Dataset) -> Dataset:
         """Apply column name mapping to dataset using self.column_mapping"""
         return self._apply_column_mapping_with(dataset, self.column_mapping)

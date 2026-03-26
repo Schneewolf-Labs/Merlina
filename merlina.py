@@ -1196,6 +1196,48 @@ async def preview_formatted_dataset(config: DatasetConfig, offset: int = 0, limi
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.post("/dataset/stats")
+async def get_dataset_stats(config: DatasetConfig):
+    """Compute dataset statistics: row count, avg lengths, token estimates, class balance."""
+    try:
+        try:
+            loader = create_loader_from_config(
+                source_config=config.source,
+                uploaded_datasets=uploaded_datasets
+            )
+        except LoaderCreationError as e:
+            if "not found" in str(e):
+                raise HTTPException(status_code=404, detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e))
+
+        formatter_type = config.format.format_type
+        if formatter_type == 'tokenizer':
+            formatter_type = 'chatml'
+
+        formatter = get_formatter(
+            format_type=formatter_type,
+            custom_templates=config.format.custom_templates,
+            enable_thinking=config.format.enable_thinking
+        )
+
+        pipeline = DatasetPipeline(
+            loader=loader,
+            formatter=formatter,
+            column_mapping=config.column_mapping,
+            test_size=config.test_size,
+            max_samples=config.max_samples,
+            training_mode=config.training_mode,
+            convert_messages_format=config.convert_messages_format
+        )
+
+        stats = pipeline.compute_stats()
+        return {"status": "success", **stats}
+
+    except Exception as e:
+        logger.error(f"Dataset stats failed: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @app.post("/dataset/columns")
 async def get_dataset_columns(config: DatasetConfig):
     """
