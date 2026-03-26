@@ -9,12 +9,13 @@ const rootDir = path.resolve(__dirname, '..', '..');
 export default defineConfig({
     testDir: '.',
     testMatch: 'test_integration*.spec.mjs',
-    timeout: 30000,
-    retries: 1,
+    timeout: 15000,
+    retries: process.env.CI ? 0 : 1,
     workers: 1,  // Sequential — single FastAPI server
 
     use: {
         baseURL: 'http://localhost:8000',
+        navigationTimeout: 10000,
         screenshot: 'only-on-failure',
         trace: 'retain-on-failure',
     },
