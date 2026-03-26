@@ -28,9 +28,16 @@ test.describe('Page load', () => {
 
     test('all three main sections are visible', async ({ page }) => {
         await page.goto('/');
-        // Section headers (step-based with emoji prefixes)
+        // Section headers (step-based navigation - only one visible at a time)
+        // Step 1: Model (visible by default)
         await expect(page.getByText('Select Your Base Model')).toBeVisible();
+
+        // Step 2: Dataset (navigate to it)
+        await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
         await expect(page.getByText('Configure Your Dataset')).toBeVisible();
+
+        // Step 3: Training (navigate to it)
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
         await expect(page.getByText('Configure Training Parameters')).toBeVisible();
     });
 
@@ -96,6 +103,7 @@ test.describe('Form validation', () => {
 
     test('output name field rejects names with special characters', async ({ page }) => {
         await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
         const input = page.locator('#output-name');
         await input.fill('bad name!@#$');
         await input.blur();
@@ -105,6 +113,7 @@ test.describe('Form validation', () => {
 
     test('output name field accepts valid names', async ({ page }) => {
         await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
         const input = page.locator('#output-name');
         await input.fill('my-fine-tuned-model');
         await input.blur();
@@ -113,6 +122,7 @@ test.describe('Form validation', () => {
 
     test('learning rate field validates numeric range', async ({ page }) => {
         await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
         const input = page.locator('#learning-rate');
 
         // Too high
@@ -140,12 +150,14 @@ test.describe('Training mode', () => {
 
     test('shows beta field in ORPO mode', async ({ page }) => {
         await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
         const betaGroup = page.locator('#beta').locator('..');
         await expect(betaGroup).toBeVisible();
     });
 
     test('hides beta field in SFT mode', async ({ page }) => {
         await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
         await page.locator('#training-mode').selectOption('sft');
         // Beta field or its container should be hidden
         const betaField = page.locator('#beta');
@@ -179,6 +191,7 @@ test.describe('Dataset source selection', () => {
 
     test('shows HF config when HuggingFace selected', async ({ page }) => {
         await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
         await expect(page.locator('#hf-source-config')).toBeVisible();
         await expect(page.locator('#upload-source-config')).toBeHidden();
         await expect(page.locator('#local-source-config')).toBeHidden();
@@ -186,6 +199,7 @@ test.describe('Dataset source selection', () => {
 
     test('shows upload config when Upload selected', async ({ page }) => {
         await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
         await page.locator('#dataset-source-type').selectOption('upload');
         await expect(page.locator('#upload-source-config')).toBeVisible();
         await expect(page.locator('#hf-source-config')).toBeHidden();
@@ -193,6 +207,7 @@ test.describe('Dataset source selection', () => {
 
     test('shows local config when Local File selected', async ({ page }) => {
         await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
         await page.locator('#dataset-source-type').selectOption('local_file');
         await expect(page.locator('#local-source-config')).toBeVisible();
         await expect(page.locator('#hf-source-config')).toBeHidden();
@@ -212,12 +227,14 @@ test.describe('LoRA settings', () => {
 
     test('LoRA settings visible when enabled', async ({ page }) => {
         await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
         await expect(page.locator('#lora-r')).toBeVisible();
         await expect(page.locator('#lora-alpha')).toBeVisible();
     });
 
     test('LoRA settings hidden when disabled', async ({ page }) => {
         await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
         await page.locator('#use-lora').uncheck();
         // LoRA settings section should be hidden
         const loraSection = page.locator('#lora-settings');
@@ -291,6 +308,7 @@ test.describe('Keyboard shortcuts', () => {
 test.describe('Advanced settings', () => {
     test('advanced section is collapsed by default', async ({ page }) => {
         await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
         const advancedContent = page.locator('.advanced-section').first();
         if (await advancedContent.count() > 0) {
             await expect(advancedContent).toBeHidden();
@@ -299,6 +317,7 @@ test.describe('Advanced settings', () => {
 
     test('clicking toggle reveals advanced settings', async ({ page }) => {
         await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
         const toggle = page.locator('#toggle-advanced');
         if (await toggle.count() > 0) {
             await toggle.click();
@@ -326,6 +345,7 @@ test.describe('Dataset format', () => {
 
     test('custom format config appears when Custom selected', async ({ page }) => {
         await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
         await page.locator('#dataset-format-type').selectOption('custom');
         const customConfig = page.locator('#custom-format-config');
         if (await customConfig.count() > 0) {
