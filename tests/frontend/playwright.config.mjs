@@ -15,6 +15,7 @@ export default defineConfig({
 
     use: {
         baseURL: 'http://localhost:8000',
+        navigationTimeout: 10000,
         screenshot: 'only-on-failure',
         trace: 'retain-on-failure',
     },
