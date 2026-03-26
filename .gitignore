@@ -1,3 +1,8 @@
+# Node.js (installed by CI for Playwright tests)
+node_modules/
+package.json
+package-lock.json
+
 # ML stuff
 wandb/
 
