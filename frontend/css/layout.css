@@ -123,6 +123,72 @@ header {
     font-weight: bold;
 }
 
+/* Loss Chart */
+.loss-chart-section {
+    margin: var(--space-lg) 0;
+    background: var(--section-bg);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: var(--space-md);
+}
+
+.loss-chart-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: var(--space-sm);
+}
+
+.loss-chart-header h4 {
+    margin: 0;
+    color: var(--primary-purple);
+    font-size: 0.95em;
+}
+
+.loss-chart-controls {
+    display: flex;
+    gap: 4px;
+}
+
+.chart-toggle-btn {
+    padding: 3px 8px;
+    font-size: 0.7em;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: all var(--transition-fast);
+}
+
+.chart-toggle-btn:hover {
+    border-color: var(--primary-purple);
+    color: var(--primary-purple);
+}
+
+.chart-toggle-btn.active {
+    background: var(--primary-purple);
+    border-color: var(--primary-purple);
+    color: white;
+}
+
+.loss-chart-container {
+    position: relative;
+    height: 220px;
+}
+
+.loss-chart-container canvas {
+    display: none;
+}
+
+.loss-chart-empty {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.85em;
+    padding: var(--space-lg) 0;
+    margin: 0;
+}
+
 /* Action Buttons Container */
 .action-buttons {
     display: flex;

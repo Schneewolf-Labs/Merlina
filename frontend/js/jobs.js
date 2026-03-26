@@ -1,7 +1,7 @@
 // Jobs Module - Job management and monitoring
 
 import { MerlinaAPI, WebSocketManager } from './api.js';
-import { Toast, Modal, ProgressBar, JobCardRenderer, MetricsDisplay } from './ui.js';
+import { Toast, Modal, ProgressBar, JobCardRenderer, MetricsDisplay, LossChart } from './ui.js';
 
 /**
  * Job Manager - handles job lifecycle and monitoring
@@ -17,6 +17,7 @@ class JobManager {
         this.toast = new Toast();
         this.modal = new Modal('job-modal');
         this.progressBar = new ProgressBar('job-modal');
+        this.lossChart = new LossChart('loss-chart');
 
         this.setupEventListeners();
     }
@@ -126,16 +127,37 @@ class JobManager {
         this.currentJobId = jobId;
         this.modal.show();
 
+        // Reset chart for new job view
+        this.lossChart.reset();
+
         // Update modal header
         const jobName = this.activeJobs[jobId]?.name || jobId;
         document.getElementById('job-name').textContent = jobName;
         document.getElementById('job-id').textContent = jobId;
+
+        // Load historical metrics for the chart
+        this.loadJobMetrics(jobId);
 
         // Try WebSocket first
         if (this.useWebSocket) {
             this.startWebSocketMonitoring(jobId);
         } else {
             this.startPollingMonitoring(jobId);
+        }
+    }
+
+    /**
+     * Load historical metrics for chart display
+     */
+    async loadJobMetrics(jobId) {
+        try {
+            const data = await MerlinaAPI.getJobMetrics(jobId);
+            if (data && data.metrics && data.metrics.length > 0) {
+                this.lossChart.loadHistory(data.metrics);
+            }
+        } catch (error) {
+            // Non-critical - chart will populate from real-time updates
+            console.debug('Could not load historical metrics:', error.message);
         }
     }
 
@@ -265,6 +287,17 @@ class JobManager {
         // Update metrics
         MetricsDisplay.update(status);
 
+        // Feed data to loss chart
+        if (status.current_step && status.loss) {
+            this.lossChart.addPoint(
+                status.current_step,
+                status.loss,
+                status.eval_loss || null,
+                status.learning_rate || null,
+                status.gpu_memory || null
+            );
+        }
+
         // Update W&B link - only change visibility when wandb_url is explicitly present
         // WebSocket updates don't include wandb_url, so skip hiding on those
         const wandbLink = document.getElementById('wandb-link');
@@ -339,6 +372,7 @@ class JobManager {
         this.stopMonitoring();
         this.modal.hide();
         this.currentJobId = null;
+        this.lossChart.reset();
 
         // Reset stop button
         const stopButton = document.getElementById('stop-button');
