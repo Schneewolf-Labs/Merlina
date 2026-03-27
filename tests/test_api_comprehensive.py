@@ -60,10 +60,25 @@ mock_transformers = MagicMock()
 mock_transformers.PreTrainedTokenizerBase = FakeTokenizerBase  # Required for issubclass() checks
 sys.modules['transformers'] = mock_transformers
 
+# Mock datasets library
+mock_datasets = MagicMock()
+mock_datasets.Dataset = MagicMock
+sys.modules['datasets'] = mock_datasets
+
+# Mock pydantic_settings (needed by config.py)
+mock_pydantic_settings = MagicMock()
+# BaseSettings needs to be a real class so config.Settings can inherit from it
+class FakeBaseSettings:
+    def __init_subclass__(cls, **kwargs):
+        pass
+mock_pydantic_settings.BaseSettings = FakeBaseSettings
+sys.modules['pydantic_settings'] = mock_pydantic_settings
+
 # Mock other ML libraries and system dependencies
 for module in [
     'trl', 'peft', 'accelerate', 'accelerate.utils', 'bitsandbytes', 'wandb', 'psutil', 'pynvml',
     'grimoire', 'grimoire.losses', 'grimoire.data',
+    'huggingface_hub',
 ]:
     sys.modules[module] = MagicMock()
 
@@ -255,14 +270,9 @@ def mock_validate_config():
 @pytest.fixture(scope="function")
 def mock_dataset_loader():
     """Mock dataset loader"""
-    from datasets import Dataset
-
-    mock_dataset = Dataset.from_dict({
-        "prompt": ["What is AI?", "What is ML?"],
-        "chosen": ["AI is artificial intelligence", "ML is machine learning"],
-        "rejected": ["I don't know", "No idea"],
-        "system": ["You are helpful", "You are helpful"]
-    })
+    mock_dataset = MagicMock()
+    mock_dataset.column_names = ["prompt", "chosen", "rejected", "system"]
+    mock_dataset.__len__ = lambda self: 2
 
     mock = Mock()
     mock.load.return_value = mock_dataset
@@ -273,13 +283,9 @@ def mock_dataset_loader():
 @pytest.fixture(scope="function")
 def mock_dataset_pipeline(mock_dataset_loader):
     """Mock dataset pipeline"""
-    from datasets import Dataset
-
-    mock_dataset = Dataset.from_dict({
-        "prompt": ["What is AI?"],
-        "chosen": ["AI is artificial intelligence"],
-        "rejected": ["I don't know"]
-    })
+    mock_dataset = MagicMock()
+    mock_dataset.column_names = ["prompt", "chosen", "rejected"]
+    mock_dataset.__len__ = lambda self: 1
 
     mock = Mock()
     mock.preview.return_value = (
@@ -505,6 +511,85 @@ class TestValidationAndJobManagement:
 
         response = client.post("/jobs/nonexistent_job/stop")
         assert response.status_code == 404
+
+    def test_retry_failed_job(self, client, mock_job_manager):
+        """Test POST /jobs/{job_id}/retry for a failed job"""
+        from src.job_manager import JobRecord
+
+        failed_job = JobRecord(
+            job_id="failed_job_001",
+            status="failed",
+            progress=0.5,
+            created_at=datetime.now().isoformat(),
+            updated_at=datetime.now().isoformat(),
+            config={
+                "base_model": "gpt2",
+                "output_name": "test_model",
+            },
+            error="Out of memory"
+        )
+        mock_job_manager.get_job.return_value = failed_job
+
+        response = client.post("/jobs/failed_job_001/retry")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "queued"
+        assert "Retrying spell!" in data["message"]
+        assert "retry of failed_job_001" in data["message"]
+
+    def test_retry_stopped_job(self, client, mock_job_manager):
+        """Test POST /jobs/{job_id}/retry for a stopped job"""
+        from src.job_manager import JobRecord
+
+        stopped_job = JobRecord(
+            job_id="stopped_job_001",
+            status="stopped",
+            progress=0.3,
+            created_at=datetime.now().isoformat(),
+            updated_at=datetime.now().isoformat(),
+            config={
+                "base_model": "gpt2",
+                "output_name": "test_model",
+            }
+        )
+        mock_job_manager.get_job.return_value = stopped_job
+
+        response = client.post("/jobs/stopped_job_001/retry")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "queued"
+
+    def test_retry_running_job_rejected(self, client, mock_job_manager):
+        """Test POST /jobs/{job_id}/retry for a running job (should be rejected)"""
+        response = client.post("/jobs/test_job_001/retry")
+        assert response.status_code == 400
+        assert "Only failed or stopped" in response.json()["detail"]
+
+    def test_retry_job_not_found(self, client, mock_job_manager):
+        """Test POST /jobs/{job_id}/retry for non-existent job"""
+        mock_job_manager.get_job.return_value = None
+
+        response = client.post("/jobs/nonexistent_job/retry")
+        assert response.status_code == 404
+
+    def test_retry_job_no_config(self, client, mock_job_manager):
+        """Test POST /jobs/{job_id}/retry for a job with no stored config"""
+        from src.job_manager import JobRecord
+
+        no_config_job = JobRecord(
+            job_id="no_config_job",
+            status="failed",
+            progress=0.0,
+            created_at=datetime.now().isoformat(),
+            updated_at=datetime.now().isoformat(),
+            config=None,
+            error="Some error"
+        )
+        mock_job_manager.get_job.return_value = no_config_job
+
+        response = client.post("/jobs/no_config_job/retry")
+        assert response.status_code == 400
+        assert "no stored configuration" in response.json()["detail"]
 
     def test_delete_job(self, client):
         """Test DELETE /jobs/{job_id} endpoint"""
