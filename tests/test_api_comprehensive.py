@@ -60,27 +60,40 @@ mock_transformers = MagicMock()
 mock_transformers.PreTrainedTokenizerBase = FakeTokenizerBase  # Required for issubclass() checks
 sys.modules['transformers'] = mock_transformers
 
-# Mock datasets library
-mock_datasets = MagicMock()
-mock_datasets.Dataset = MagicMock
-sys.modules['datasets'] = mock_datasets
+# Mock datasets library (only if not installed)
+if 'datasets' not in sys.modules:
+    try:
+        import datasets  # noqa: F401
+    except ImportError:
+        mock_datasets = MagicMock()
+        mock_datasets.Dataset = MagicMock
+        sys.modules['datasets'] = mock_datasets
 
-# Mock pydantic_settings (needed by config.py)
-mock_pydantic_settings = MagicMock()
-# BaseSettings needs to be a real class so config.Settings can inherit from it
-class FakeBaseSettings:
-    def __init_subclass__(cls, **kwargs):
-        pass
-mock_pydantic_settings.BaseSettings = FakeBaseSettings
-sys.modules['pydantic_settings'] = mock_pydantic_settings
+# Mock pydantic_settings (only if not installed)
+if 'pydantic_settings' not in sys.modules:
+    try:
+        import pydantic_settings  # noqa: F401
+    except ImportError:
+        mock_pydantic_settings = MagicMock()
+        class FakeBaseSettings:
+            def __init_subclass__(cls, **kwargs):
+                pass
+        mock_pydantic_settings.BaseSettings = FakeBaseSettings
+        sys.modules['pydantic_settings'] = mock_pydantic_settings
 
-# Mock other ML libraries and system dependencies
-for module in [
+# Mock ML libraries and system dependencies that aren't installed
+# Use try/except to only mock modules that are truly unavailable
+_modules_to_mock = [
     'trl', 'peft', 'accelerate', 'accelerate.utils', 'bitsandbytes', 'wandb', 'psutil', 'pynvml',
     'grimoire', 'grimoire.losses', 'grimoire.data',
     'huggingface_hub',
-]:
-    sys.modules[module] = MagicMock()
+]
+for module in _modules_to_mock:
+    if module not in sys.modules:
+        try:
+            __import__(module)
+        except ImportError:
+            sys.modules[module] = MagicMock()
 
 from fastapi.testclient import TestClient
 from fastapi import UploadFile
