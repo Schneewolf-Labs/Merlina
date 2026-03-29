@@ -38,16 +38,18 @@ sys.modules.setdefault('torch.nn', mock_torch.nn)
 sys.modules.setdefault('torch.utils', MagicMock())
 sys.modules.setdefault('torch.utils.data', MagicMock())
 
-# Mock transformers — keep AutoConfig, AutoModelForCausalLM, AutoModelForVision2Seq
+# Mock transformers — keep AutoConfig, AutoModelForCausalLM, AutoModelForVLM
 # as distinct sentinel objects so we can assert identity
 mock_AutoConfig = MagicMock()
 mock_AutoModelForCausalLM = MagicMock()
-mock_AutoModelForVision2Seq = MagicMock()
+mock_AutoModelForVLM = MagicMock()
+mock_AutoModelForVLM.__name__ = "AutoModelForImageTextToText"
 
 mock_transformers = MagicMock()
 mock_transformers.AutoConfig = mock_AutoConfig
 mock_transformers.AutoModelForCausalLM = mock_AutoModelForCausalLM
-mock_transformers.AutoModelForVision2Seq = mock_AutoModelForVision2Seq
+# Code imports AutoModelForImageTextToText (v5+) with fallback to AutoModelForVision2Seq (v4)
+mock_transformers.AutoModelForImageTextToText = mock_AutoModelForVLM
 sys.modules.setdefault('transformers', mock_transformers)
 
 # Mock other heavy dependencies
@@ -65,7 +67,7 @@ mock_dataset_handlers = MagicMock()
 sys.modules.setdefault('dataset_handlers', mock_dataset_handlers)
 
 # Now import the functions under test
-from src.training_runner import _detect_is_vlm, _get_auto_model_class, AutoConfig, AutoModelForCausalLM, AutoModelForVision2Seq
+from src.training_runner import _detect_is_vlm, _get_auto_model_class, AutoConfig, AutoModelForCausalLM, AutoModelForVLM
 
 # Also import TrainingConfig (doesn't need heavy mocks)
 from merlina import TrainingConfig
@@ -204,9 +206,9 @@ class TestGetAutoModelClass:
         assert is_vlm is False
 
     def test_explicit_vlm_returns_vision2seq(self):
-        """model_type='vlm' should return AutoModelForVision2Seq."""
+        """model_type='vlm' should return AutoModelForVLM."""
         cls, is_vlm = _get_auto_model_class("any/model", model_type="vlm")
-        assert cls is AutoModelForVision2Seq
+        assert cls is AutoModelForVLM
         assert is_vlm is True
 
     @patch("src.training_runner._detect_is_vlm", return_value=True)
@@ -214,7 +216,7 @@ class TestGetAutoModelClass:
         """model_type='auto' should return VLM class when detected as VLM."""
         cls, is_vlm = _get_auto_model_class("Qwen/Qwen3.5-VL-7B", model_type="auto")
         mock_detect.assert_called_once_with("Qwen/Qwen3.5-VL-7B")
-        assert cls is AutoModelForVision2Seq
+        assert cls is AutoModelForVLM
         assert is_vlm is True
 
     @patch("src.training_runner._detect_is_vlm", return_value=False)

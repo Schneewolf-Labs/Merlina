@@ -28,9 +28,13 @@ from transformers import (
 )
 
 try:
-    from transformers import AutoModelForVision2Seq
+    # transformers v5+ renamed AutoModelForVision2Seq to AutoModelForImageTextToText
+    from transformers import AutoModelForImageTextToText as AutoModelForVLM
 except ImportError:
-    AutoModelForVision2Seq = None
+    try:
+        from transformers import AutoModelForVision2Seq as AutoModelForVLM
+    except ImportError:
+        AutoModelForVLM = None
 from peft import LoraConfig, PeftModel, AutoPeftModelForCausalLM
 from grimoire import GrimoireTrainer, TrainingConfig, TrainerCallback
 from grimoire.losses import SFTLoss, ORPOLoss, DPOLoss, SimPOLoss, CPOLoss, IPOLoss, KTOLoss
@@ -96,13 +100,13 @@ def _get_auto_model_class(model_name: str, model_type: str = "auto"):
         is_vlm = _detect_is_vlm(model_name)
 
     if is_vlm:
-        if AutoModelForVision2Seq is None:
+        if AutoModelForVLM is None:
             raise ImportError(
-                "AutoModelForVision2Seq is not available in your transformers version. "
+                "No VLM auto-model class found in your transformers version. "
                 "Upgrade transformers or use model_type='causal_lm'."
             )
-        logger.info("Model type: VLM — using AutoModelForVision2Seq")
-        return AutoModelForVision2Seq, True
+        logger.info("Model type: VLM — using %s", getattr(AutoModelForVLM, '__name__', 'AutoModelForVLM'))
+        return AutoModelForVLM, True
     else:
         logger.info("Model type: Causal LM — using AutoModelForCausalLM")
         return AutoModelForCausalLM, False
