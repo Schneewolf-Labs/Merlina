@@ -278,16 +278,7 @@ def run_worker(args):
     # Install SIGTERM handler
     signal.signal(signal.SIGTERM, _sigterm_handler)
 
-    # Load config
-    with open(args.config_path, "r") as f:
-        config_dict = json.load(f)
-
-    # Reconstruct Pydantic config
-    from merlina import TrainingConfig
-    from pydantic import TypeAdapter
-    config = TypeAdapter(TrainingConfig).validate_python(config_dict)
-
-    # Determine rank (set by accelerate launch)
+    # Determine rank early (set by accelerate launch)
     local_rank = int(os.environ.get("LOCAL_RANK", 0))
     global_rank = int(os.environ.get("RANK", 0))
     is_main = global_rank == 0
@@ -296,6 +287,31 @@ def run_worker(args):
         logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
     else:
         logging.basicConfig(level=logging.WARNING)
+
+    # Load config — wrap in try/except so failures are reported to the
+    # progress file (the parent monitor relies on it).
+    try:
+        with open(args.config_path, "r") as f:
+            config_dict = json.load(f)
+
+        # Import TrainingConfig from merlina. This triggers module-level
+        # initialization (FastAPI app, DB, etc.) which is harmless in the
+        # subprocess context. An alternative is a shared models module, but
+        # this keeps the Pydantic model as the single source of truth.
+        from merlina import TrainingConfig
+        from pydantic import TypeAdapter
+        config = TypeAdapter(TrainingConfig).validate_python(config_dict)
+    except Exception as e:
+        logger.error(f"Failed to load training config: {e}", exc_info=True)
+        if is_main:
+            with open(args.progress_file, "a") as f:
+                f.write(json.dumps({"type": "error", "error": f"Config load failed: {e}"}) + "\n")
+            try:
+                jm = JobManager(db_path=args.db_path)
+                jm.update_job(args.job_id, status="failed", error=str(e))
+            except Exception:
+                pass
+        return
 
     logger.info(f"Worker started: rank={global_rank}, local_rank={local_rank}")
 
