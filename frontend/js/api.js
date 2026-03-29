@@ -178,6 +178,10 @@ class MerlinaAPI {
         return this.fetch(`/jobs/${jobId}/stop`, { method: 'POST' }, LONG_TIMEOUT);
     }
 
+    static async retryJob(jobId) {
+        return this.fetch(`/jobs/${jobId}/retry`, { method: 'POST' }, LONG_TIMEOUT);
+    }
+
     static async getJobs() {
         return this.fetch('/jobs');
     }

@@ -38,6 +38,12 @@ class JobManager {
             clearAllBtn.addEventListener('click', () => this.clearAllJobs());
         }
 
+        // Retry button
+        const retryBtn = document.getElementById('retry-button');
+        if (retryBtn) {
+            retryBtn.addEventListener('click', () => this.retryCurrentJob());
+        }
+
         // Event delegation for job cards
         const jobsContainer = document.getElementById('jobs-container');
         if (jobsContainer) {
@@ -312,6 +318,7 @@ class JobManager {
 
         // Handle stop button state
         const stopButton = document.getElementById('stop-button');
+        const retryButton = document.getElementById('retry-button');
         if (stopButton) {
             if (status.status === 'completed') {
                 stopButton.disabled = true;
@@ -329,6 +336,11 @@ class JobManager {
                 stopButton.disabled = false;
                 stopButton.textContent = '🛑 Stop Training';
             }
+        }
+
+        // Show retry button for failed or stopped jobs
+        if (retryButton) {
+            retryButton.style.display = ['failed', 'stopped'].includes(status.status) ? '' : 'none';
         }
     }
 
@@ -380,6 +392,12 @@ class JobManager {
             stopButton.disabled = false;
             stopButton.textContent = '🛑 Stop Training';
         }
+
+        // Hide retry button
+        const retryButton = document.getElementById('retry-button');
+        if (retryButton) {
+            retryButton.style.display = 'none';
+        }
     }
 
     /**
@@ -417,6 +435,35 @@ class JobManager {
         } catch (error) {
             console.error('Failed to stop job:', error);
             this.toast.error(`Failed to stop training: ${error.message}`);
+        }
+    }
+
+    /**
+     * Retry a failed or stopped job with the same config
+     */
+    async retryCurrentJob() {
+        if (!this.currentJobId) return;
+
+        try {
+            const result = await MerlinaAPI.retryJob(this.currentJobId);
+
+            this.toast.success(`Retrying! New job: ${result.job_id}`);
+
+            // Track the new job
+            this.activeJobs[result.job_id] = {
+                name: result.job_id,
+                status: 'queued'
+            };
+
+            // Close current modal and reload jobs
+            this.closeJobModal();
+            await this.loadJobs();
+
+            // Open the new job's monitoring modal
+            this.showJobDetails(result.job_id);
+        } catch (error) {
+            console.error('Failed to retry job:', error);
+            this.toast.error(`Failed to retry: ${error.message}`);
         }
     }
 
