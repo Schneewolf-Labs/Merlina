@@ -37,6 +37,17 @@ cd Merlina
 pip install -r requirements.txt
 ```
 
+> **GPU environments (RunPod, Colab, Lambda, etc.):** These come with torch
+> pre-installed and matched to CUDA. The `requirements.txt` intentionally
+> excludes torch/torchvision/torchaudio so it won't break your existing setup.
+> Just run `pip install -r requirements.txt` and you're good to go.
+>
+> **No torch pre-installed?** Install it first with the correct CUDA version:
+> ```bash
+> pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+> pip install -r requirements.txt
+> ```
+
 ### 2. Configure (Optional)
 
 ```bash
