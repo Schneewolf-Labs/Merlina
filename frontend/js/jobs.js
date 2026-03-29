@@ -90,11 +90,12 @@ class JobManager {
 
             if (Object.keys(jobs).length > 0) {
                 for (const [jobId, job] of Object.entries(jobs)) {
-                    // Update local tracking
-                    if (this.activeJobs[jobId]) {
-                        this.activeJobs[jobId].status = job.status;
-                        this.activeJobs[jobId].progress = job.progress;
+                    // Update or create local tracking
+                    if (!this.activeJobs[jobId]) {
+                        this.activeJobs[jobId] = { name: jobId };
                     }
+                    this.activeJobs[jobId].status = job.status;
+                    this.activeJobs[jobId].progress = job.progress;
 
                     // Create or update job card
                     const jobName = this.activeJobs[jobId]?.name || jobId;
