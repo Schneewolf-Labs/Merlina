@@ -6,13 +6,12 @@ pydantic-settings>=2.0.0
 python-multipart>=0.0.6
 
 # ML/Training frameworks
-# torch, torchvision, and torchaudio must be installed together so they stay in
-# sync. On GPU environments, install with the correct CUDA index first:
-#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124
-# Then run: pip install -r requirements.txt
-torch>=2.5.0
-torchvision
-torchaudio
+# IMPORTANT: torch, torchvision, torchaudio, and xformers are NOT listed here.
+# GPU environments (RunPod, Colab, Lambda, etc.) ship pre-installed CUDA-matched
+# builds. Pip will silently replace them with generic PyPI builds that break
+# torchvision. Use whatever torch is pre-installed, or install manually first:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+# Requires torch >= 2.5.0 (for transformers 5.x compatibility).
 transformers>=5.0.0
 accelerate>=0.24.0
 grimoire-rl @ git+https://github.com/Schneewolf-Labs/grimoire.git

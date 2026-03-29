@@ -609,6 +609,36 @@ class PreflightValidator:
         """Check for required dependencies"""
         issues = []
 
+        # Check torch version (>= 2.5.0 required for transformers 5.x)
+        torch_version = tuple(int(x) for x in torch.__version__.split('+')[0].split('.')[:2])
+        if torch_version < (2, 5):
+            self.errors.append(
+                f"PyTorch {torch.__version__} is too old. Requires >= 2.5.0 for "
+                "transformers 5.x (set_submodule support). Upgrade with:\n"
+                "  pip install torch torchvision torchaudio --index-url "
+                "https://download.pytorch.org/whl/cu128"
+            )
+
+        # Check torch/torchvision version mismatch
+        try:
+            import torchvision
+            tv_torch = torchvision._C_tests if False else None  # just need the import
+            # torchvision encodes expected torch version in its build
+            tv_version = torchvision.__version__.split('+')[0]
+            torch_base = torch.__version__.split('+')[0]
+            # Quick sanity check: try calling a torchvision op
+            try:
+                torch.ops.torchvision.nms  # noqa: B018
+            except (RuntimeError, AttributeError):
+                self.errors.append(
+                    f"torchvision {torchvision.__version__} is incompatible with "
+                    f"torch {torch.__version__}. Reinstall them together:\n"
+                    "  pip install torch torchvision torchaudio --index-url "
+                    "https://download.pytorch.org/whl/cu128"
+                )
+        except ImportError:
+            pass
+
         # Check for flash attention (optional but recommended)
         try:
             import flash_attn
