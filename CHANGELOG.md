@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-03-28
+
+### Fixed
+- **VLM loading on transformers v5+**: `AutoModelForVision2Seq` was removed in transformers v5. Now imports `AutoModelForImageTextToText` (v5+) with fallback to `AutoModelForVision2Seq` (v4).
+- Bumped minimum `transformers` requirement to `>=5.0.0`.
+
 ## [1.4.0] - 2026-03-24 "Crystal Ball"
 
 ### Added

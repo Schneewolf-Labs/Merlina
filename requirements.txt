@@ -7,7 +7,7 @@ python-multipart>=0.0.6
 
 # ML/Training frameworks
 torch>=2.0.0
-transformers>=4.36.0
+transformers>=5.0.0
 accelerate>=0.24.0
 grimoire-rl @ git+https://github.com/Schneewolf-Labs/grimoire.git
 peft>=0.6.0
