@@ -2537,6 +2537,15 @@ if __name__ == "__main__":
     logger.info(f"Database: {settings.database_path}")
     logger.info(f"Log level: {settings.log_level}")
 
+    # Check torch version compatibility
+    torch_version = tuple(int(x) for x in torch.__version__.split('+')[0].split('.')[:2])
+    if torch_version < (2, 5):
+        logger.error(
+            f"PyTorch {torch.__version__} is too old (need >= 2.5.0). "
+            "Run: pip install torch torchvision torchaudio --index-url "
+            "https://download.pytorch.org/whl/cu128"
+        )
+
     # GPU startup check
     if torch.cuda.is_available():
         gpu_count = torch.cuda.device_count()

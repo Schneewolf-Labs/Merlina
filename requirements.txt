@@ -6,7 +6,12 @@ pydantic-settings>=2.0.0
 python-multipart>=0.0.6
 
 # ML/Training frameworks
-torch>=2.0.0
+# IMPORTANT: torch, torchvision, torchaudio, and xformers are NOT listed here.
+# GPU environments (RunPod, Colab, Lambda, etc.) ship pre-installed CUDA-matched
+# builds. Pip will silently replace them with generic PyPI builds that break
+# torchvision. Use whatever torch is pre-installed, or install manually first:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+# Requires torch >= 2.5.0 (for transformers 5.x compatibility).
 transformers>=5.0.0
 accelerate>=0.24.0
 grimoire-rl @ git+https://github.com/Schneewolf-Labs/grimoire.git
@@ -23,7 +28,8 @@ scipy>=1.10.0
 einops>=0.7.0
 
 # Optional but recommended
-xformers>=0.0.22  # For memory efficient attention
+# xformers is tightly coupled to torch+CUDA. Install manually after torch:
+#   pip install xformers
 ninja>=1.11.0     # For faster builds
 packaging>=23.0   # Version handling
 pynvml>=11.5.0    # For detailed GPU monitoring
