@@ -44,6 +44,18 @@ class JobManager {
             retryBtn.addEventListener('click', () => this.retryCurrentJob());
         }
 
+        // Upload to Hub button
+        const uploadHubBtn = document.getElementById('upload-hub-button');
+        if (uploadHubBtn) {
+            uploadHubBtn.addEventListener('click', () => this.showUploadModal());
+        }
+
+        // Upload confirm button
+        const uploadConfirmBtn = document.getElementById('upload-hub-confirm');
+        if (uploadConfirmBtn) {
+            uploadConfirmBtn.addEventListener('click', () => this.uploadCurrentJob());
+        }
+
         // Event delegation for job cards
         const jobsContainer = document.getElementById('jobs-container');
         if (jobsContainer) {
@@ -140,6 +152,16 @@ class JobManager {
         const jobName = this.activeJobs[jobId]?.name || jobId;
         document.getElementById('job-name').textContent = jobName;
         document.getElementById('job-id').textContent = jobId;
+
+        // Load job config for upload modal pre-fill (if not already cached)
+        if (!this.activeJobs[jobId]?.config) {
+            MerlinaAPI.getJobConfig(jobId).then(data => {
+                if (data && data.config) {
+                    if (!this.activeJobs[jobId]) this.activeJobs[jobId] = {};
+                    this.activeJobs[jobId].config = data.config;
+                }
+            }).catch(() => {});
+        }
 
         // Load historical metrics for the chart
         this.loadJobMetrics(jobId);
@@ -342,6 +364,12 @@ class JobManager {
         if (retryButton) {
             retryButton.style.display = ['failed', 'stopped'].includes(status.status) ? '' : 'none';
         }
+
+        // Show upload button for completed or stopped jobs (not during active upload)
+        const uploadHubButton = document.getElementById('upload-hub-button');
+        if (uploadHubButton) {
+            uploadHubButton.style.display = ['completed', 'stopped'].includes(status.status) ? '' : 'none';
+        }
     }
 
     /**
@@ -397,6 +425,12 @@ class JobManager {
         const retryButton = document.getElementById('retry-button');
         if (retryButton) {
             retryButton.style.display = 'none';
+        }
+
+        // Hide upload button
+        const uploadHubButton = document.getElementById('upload-hub-button');
+        if (uploadHubButton) {
+            uploadHubButton.style.display = 'none';
         }
     }
 
@@ -464,6 +498,77 @@ class JobManager {
         } catch (error) {
             console.error('Failed to retry job:', error);
             this.toast.error(`Failed to retry: ${error.message}`);
+        }
+    }
+
+    /**
+     * Show upload modal with pre-filled values from job config
+     */
+    showUploadModal() {
+        if (!this.currentJobId) return;
+
+        // Pre-fill HF token from the original job config if available
+        const jobConfig = this.activeJobs[this.currentJobId]?.config;
+        const tokenInput = document.getElementById('upload-hf-token');
+        const repoInput = document.getElementById('upload-repo-name');
+        const mergeCheckbox = document.getElementById('upload-merge-lora');
+        const privateCheckbox = document.getElementById('upload-private');
+
+        if (tokenInput) {
+            // Try to get token from original config or from the main form
+            const mainToken = document.getElementById('hf-token')?.value || '';
+            tokenInput.value = jobConfig?.hf_token || mainToken;
+        }
+        if (repoInput) repoInput.value = '';
+        if (repoInput) repoInput.placeholder = jobConfig?.output_name || 'Leave empty to use original output name';
+        if (mergeCheckbox) mergeCheckbox.checked = jobConfig?.merge_lora_before_upload ?? true;
+        if (privateCheckbox) privateCheckbox.checked = jobConfig?.hf_hub_private ?? true;
+
+        document.getElementById('upload-hub-modal').style.display = 'flex';
+    }
+
+    /**
+     * Upload current job's model to HuggingFace Hub
+     */
+    async uploadCurrentJob() {
+        if (!this.currentJobId) return;
+
+        const hfToken = document.getElementById('upload-hf-token')?.value?.trim();
+        if (!hfToken) {
+            this.toast.error('HuggingFace token is required');
+            return;
+        }
+
+        const outputName = document.getElementById('upload-repo-name')?.value?.trim() || null;
+        const mergeLora = document.getElementById('upload-merge-lora')?.checked ?? true;
+        const isPrivate = document.getElementById('upload-private')?.checked ?? true;
+
+        // Close upload modal
+        document.getElementById('upload-hub-modal').style.display = 'none';
+
+        try {
+            const result = await MerlinaAPI.uploadJob(this.currentJobId, {
+                hf_token: hfToken,
+                output_name: outputName,
+                merge_lora_before_upload: mergeLora,
+                hf_hub_private: isPrivate
+            });
+
+            this.toast.success(result.message || 'Upload started!');
+
+            // Hide upload button, show uploading state
+            const uploadBtn = document.getElementById('upload-hub-button');
+            if (uploadBtn) uploadBtn.style.display = 'none';
+
+            // Start monitoring for upload progress
+            if (this.useWebSocket) {
+                this.startWebSocketMonitoring(this.currentJobId);
+            } else {
+                this.startPollingMonitoring(this.currentJobId);
+            }
+        } catch (error) {
+            console.error('Failed to upload job:', error);
+            this.toast.error(`Upload failed: ${error.message}`);
         }
     }
 
