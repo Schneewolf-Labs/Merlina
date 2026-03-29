@@ -1125,8 +1125,41 @@
                         <button id="retry-button" class="action-button" style="display: none; background: var(--primary-purple); color: white;">
                             🔄 Retry with Same Config
                         </button>
+                        <button id="upload-hub-button" class="action-button" style="display: none; background: var(--wizard-yellow); color: #1a1a2e;">
+                            📤 Upload to Hub
+                        </button>
                     </div>
                 </div>
+            </div>
+        </div>
+
+        <!-- Upload to Hub Modal -->
+        <div id="upload-hub-modal" class="modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="upload-hub-modal-title">
+            <div class="modal-content">
+                <button class="close" onclick="document.getElementById('upload-hub-modal').style.display='none'" aria-label="Close modal" type="button">&times;</button>
+                <h2 id="upload-hub-modal-title">📤 Upload Model to HuggingFace Hub</h2>
+                <p style="color: var(--text-secondary); margin-bottom: 15px;">Push this job's trained model to HuggingFace Hub.</p>
+                <div class="form-group">
+                    <label for="upload-hf-token">HuggingFace Token <span style="color: var(--secondary-pink);">*</span></label>
+                    <input type="password" id="upload-hf-token" placeholder="hf_..." class="magic-input" required>
+                </div>
+                <div class="form-group">
+                    <label for="upload-repo-name">Repository Name (optional override)</label>
+                    <input type="text" id="upload-repo-name" placeholder="Leave empty to use original output name" class="magic-input">
+                </div>
+                <div class="form-group" style="display: flex; gap: 20px; flex-wrap: wrap;">
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="upload-merge-lora" checked>
+                        Merge LoRA before upload
+                    </label>
+                    <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                        <input type="checkbox" id="upload-private" checked>
+                        Private repository
+                    </label>
+                </div>
+                <button id="upload-hub-confirm" class="action-button" style="width: 100%; background: var(--wizard-yellow); color: #1a1a2e; font-weight: bold; margin-top: 10px;">
+                    🚀 Start Upload
+                </button>
             </div>
         </div>
 

@@ -182,6 +182,16 @@ class MerlinaAPI {
         return this.fetch(`/jobs/${jobId}/retry`, { method: 'POST' }, LONG_TIMEOUT);
     }
 
+    static async uploadJob(jobId, { hf_token, output_name = null, merge_lora_before_upload = true, hf_hub_private = true } = {}) {
+        const body = { hf_token, merge_lora_before_upload, hf_hub_private };
+        if (output_name) body.output_name = output_name;
+        return this.fetch(`/jobs/${jobId}/upload`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        }, LONG_TIMEOUT);
+    }
+
     static async getJobs() {
         return this.fetch('/jobs');
     }

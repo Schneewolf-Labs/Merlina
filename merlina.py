@@ -837,6 +837,88 @@ async def retry_job(job_id: str, priority: Optional[str] = "normal"):
     )
 
 
+class UploadJobRequest(BaseModel):
+    hf_token: str = Field(..., description="HuggingFace API token for authentication")
+    output_name: Optional[str] = Field(None, description="Override repository name (defaults to original output_name)")
+    merge_lora_before_upload: bool = Field(True, description="Merge LoRA with base model before uploading")
+    hf_hub_private: bool = Field(True, description="Make HuggingFace Hub repository private")
+
+
+@app.post("/jobs/{job_id}/upload", response_model=JobResponse)
+async def upload_job(job_id: str, request: UploadJobRequest):
+    """
+    Upload or re-upload a completed/stopped job's model to HuggingFace Hub.
+    The job must have saved model artifacts (output_dir must exist).
+    """
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status not in ("completed", "stopped"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only completed or stopped jobs can be uploaded. Job is '{job.status}'."
+        )
+
+    if not job.output_dir:
+        raise HTTPException(
+            status_code=400,
+            detail="Job has no saved model artifacts (output_dir is missing)."
+        )
+
+    output_dir = job.output_dir
+    if not os.path.isdir(output_dir):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Model directory not found: {output_dir}. The model files may have been deleted."
+        )
+
+    if not job.config:
+        raise HTTPException(
+            status_code=400,
+            detail="Job has no stored configuration."
+        )
+
+    # Build a config object with upload-relevant fields from the original config,
+    # overridden by the request parameters
+    from pydantic import TypeAdapter
+    config = TypeAdapter(TrainingConfig).validate_python(job.config)
+
+    # Apply upload overrides
+    config.hf_token = request.hf_token
+    config.merge_lora_before_upload = request.merge_lora_before_upload
+    config.hf_hub_private = request.hf_hub_private
+    if request.output_name:
+        config.output_name = request.output_name
+
+    training_mode = config.training_mode
+
+    # Get event loop for WebSocket updates
+    try:
+        event_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        event_loop = None
+
+    # Start upload in background thread
+    from src.training_runner import _run_background_upload
+
+    upload_thread = threading.Thread(
+        target=_run_background_upload,
+        args=(config, output_dir, training_mode, job_id, job_manager, event_loop),
+        name=f"UploadThread-{job_id}",
+        daemon=False
+    )
+    upload_thread.start()
+
+    logger.info(f"📤 Background upload started for job {job_id} -> {config.output_name}")
+
+    return JobResponse(
+        job_id=job_id,
+        status="uploading",
+        message=f"Upload started for {config.output_name}. Model is being pushed to HuggingFace Hub."
+    )
+
+
 @app.post("/jobs/{job_id}/stop")
 async def stop_job(job_id: str):
     """
