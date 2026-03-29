@@ -27,7 +27,12 @@ if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
 import torch
-import wandb
+
+try:
+    import wandb
+except ImportError:
+    wandb = None
+
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 try:
@@ -114,7 +119,7 @@ def _cleanup_training_resources(model, trainer):
         pass
 
 
-def _do_hub_upload(config, final_output_dir: str, training_mode: str, job_id: str, job_manager):
+def _do_hub_upload(config, final_output_dir: str, training_mode: str, job_id: str, job_manager, was_stopped: bool = False):
     """Upload model to HuggingFace Hub (subprocess version, no WebSocket)."""
     from huggingface_hub import HfApi
     from peft import PeftModel
@@ -168,7 +173,8 @@ def _do_hub_upload(config, final_output_dir: str, training_mode: str, job_id: st
 
     logger.info(f"Model published at: https://huggingface.co/{config.output_name}")
     if job_manager:
-        job_manager.update_job(job_id, status="completed", progress=1.0, output_dir=final_output_dir)
+        final_status = "stopped" if was_stopped else "completed"
+        job_manager.update_job(job_id, status=final_status, progress=1.0, output_dir=final_output_dir)
 
 
 def _sigterm_handler(signum, frame):
@@ -479,14 +485,15 @@ def run_worker(args):
                 ),
                 remove_columns=train_dataset.column_names,
             )
-            eval_dataset = eval_dataset.map(
-                lambda x: tokenize_sft(
-                    x, tokenizer, max_length=config.max_length,
-                    max_prompt_length=config.max_prompt_length,
-                    prompt_field="prompt", response_field="chosen",
-                ),
-                remove_columns=eval_dataset.column_names,
-            )
+            if eval_dataset is not None:
+                eval_dataset = eval_dataset.map(
+                    lambda x: tokenize_sft(
+                        x, tokenizer, max_length=config.max_length,
+                        max_prompt_length=config.max_prompt_length,
+                        prompt_field="prompt", response_field="chosen",
+                    ),
+                    remove_columns=eval_dataset.column_names,
+                )
         elif training_mode == "kto":
             loss_fn = KTOLoss(beta=config.beta)
             from datasets import Dataset as HFDataset, concatenate_datasets
@@ -504,7 +511,8 @@ def run_worker(args):
                 return concatenate_datasets(parts).shuffle(seed=config.seed)
 
             train_dataset = _split_to_kto(train_dataset)
-            eval_dataset = _split_to_kto(eval_dataset)
+            if eval_dataset is not None:
+                eval_dataset = _split_to_kto(eval_dataset)
             train_dataset = train_dataset.map(
                 lambda x: tokenize_kto(
                     x, tokenizer, max_length=config.max_length,
@@ -513,14 +521,15 @@ def run_worker(args):
                 ),
                 remove_columns=train_dataset.column_names,
             )
-            eval_dataset = eval_dataset.map(
-                lambda x: tokenize_kto(
-                    x, tokenizer, max_length=config.max_length,
-                    max_prompt_length=config.max_prompt_length,
-                    prompt_field="prompt", response_field="response", label_field="label",
-                ),
-                remove_columns=eval_dataset.column_names,
-            )
+            if eval_dataset is not None:
+                eval_dataset = eval_dataset.map(
+                    lambda x: tokenize_kto(
+                        x, tokenizer, max_length=config.max_length,
+                        max_prompt_length=config.max_prompt_length,
+                        prompt_field="prompt", response_field="response", label_field="label",
+                    ),
+                    remove_columns=eval_dataset.column_names,
+                )
         elif training_mode in PREFERENCE_MODES:
             if training_mode == "orpo":
                 loss_fn = ORPOLoss(beta=config.beta)
@@ -539,13 +548,14 @@ def run_worker(args):
                 ),
                 remove_columns=train_dataset.column_names,
             )
-            eval_dataset = eval_dataset.map(
-                lambda x: tokenize_preference(
-                    x, tokenizer, max_length=config.max_length,
-                    max_prompt_length=config.max_prompt_length,
-                ),
-                remove_columns=eval_dataset.column_names,
-            )
+            if eval_dataset is not None:
+                eval_dataset = eval_dataset.map(
+                    lambda x: tokenize_preference(
+                        x, tokenizer, max_length=config.max_length,
+                        max_prompt_length=config.max_prompt_length,
+                    ),
+                    remove_columns=eval_dataset.column_names,
+                )
         else:
             raise ValueError(f"Unknown training mode: {training_mode}")
 
@@ -561,7 +571,7 @@ def run_worker(args):
         wandb_run_name = None
         wandb_project = None
         log_with = None
-        if config.use_wandb and is_main:
+        if config.use_wandb and is_main and wandb is not None:
             if config.wandb_key:
                 wandb.login(key=config.wandb_key)
             wandb_run_name = config.wandb_run_name or generate_wandb_run_name(config)
@@ -628,7 +638,7 @@ def run_worker(args):
         )
 
         # Capture W&B URL
-        if is_main and config.use_wandb and wandb.run is not None:
+        if is_main and config.use_wandb and wandb is not None and wandb.run is not None:
             wandb_url = wandb.run.get_url()
             logger.info(f"W&B run URL: {wandb_url}")
             if job_manager:
@@ -681,7 +691,7 @@ def run_worker(args):
                 if job_manager:
                     job_manager.update_job(args.job_id, status="uploading", progress=0.95)
                 try:
-                    _do_hub_upload(config, final_output_dir, training_mode, args.job_id, job_manager)
+                    _do_hub_upload(config, final_output_dir, training_mode, args.job_id, job_manager, was_stopped)
                 except Exception as upload_err:
                     logger.error(f"Upload failed: {upload_err}", exc_info=True)
                     logger.info(f"Model saved locally at: {final_output_dir}")
@@ -701,7 +711,7 @@ def run_worker(args):
                     )
 
             # Finish wandb
-            if config.use_wandb and wandb.run is not None:
+            if config.use_wandb and wandb is not None and wandb.run is not None:
                 wandb.finish()
 
     except Exception as e:
@@ -712,7 +722,7 @@ def run_worker(args):
             # Write error to progress file
             with open(args.progress_file, "a") as f:
                 f.write(json.dumps({"type": "error", "error": str(e)}) + "\n")
-            if config.use_wandb and wandb.run is not None:
+            if config.use_wandb and wandb is not None and wandb.run is not None:
                 try:
                     wandb.finish(exit_code=1)
                 except Exception:
