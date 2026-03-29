@@ -333,6 +333,15 @@ class TrainingConfig(BaseModel):
         None,
         description="List of GPU indices to use for training (e.g., [0] or [0, 1]). If None, uses all available GPUs or CUDA_VISIBLE_DEVICES"
     )
+    multi_gpu_strategy: str = Field(
+        "auto",
+        description=(
+            "Multi-GPU strategy: "
+            "'auto' (DDP when >1 GPU, single-process otherwise), "
+            "'ddp' (force Distributed Data Parallel via accelerate launch), "
+            "'single' (single-process with device_map=auto, for model parallelism)"
+        )
+    )
 
     # Weights & Biases settings
     wandb_project: Optional[str] = Field(None, description="W&B project name (default: 'merlina-training')")
@@ -642,7 +651,7 @@ async def create_training_job(config: TrainingConfig, priority: Optional[str] = 
     job_manager.create_job(job_id, config.model_dump())
 
     # Import training runner
-    from src.training_runner import run_training_sync
+    from src.training_runner import run_training_sync, run_training_distributed, _get_distributed_gpu_count
 
     # Get the current event loop for WebSocket updates
     try:
@@ -652,10 +661,36 @@ async def create_training_job(config: TrainingConfig, priority: Optional[str] = 
 
     # Define callback that will be executed by worker
     def training_callback(job_id: str, config_dict: dict):
-        """Wrapper to convert config dict back to TrainingConfig"""
+        """Wrapper to convert config dict back to TrainingConfig.
+
+        Automatically chooses between single-process and distributed
+        (multi-GPU DDP) training based on the multi_gpu_strategy config.
+        """
         from pydantic import TypeAdapter
         config_obj = TypeAdapter(TrainingConfig).validate_python(config_dict)
-        run_training_sync(job_id, config_obj, job_manager, uploaded_datasets, loop)
+
+        strategy = getattr(config_obj, "multi_gpu_strategy", "auto")
+        num_gpus = _get_distributed_gpu_count(config_obj)
+
+        use_distributed = False
+        if strategy == "ddp":
+            use_distributed = num_gpus > 1
+        elif strategy == "auto":
+            use_distributed = num_gpus > 1
+        # strategy == "single" → always single-process
+
+        if use_distributed:
+            logger.info(
+                f"Using distributed DDP training with {num_gpus} GPUs "
+                f"(strategy={strategy})"
+            )
+            run_training_distributed(
+                job_id, config_obj, job_manager, uploaded_datasets, loop
+            )
+        else:
+            run_training_sync(
+                job_id, config_obj, job_manager, uploaded_datasets, loop
+            )
 
     # Submit job to queue
     position = job_queue.submit(
@@ -811,7 +846,7 @@ async def retry_job(job_id: str, priority: Optional[str] = "normal"):
     new_job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     job_manager.create_job(new_job_id, config.model_dump())
 
-    from src.training_runner import run_training_sync
+    from src.training_runner import run_training_sync, run_training_distributed, _get_distributed_gpu_count
 
     try:
         loop = asyncio.get_running_loop()
@@ -821,7 +856,15 @@ async def retry_job(job_id: str, priority: Optional[str] = "normal"):
     def training_callback(job_id: str, config_dict: dict):
         from pydantic import TypeAdapter
         config_obj = TypeAdapter(TrainingConfig).validate_python(config_dict)
-        run_training_sync(job_id, config_obj, job_manager, uploaded_datasets, loop)
+
+        strategy = getattr(config_obj, "multi_gpu_strategy", "auto")
+        num_gpus = _get_distributed_gpu_count(config_obj)
+        use_distributed = strategy != "single" and num_gpus > 1
+
+        if use_distributed:
+            run_training_distributed(job_id, config_obj, job_manager, uploaded_datasets, loop)
+        else:
+            run_training_sync(job_id, config_obj, job_manager, uploaded_datasets, loop)
 
     position = job_queue.submit(
         job_id=new_job_id,

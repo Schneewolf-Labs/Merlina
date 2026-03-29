@@ -4,7 +4,15 @@ Core functionality for magical LLM training
 """
 
 from .job_manager import JobManager, JobRecord
-from .websocket_manager import websocket_manager, WebSocketManager
+
+try:
+    from .websocket_manager import websocket_manager, WebSocketManager
+except ImportError:
+    # websocket_manager requires fastapi which may not be available in
+    # subprocess workers (e.g. train_worker.py launched via accelerate).
+    websocket_manager = None
+    WebSocketManager = None
+
 from .preflight_checks import PreflightValidator, validate_config, ValidationError
 
 # Utility functions and constants
