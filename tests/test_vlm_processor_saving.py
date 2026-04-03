@@ -326,31 +326,22 @@ class TestSaveGenerationConfig:
 
 
 # ---------------------------------------------------------------------------
-# 5. LoRA task_type is CAUSAL_LM for both VLMs and text models
+# 5. LoRA task_type is configurable via lora_task_type
 # ---------------------------------------------------------------------------
 
 class TestLoraTaskType:
-    """Verify LoRA task_type stays CAUSAL_LM for all models.
+    """Verify LoRA task_type is read from config (user-configurable)."""
 
-    Even for VLMs, task_type="CAUSAL_LM" is correct because:
-    - Merlina always provides explicit target_modules, so PEFT won't
-      auto-detect the wrong layers based on task_type
-    - Most VLM LoRA fine-tuning targets the language model backbone
-    - Setting task_type=None can cause issues with some PEFT versions
-    """
-
-    def test_task_type_is_causal_lm_for_text_models(self):
-        """Text-only models should use task_type='CAUSAL_LM'."""
-        # Verify the hardcoded value in training_runner
+    def test_task_type_read_from_config(self):
+        """training_runner should read lora_task_type from config."""
         import src.training_runner as tr
         import inspect
         source = inspect.getsource(tr.run_training_sync)
-        assert 'task_type="CAUSAL_LM"' in source
+        assert 'lora_task_type' in source
 
-    def test_task_type_not_conditional_on_vlm(self):
-        """task_type should not be conditionally set based on is_vlm."""
+    def test_task_type_default_is_causal_lm(self):
+        """Default lora_task_type should be CAUSAL_LM via getattr fallback."""
         import src.training_runner as tr
         import inspect
         source = inspect.getsource(tr.run_training_sync)
-        # Should not have a variable task_type based on is_vlm
-        assert 'lora_task_type' not in source
+        assert "'CAUSAL_LM'" in source

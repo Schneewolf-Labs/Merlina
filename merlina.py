@@ -259,6 +259,10 @@ class TrainingConfig(BaseModel):
         default=[],
         description="Modules to fully fine-tune (e.g., embed_tokens, lm_head). Not LoRA-adapted, but saved with adapter."
     )
+    lora_task_type: str = Field(
+        "CAUSAL_LM",
+        description="PEFT task type for LoRA: 'CAUSAL_LM' (text generation, default), 'SEQ_2_SEQ_LM' (encoder-decoder), or 'FEATURE_EXTRACTION' (embeddings only)"
+    )
 
     # Training hyperparameters
     learning_rate: float = Field(5e-6, ge=1e-8, le=1e-3)
