@@ -236,6 +236,7 @@ class MerlinaApp {
 
             // GPU
             gpu_ids: this.gpuManager.getSelectedGPUs(),
+            multi_gpu_strategy: document.getElementById('multi-gpu-strategy')?.value || 'auto',
 
             // Options
             use_4bit: document.getElementById('use-4bit')?.checked ?? true,

@@ -120,6 +120,19 @@
                         </select>
                         <small style="color: #888; font-size: 0.85em;">Hold Ctrl/Cmd to select multiple GPUs. Leave empty for auto-selection.</small>
                     </div>
+
+                    <div class="form-group" style="margin-top: 15px;">
+                        <label>Multi-GPU Strategy</label>
+                        <select id="multi-gpu-strategy" class="magic-select">
+                            <option value="auto">Auto (DDP when multiple GPUs selected)</option>
+                            <option value="ddp">DDP (Distributed Data Parallel)</option>
+                            <option value="single">Single Process (Model Parallelism)</option>
+                        </select>
+                        <small style="color: #888; font-size: 0.85em;">
+                            <strong>DDP:</strong> Each GPU processes different data batches in parallel &mdash; faster training, halves step count.
+                            <strong>Single:</strong> Spreads model layers across GPUs &mdash; for models too large for one GPU.
+                        </small>
+                    </div>
                 </div>
             </section>
 

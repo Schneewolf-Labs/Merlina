@@ -12,6 +12,13 @@ This module provides the core training functionality for Merlina, including:
 
 import os
 import gc
+import sys
+import json
+import time
+import shutil
+import signal
+import tempfile
+import subprocess
 import torch
 import wandb
 import logging
@@ -483,6 +490,318 @@ def _cleanup_training_resources(model: Optional[Any], trainer: Optional[Any]) ->
 
     except Exception as cleanup_error:
         logger.debug(f"Error during cleanup (non-fatal): {cleanup_error}")
+
+
+def _get_distributed_gpu_count(config: Any) -> int:
+    """
+    Determine how many GPUs should participate in distributed training.
+
+    Returns the count based on explicit gpu_ids or CUDA device count.
+    Returns 0 if CUDA is not available.
+    """
+    if not torch.cuda.is_available():
+        return 0
+    if config.gpu_ids is not None:
+        return len(config.gpu_ids)
+    return torch.cuda.device_count()
+
+
+def _serialize_uploaded_datasets(uploaded_datasets: dict, tmp_dir: str) -> Optional[str]:
+    """
+    Save in-memory uploaded datasets to a temp directory so the subprocess can access them.
+
+    Returns the directory path, or None if there are no uploaded datasets.
+    """
+    if not uploaded_datasets:
+        return None
+
+    ds_dir = os.path.join(tmp_dir, "uploaded_datasets")
+    os.makedirs(ds_dir, exist_ok=True)
+
+    meta = {}
+    for dataset_id, entry in uploaded_datasets.items():
+        filename = entry.get("filename", f"{dataset_id}.json")
+        file_path = os.path.join(ds_dir, filename)
+        content = entry.get("content", b"")
+        if isinstance(content, bytes):
+            with open(file_path, "wb") as f:
+                f.write(content)
+        else:
+            with open(file_path, "w") as f:
+                f.write(str(content))
+        meta[dataset_id] = {"filename": filename}
+
+    with open(os.path.join(ds_dir, "meta.json"), "w") as f:
+        json.dump(meta, f)
+
+    return ds_dir
+
+
+def _monitor_distributed_progress(
+    proc: subprocess.Popen,
+    progress_file: str,
+    job_id: str,
+    job_manager: JobManager,
+    event_loop: Optional[asyncio.AbstractEventLoop] = None,
+) -> None:
+    """
+    Monitor a distributed training subprocess by tailing its progress file.
+
+    Forwards updates to the WebSocket manager and job manager.
+    Blocks until the subprocess exits.
+    """
+    last_pos = 0
+
+    while proc.poll() is None:
+        # Check for stop requests and forward to subprocess
+        job = job_manager.get_job(job_id)
+        if job and job.stop_requested:
+            logger.info(f"Forwarding stop request to distributed subprocess for job {job_id}")
+            try:
+                # Send SIGTERM to the entire process group
+                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+            except (ProcessLookupError, OSError):
+                pass
+
+        # Read new progress lines
+        try:
+            if os.path.exists(progress_file):
+                with open(progress_file, "r") as f:
+                    f.seek(last_pos)
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            record = json.loads(line)
+                            _handle_progress_record(record, job_id, job_manager, event_loop)
+                        except json.JSONDecodeError:
+                            pass
+                    last_pos = f.tell()
+        except Exception as e:
+            logger.debug(f"Error reading progress file: {e}")
+
+        time.sleep(1.0)
+
+    # Process exited — read remaining lines
+    try:
+        if os.path.exists(progress_file):
+            with open(progress_file, "r") as f:
+                f.seek(last_pos)
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                        _handle_progress_record(record, job_id, job_manager, event_loop)
+                    except json.JSONDecodeError:
+                        pass
+    except Exception:
+        pass
+
+    # Check exit code
+    if proc.returncode != 0:
+        # Check if the job was already marked as failed/completed by the worker
+        job = job_manager.get_job(job_id)
+        if job and job.status not in ("completed", "stopped", "failed", "uploading"):
+            error_msg = f"Distributed training subprocess exited with code {proc.returncode}"
+            logger.error(error_msg)
+            job_manager.update_job(job_id, status="failed", error=error_msg)
+            send_websocket_update(
+                websocket_manager.send_error(job_id=job_id, error=error_msg),
+                event_loop,
+            )
+
+
+def _handle_progress_record(
+    record: dict,
+    job_id: str,
+    job_manager: JobManager,
+    event_loop: Optional[asyncio.AbstractEventLoop],
+) -> None:
+    """Handle a single progress record from the distributed worker."""
+    rec_type = record.get("type", "")
+
+    if rec_type == "metrics":
+        update_data = {}
+        if "loss" in record:
+            update_data["loss"] = record["loss"]
+        if "learning_rate" in record:
+            update_data["learning_rate"] = record["learning_rate"]
+        if "current_step" in record:
+            update_data["current_step"] = record["current_step"]
+        if "total_steps" in record:
+            update_data["total_steps"] = record["total_steps"]
+        if "progress" in record:
+            update_data["progress"] = record["progress"]
+
+        # Send WebSocket update
+        send_websocket_update(
+            websocket_manager.send_status_update(
+                job_id=job_id,
+                status="training",
+                progress=record.get("progress", 0.5),
+                current_step=record.get("current_step"),
+                total_steps=record.get("total_steps"),
+                loss=record.get("loss"),
+                learning_rate=record.get("learning_rate"),
+                gpu_memory=record.get("gpu_memory"),
+            ),
+            event_loop,
+        )
+
+    elif rec_type == "eval":
+        if "eval_loss" in record:
+            send_websocket_update(
+                websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="training",
+                    eval_loss=record["eval_loss"],
+                ),
+                event_loop,
+            )
+
+    elif rec_type == "completed":
+        output_dir = record.get("output_dir", "")
+        send_websocket_update(
+            websocket_manager.send_completion(job_id=job_id, output_dir=output_dir),
+            event_loop,
+        )
+
+    elif rec_type == "error":
+        send_websocket_update(
+            websocket_manager.send_error(job_id=job_id, error=record.get("error", "Unknown error")),
+            event_loop,
+        )
+
+    elif rec_type == "status":
+        send_websocket_update(
+            websocket_manager.send_status_update(
+                job_id=job_id,
+                status=record.get("status", "training"),
+                message=record.get("message"),
+            ),
+            event_loop,
+        )
+
+
+def run_training_distributed(
+    job_id: str,
+    config: Any,
+    job_manager: JobManager,
+    uploaded_datasets: dict,
+    event_loop: Optional[asyncio.AbstractEventLoop] = None,
+) -> None:
+    """
+    Launch training as a subprocess via ``accelerate launch`` for multi-GPU DDP.
+
+    This is the multi-GPU alternative to ``run_training_sync``.  It serialises
+    the training configuration and uploaded datasets to temporary files, spawns
+    ``accelerate launch --multi_gpu --num_processes N src/train_worker.py``,
+    and monitors a JSONL progress file to relay updates back to the WebSocket
+    and job manager.
+
+    Args:
+        job_id: Unique job identifier.
+        config: Training configuration (Pydantic model).
+        job_manager: JobManager for persistence.
+        uploaded_datasets: In-memory uploaded dataset dict.
+        event_loop: Event loop for WebSocket updates.
+    """
+    num_gpus = _get_distributed_gpu_count(config)
+    logger.info(f"Launching distributed training for job {job_id} with {num_gpus} GPUs")
+
+    tmp_dir = tempfile.mkdtemp(prefix=f"merlina_{job_id}_")
+    config_path = os.path.join(tmp_dir, "config.json")
+    progress_file = os.path.join(tmp_dir, "progress.jsonl")
+
+    try:
+        job_manager.update_job(job_id, status="initializing", progress=0.0)
+        send_websocket_update(
+            websocket_manager.send_status_update(job_id=job_id, status="initializing", progress=0.0),
+            event_loop,
+        )
+
+        # Serialize config
+        with open(config_path, "w") as f:
+            json.dump(config.model_dump(), f)
+
+        # Serialize uploaded datasets to disk
+        ds_dir = _serialize_uploaded_datasets(uploaded_datasets, tmp_dir)
+
+        # Create empty progress file
+        open(progress_file, "w").close()
+
+        # Determine mixed precision for accelerate flag
+        if torch.cuda.is_available() and torch.cuda.get_device_capability()[0] >= 8:
+            accel_mp = "bf16"
+        else:
+            accel_mp = "fp16"
+
+        # Build accelerate launch command
+        worker_script = os.path.join(os.path.dirname(__file__), "train_worker.py")
+        db_path = str(job_manager.db_path)
+
+        cmd = [
+            sys.executable, "-m", "accelerate.commands.launch",
+            "--num_processes", str(num_gpus),
+            "--mixed_precision", accel_mp,
+            "--multi_gpu",
+            worker_script,
+            "--config-path", config_path,
+            "--job-id", job_id,
+            "--progress-file", progress_file,
+            "--db-path", db_path,
+        ]
+        if ds_dir:
+            cmd.extend(["--uploaded-datasets-dir", ds_dir])
+
+        # Set up environment
+        env = os.environ.copy()
+        if config.gpu_ids is not None:
+            env["CUDA_VISIBLE_DEVICES"] = ",".join(str(g) for g in config.gpu_ids)
+
+        logger.info(f"Launching: {' '.join(cmd)}")
+
+        # Start subprocess in its own process group for clean signal handling
+        proc = subprocess.Popen(
+            cmd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+        # Start a thread to log subprocess stdout
+        def _log_stdout():
+            for raw_line in proc.stdout:
+                line = raw_line.decode("utf-8", errors="replace").rstrip()
+                if line:
+                    logger.info(f"[worker] {line}")
+
+        log_thread = threading.Thread(target=_log_stdout, daemon=True)
+        log_thread.start()
+
+        # Monitor progress until subprocess exits
+        _monitor_distributed_progress(proc, progress_file, job_id, job_manager, event_loop)
+
+        log_thread.join(timeout=5)
+
+    except Exception as e:
+        logger.error(f"Distributed training failed for job {job_id}: {e}", exc_info=True)
+        job_manager.update_job(job_id, status="failed", error=str(e))
+        send_websocket_update(
+            websocket_manager.send_error(job_id=job_id, error=str(e)),
+            event_loop,
+        )
+
+    finally:
+        # Clean up temp files
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
 
 
 async def run_training_async(
