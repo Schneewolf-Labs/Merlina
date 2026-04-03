@@ -679,10 +679,7 @@ def run_training_sync(
         # Setup LoRA (only if enabled)
         peft_config = None
         if config.use_lora:
-            # VLMs loaded with AutoModelForVision2Seq / AutoModelForImageTextToText
-            # are not CAUSAL_LM — using the wrong task_type can cause PEFT to
-            # misidentify target modules or fail during adapter save/load.
-            lora_task_type = "CAUSAL_LM" if not is_vlm else None
+            lora_task_type = getattr(config, 'lora_task_type', 'CAUSAL_LM')
             peft_config = LoraConfig(
                 r=config.lora_r,
                 lora_alpha=config.lora_alpha,

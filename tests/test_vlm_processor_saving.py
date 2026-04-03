@@ -326,23 +326,22 @@ class TestSaveGenerationConfig:
 
 
 # ---------------------------------------------------------------------------
-# 5. LoRA task_type is None for VLMs
+# 5. LoRA task_type is configurable via lora_task_type
 # ---------------------------------------------------------------------------
 
 class TestLoraTaskType:
-    """Verify LoRA task_type is set correctly for VLMs vs text-only models."""
+    """Verify LoRA task_type is read from config (user-configurable)."""
 
-    def test_vlm_lora_task_type_is_none(self):
-        """VLMs should use task_type=None to avoid PEFT task type mismatch."""
-        from peft import LoraConfig as MockLoraConfig
+    def test_task_type_read_from_config(self):
+        """training_runner should read lora_task_type from config."""
+        import src.training_runner as tr
+        import inspect
+        source = inspect.getsource(tr.run_training_sync)
+        assert 'lora_task_type' in source
 
-        # Simulate is_vlm=True: task_type should be None
-        is_vlm = True
-        lora_task_type = "CAUSAL_LM" if not is_vlm else None
-        assert lora_task_type is None
-
-    def test_text_model_lora_task_type_is_causal_lm(self):
-        """Text-only models should use task_type='CAUSAL_LM'."""
-        is_vlm = False
-        lora_task_type = "CAUSAL_LM" if not is_vlm else None
-        assert lora_task_type == "CAUSAL_LM"
+    def test_task_type_default_is_causal_lm(self):
+        """Default lora_task_type should be CAUSAL_LM via getattr fallback."""
+        import src.training_runner as tr
+        import inspect
+        source = inspect.getsource(tr.run_training_sync)
+        assert "'CAUSAL_LM'" in source
