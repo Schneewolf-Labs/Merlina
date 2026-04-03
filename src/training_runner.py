@@ -23,6 +23,7 @@ from typing import Optional, Dict, Any, Callable
 from transformers import (
     AutoConfig,
     AutoModelForCausalLM,
+    AutoProcessor,
     AutoTokenizer,
     BitsAndBytesConfig,
 )
@@ -110,6 +111,25 @@ def _get_auto_model_class(model_name: str, model_type: str = "auto"):
     else:
         logger.info("Model type: Causal LM — using AutoModelForCausalLM")
         return AutoModelForCausalLM, False
+
+
+def _save_processor(base_model: str, output_dir: str) -> bool:
+    """Save the processor (image processor, etc.) from the base model to the output directory.
+
+    For VLMs, the processor includes preprocessor_config.json and other files
+    needed by AutoProcessor (e.g., image_processor, chat_template_processor).
+    Without these files, users cannot load the model with AutoProcessor.from_pretrained().
+
+    Returns True if a processor was saved, False otherwise.
+    """
+    try:
+        processor = AutoProcessor.from_pretrained(base_model, trust_remote_code=True)
+        processor.save_pretrained(output_dir)
+        logger.info(f"✅ Processor saved to {output_dir}")
+        return True
+    except Exception as e:
+        logger.debug(f"No processor to save for {base_model}: {e}")
+        return False
 
 
 def _run_background_upload(
@@ -204,6 +224,19 @@ def _run_background_upload(
                     private=config.hf_hub_private
                 )
                 logger.info(f"✅ Tokenizer uploaded successfully!")
+
+                # Upload processor for VLMs (image processor, preprocessor_config, etc.)
+                try:
+                    processor = AutoProcessor.from_pretrained(final_output_dir, trust_remote_code=True)
+                    processor.push_to_hub(
+                        config.output_name,
+                        token=config.hf_token,
+                        private=config.hf_hub_private
+                    )
+                    logger.info(f"✅ Processor uploaded successfully!")
+                except Exception:
+                    # Not a VLM or no processor to upload - this is fine
+                    pass
 
                 # Clean up
                 del model_merged, base_model_reload
@@ -949,6 +982,11 @@ def run_training_sync(
 
         final_output_dir = f"./models/{config.output_name}"
         trainer.save_model(final_output_dir)
+
+        # For VLMs, save the processor (image processor, preprocessor_config.json, etc.)
+        # from the base model so the output directory has everything needed for inference.
+        if is_vlm:
+            _save_processor(config.base_model, final_output_dir)
 
         # Capture step info before cleanup
         final_step = trainer.global_step
