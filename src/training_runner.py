@@ -679,16 +679,18 @@ def run_training_sync(
         # Setup LoRA (only if enabled)
         peft_config = None
         if config.use_lora:
-            # VLMs loaded with AutoModelForVision2Seq / AutoModelForImageTextToText
-            # are not CAUSAL_LM — using the wrong task_type can cause PEFT to
-            # misidentify target modules or fail during adapter save/load.
-            lora_task_type = "CAUSAL_LM" if not is_vlm else None
+            # task_type="CAUSAL_LM" is kept even for VLMs because:
+            # 1. Merlina always provides explicit target_modules, so PEFT
+            #    won't auto-detect the wrong layers based on task_type
+            # 2. Most VLM LoRA fine-tuning targets the language model backbone
+            #    (q_proj, v_proj, etc.), not the vision encoder
+            # 3. Setting task_type=None can cause issues with some PEFT versions
             peft_config = LoraConfig(
                 r=config.lora_r,
                 lora_alpha=config.lora_alpha,
                 lora_dropout=config.lora_dropout,
                 bias="none",
-                task_type=lora_task_type,
+                task_type="CAUSAL_LM",
                 target_modules=config.target_modules,
                 modules_to_save=config.modules_to_save if config.modules_to_save else None
             )

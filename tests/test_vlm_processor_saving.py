@@ -326,23 +326,31 @@ class TestSaveGenerationConfig:
 
 
 # ---------------------------------------------------------------------------
-# 5. LoRA task_type is None for VLMs
+# 5. LoRA task_type is CAUSAL_LM for both VLMs and text models
 # ---------------------------------------------------------------------------
 
 class TestLoraTaskType:
-    """Verify LoRA task_type is set correctly for VLMs vs text-only models."""
+    """Verify LoRA task_type stays CAUSAL_LM for all models.
 
-    def test_vlm_lora_task_type_is_none(self):
-        """VLMs should use task_type=None to avoid PEFT task type mismatch."""
-        from peft import LoraConfig as MockLoraConfig
+    Even for VLMs, task_type="CAUSAL_LM" is correct because:
+    - Merlina always provides explicit target_modules, so PEFT won't
+      auto-detect the wrong layers based on task_type
+    - Most VLM LoRA fine-tuning targets the language model backbone
+    - Setting task_type=None can cause issues with some PEFT versions
+    """
 
-        # Simulate is_vlm=True: task_type should be None
-        is_vlm = True
-        lora_task_type = "CAUSAL_LM" if not is_vlm else None
-        assert lora_task_type is None
-
-    def test_text_model_lora_task_type_is_causal_lm(self):
+    def test_task_type_is_causal_lm_for_text_models(self):
         """Text-only models should use task_type='CAUSAL_LM'."""
-        is_vlm = False
-        lora_task_type = "CAUSAL_LM" if not is_vlm else None
-        assert lora_task_type == "CAUSAL_LM"
+        # Verify the hardcoded value in training_runner
+        import src.training_runner as tr
+        import inspect
+        source = inspect.getsource(tr.run_training_sync)
+        assert 'task_type="CAUSAL_LM"' in source
+
+    def test_task_type_not_conditional_on_vlm(self):
+        """task_type should not be conditionally set based on is_vlm."""
+        import src.training_runner as tr
+        import inspect
+        source = inspect.getsource(tr.run_training_sync)
+        # Should not have a variable task_type based on is_vlm
+        assert 'lora_task_type' not in source
