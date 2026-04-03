@@ -23,6 +23,7 @@ from typing import Optional, Dict, Any, Callable
 from transformers import (
     AutoConfig,
     AutoModelForCausalLM,
+    AutoProcessor,
     AutoTokenizer,
     BitsAndBytesConfig,
 )
@@ -110,6 +111,45 @@ def _get_auto_model_class(model_name: str, model_type: str = "auto"):
     else:
         logger.info("Model type: Causal LM — using AutoModelForCausalLM")
         return AutoModelForCausalLM, False
+
+
+def _save_processor(base_model: str, output_dir: str) -> bool:
+    """Save the processor (image processor, etc.) from the base model to the output directory.
+
+    For VLMs, the processor includes preprocessor_config.json and other files
+    needed by AutoProcessor (e.g., image_processor, chat_template_processor).
+    Without these files, users cannot load the model with AutoProcessor.from_pretrained().
+
+    Returns True if a processor was saved, False otherwise.
+    """
+    try:
+        processor = AutoProcessor.from_pretrained(base_model, trust_remote_code=True)
+        processor.save_pretrained(output_dir)
+        logger.info(f"✅ Processor saved to {output_dir}")
+        return True
+    except Exception as e:
+        logger.debug(f"No processor to save for {base_model}: {e}")
+        return False
+
+
+def _save_generation_config(base_model: str, output_dir: str) -> bool:
+    """Copy generation_config.json from the base model to the output directory.
+
+    For LoRA training, GrimoireTrainer only saves the adapter weights and tokenizer.
+    The generation_config.json (which controls sampling defaults, eos_token_id, etc.)
+    is not included. Without it, the merged model may use incorrect generation defaults.
+
+    Returns True if generation config was saved, False otherwise.
+    """
+    try:
+        from transformers import GenerationConfig
+        gen_config = GenerationConfig.from_pretrained(base_model, trust_remote_code=True)
+        gen_config.save_pretrained(output_dir)
+        logger.info(f"✅ Generation config saved to {output_dir}")
+        return True
+    except Exception as e:
+        logger.debug(f"No generation config to save for {base_model}: {e}")
+        return False
 
 
 def _run_background_upload(
@@ -204,6 +244,19 @@ def _run_background_upload(
                     private=config.hf_hub_private
                 )
                 logger.info(f"✅ Tokenizer uploaded successfully!")
+
+                # Upload processor for VLMs (image processor, preprocessor_config, etc.)
+                try:
+                    processor = AutoProcessor.from_pretrained(final_output_dir, trust_remote_code=True)
+                    processor.push_to_hub(
+                        config.output_name,
+                        token=config.hf_token,
+                        private=config.hf_hub_private
+                    )
+                    logger.info(f"✅ Processor uploaded successfully!")
+                except Exception:
+                    # Not a VLM or no processor to upload - this is fine
+                    pass
 
                 # Clean up
                 del model_merged, base_model_reload
@@ -626,12 +679,16 @@ def run_training_sync(
         # Setup LoRA (only if enabled)
         peft_config = None
         if config.use_lora:
+            # VLMs loaded with AutoModelForVision2Seq / AutoModelForImageTextToText
+            # are not CAUSAL_LM — using the wrong task_type can cause PEFT to
+            # misidentify target modules or fail during adapter save/load.
+            lora_task_type = "CAUSAL_LM" if not is_vlm else None
             peft_config = LoraConfig(
                 r=config.lora_r,
                 lora_alpha=config.lora_alpha,
                 lora_dropout=config.lora_dropout,
                 bias="none",
-                task_type="CAUSAL_LM",
+                task_type=lora_task_type,
                 target_modules=config.target_modules,
                 modules_to_save=config.modules_to_save if config.modules_to_save else None
             )
@@ -949,6 +1006,13 @@ def run_training_sync(
 
         final_output_dir = f"./models/{config.output_name}"
         trainer.save_model(final_output_dir)
+
+        # For VLMs, save the processor (image processor, preprocessor_config.json, etc.)
+        # and generation config from the base model so the output directory has
+        # everything needed for inference.
+        if is_vlm:
+            _save_processor(config.base_model, final_output_dir)
+            _save_generation_config(config.base_model, final_output_dir)
 
         # Capture step info before cleanup
         final_step = trainer.global_step
