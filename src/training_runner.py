@@ -165,7 +165,8 @@ def _run_background_upload(
     training_mode: str,
     job_id: str,
     job_manager: JobManager,
-    event_loop=None
+    event_loop=None,
+    is_vlm: bool = False
 ) -> None:
     """
     Run HuggingFace Hub upload in a background thread.
@@ -183,6 +184,7 @@ def _run_background_upload(
         job_id: Job identifier
         job_manager: JobManager for status updates
         event_loop: Event loop for WebSocket updates
+        is_vlm: Whether the model is a vision-language model
     """
     try:
         logger.info(f"🚀 Starting background upload for job {job_id}")
@@ -253,17 +255,29 @@ def _run_background_upload(
                 logger.info(f"✅ Tokenizer uploaded successfully!")
 
                 # Upload processor for VLMs (image processor, preprocessor_config, etc.)
-                try:
-                    processor = AutoProcessor.from_pretrained(final_output_dir, trust_remote_code=True)
-                    processor.push_to_hub(
-                        config.output_name,
-                        token=config.hf_token,
-                        private=config.hf_hub_private
-                    )
-                    logger.info(f"✅ Processor uploaded successfully!")
-                except Exception:
-                    # Not a VLM or no processor to upload - this is fine
-                    pass
+                if is_vlm:
+                    try:
+                        # Try loading from final_output_dir first (where _save_processor saved it)
+                        processor = AutoProcessor.from_pretrained(final_output_dir, trust_remote_code=True)
+                        processor.push_to_hub(
+                            config.output_name,
+                            token=config.hf_token,
+                            private=config.hf_hub_private
+                        )
+                        logger.info(f"✅ Processor uploaded successfully!")
+                    except Exception as proc_err:
+                        logger.warning(f"⚠️ Could not upload processor from output dir: {proc_err}")
+                        # Fall back to loading processor from the base model directly
+                        try:
+                            processor = AutoProcessor.from_pretrained(config.base_model, trust_remote_code=True)
+                            processor.push_to_hub(
+                                config.output_name,
+                                token=config.hf_token,
+                                private=config.hf_hub_private
+                            )
+                            logger.info(f"✅ Processor uploaded from base model successfully!")
+                        except Exception as base_proc_err:
+                            logger.warning(f"⚠️ Could not upload processor from base model either: {base_proc_err}")
 
                 # Clean up
                 del model_merged, base_model_reload
@@ -314,7 +328,7 @@ def _run_background_upload(
         hub_url = f"https://huggingface.co/{config.output_name}"
         logger.info(f"🎉 Model published at: {hub_url}")
         logger.info("📝 Generating model card README...")
-        readme_content = generate_model_readme(config, training_mode)
+        readme_content = generate_model_readme(config, training_mode, is_vlm=is_vlm)
         upload_model_readme(config.output_name, readme_content, config.hf_token)
 
         # Update job status after successful upload
@@ -1363,7 +1377,7 @@ def run_training_sync(
                     logger.info("📤 Starting background upload thread...")
                     upload_thread = threading.Thread(
                         target=_run_background_upload,
-                        args=(config, final_output_dir, training_mode, job_id, job_manager, event_loop),
+                        args=(config, final_output_dir, training_mode, job_id, job_manager, event_loop, is_vlm),
                         name=f"UploadThread-{job_id}",
                         daemon=False  # Non-daemon to allow upload completion
                     )
