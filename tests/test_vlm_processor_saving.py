@@ -200,6 +200,7 @@ class TestUploadProcessorPush:
             job_id="test-job-1",
             job_manager=job_manager,
             event_loop=None,
+            is_vlm=True,
         )
 
         # Verify processor was pushed
