@@ -17,7 +17,7 @@ from src.utils import calculate_effective_batch_size
 logger = logging.getLogger(__name__)
 
 
-def generate_model_readme(config: Any, training_mode: str) -> str:
+def generate_model_readme(config: Any, training_mode: str, is_vlm: bool = False) -> str:
     """
     Generate a README.md for the HuggingFace model card.
 
@@ -27,6 +27,7 @@ def generate_model_readme(config: Any, training_mode: str) -> str:
     Args:
         config: Training configuration object
         training_mode: 'sft' or 'orpo'
+        is_vlm: Whether the model is a vision-language model
 
     Returns:
         README content as a string
@@ -45,11 +46,21 @@ def generate_model_readme(config: Any, training_mode: str) -> str:
         "library_name: transformers",
     ]
 
+    # Set pipeline_tag so HuggingFace correctly classifies the model
+    if is_vlm:
+        frontmatter_lines.append("pipeline_tag: image-text-to-text")
+    else:
+        frontmatter_lines.append("pipeline_tag: text-generation")
+
     # Add keyword tags for discoverability
     frontmatter_lines.append("tags:")
     frontmatter_lines.append("- merlina")
     frontmatter_lines.append("- grimoire")
-    frontmatter_lines.append("- text-generation")
+    if is_vlm:
+        frontmatter_lines.append("- image-text-to-text")
+        frontmatter_lines.append("- vision-language-model")
+    else:
+        frontmatter_lines.append("- text-generation")
     frontmatter_lines.append(f"- {training_mode.lower()}")  # sft or orpo
 
     # Add dataset info if using HuggingFace dataset
