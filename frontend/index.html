@@ -780,9 +780,10 @@
                                 <option value="adamw_hf">AdamW HuggingFace</option>
                                 <option value="adafactor">Adafactor (Memory Efficient Alternative)</option>
                                 <option value="sgd">SGD (Stochastic Gradient Descent)</option>
+                                <option value="muon">Muon (Momentum Orthogonalized by Newton-Schulz)</option>
                             </select>
                             <small style="color: #888; font-size: 0.85em;">
-                                Paged optimizers swap memory to CPU when GPU is full. 8-bit uses less memory but may be slightly less precise.
+                                Paged optimizers swap memory to CPU when GPU is full. 8-bit uses less memory but may be slightly less precise. Muon applies orthogonalized updates to weight matrices — great for LoRA.
                             </small>
                         </div>
 

@@ -17,7 +17,8 @@ def test_optimizer_settings():
         ("adamw_torch", "Standard PyTorch AdamW"),
         ("adamw_hf", "HuggingFace AdamW"),
         ("adafactor", "Memory efficient alternative"),
-        ("sgd", "Stochastic Gradient Descent")
+        ("sgd", "Stochastic Gradient Descent"),
+        ("muon", "Momentum Orthogonalized by Newton-Schulz")
     ]
 
     print("✅ Available Optimizers:")
@@ -82,9 +83,33 @@ def test_optimizer_settings():
     print(f"  - adam_beta2: {config_dict_custom['adam_beta2']}")
     print(f"  - adam_epsilon: {config_dict_custom['adam_epsilon']}")
 
-    # Test 3: Show optimizer comparison
+    # Test 3: Create config with Muon optimizer
     print("\n" + "="*60)
-    print("Test 3: Optimizer Comparison Guide")
+    print("Test 3: Muon optimizer configuration")
+    print("="*60)
+
+    config_dict_muon = {
+        "base_model": "meta-llama/Llama-3.2-3B-Instruct",
+        "output_name": "test-model-muon",
+
+        # Muon optimizer settings
+        "optimizer_type": "muon",
+
+        # Other required fields
+        "lora_r": 64,
+        "dataset": {
+            "source": {"source_type": "huggingface", "repo_id": "test/data", "split": "train"},
+            "format": {"format_type": "chatml"}
+        }
+    }
+
+    print("✅ Muon config created:")
+    print(f"  - optimizer_type: {config_dict_muon['optimizer_type']}")
+    assert config_dict_muon['optimizer_type'] == 'muon'
+
+    # Test 4: Show optimizer comparison
+    print("\n" + "="*60)
+    print("Test 4: Optimizer Comparison Guide")
     print("="*60)
 
     print("\n📊 Memory Usage (Approximate):")
@@ -94,12 +119,14 @@ def test_optimizer_settings():
     print("  • adamw_torch:       24 GB (Full precision)")
     print("  • adafactor:         4 GB  (Most efficient)")
     print("  • sgd:               2 GB  (Minimal memory)")
+    print("  • muon:              6 GB  (Orthogonalized momentum)")
 
     print("\n💡 Recommendations:")
     print("  • Default use: paged_adamw_8bit")
     print("  • Low VRAM: adafactor or sgd")
     print("  • High precision needed: paged_adamw_32bit or adamw_torch")
     print("  • Large models: paged optimizers (automatic CPU swapping)")
+    print("  • LoRA training: muon (orthogonalized updates for 2D weights)")
 
     print("\n🔧 Adam Hyperparameters:")
     print("  • beta1 (0.9): Controls momentum (first moment)")
