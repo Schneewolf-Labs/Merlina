@@ -11,6 +11,22 @@ import { ThemeManager } from './theme.js';
 import { InferenceManager } from './inference.js';
 
 /**
+ * Toggle visibility of optimizer-specific settings based on selected optimizer.
+ */
+function updateOptimizerSettingsVisibility() {
+    const optimizerType = document.getElementById('optimizer-type')?.value || '';
+    const adamSettings = document.getElementById('adam-settings');
+    const adafactorSettings = document.getElementById('adafactor-settings');
+    const isAdafactor = optimizerType === 'adafactor';
+
+    if (adamSettings) adamSettings.style.display = isAdafactor ? 'none' : '';
+    if (adafactorSettings) adafactorSettings.style.display = isAdafactor ? 'block' : 'none';
+}
+
+// Expose globally so config.js can call it when restoring saved configs
+window.updateOptimizerSettingsVisibility = updateOptimizerSettingsVisibility;
+
+/**
  * Main Application Class
  */
 class MerlinaApp {
@@ -230,6 +246,12 @@ class MerlinaApp {
             adam_beta1: parseFloat(document.getElementById('adam-beta1')?.value || 0.9),
             adam_beta2: parseFloat(document.getElementById('adam-beta2')?.value || 0.999),
             adam_epsilon: parseFloat(document.getElementById('adam-epsilon')?.value || 1e-8),
+            adafactor_relative_step: document.getElementById('adafactor-relative-step')?.checked ?? false,
+            adafactor_scale_parameter: document.getElementById('adafactor-scale-parameter')?.checked ?? false,
+            adafactor_warmup_init: document.getElementById('adafactor-warmup-init')?.checked ?? false,
+            adafactor_decay_rate: parseFloat(document.getElementById('adafactor-decay-rate')?.value || -0.8),
+            adafactor_beta1: document.getElementById('adafactor-beta1')?.value ? parseFloat(document.getElementById('adafactor-beta1').value) : null,
+            adafactor_clip_threshold: parseFloat(document.getElementById('adafactor-clip-threshold')?.value || 1.0),
 
             // Attention
             attn_implementation: document.getElementById('attn-implementation')?.value || 'auto',
@@ -814,6 +836,13 @@ class MerlinaApp {
             if (useWandb.checked) {
                 wandbConfig.style.display = 'block';
             }
+        }
+
+        // Optimizer-specific settings visibility
+        const optimizerType = document.getElementById('optimizer-type');
+        if (optimizerType) {
+            optimizerType.addEventListener('change', () => updateOptimizerSettingsVisibility());
+            updateOptimizerSettingsVisibility();
         }
 
         // HF Hub config
