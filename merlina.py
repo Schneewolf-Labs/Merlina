@@ -320,11 +320,12 @@ class TrainingConfig(BaseModel):
     # Optimizer settings
     optimizer_type: str = Field(
         "paged_adamw_8bit",
-        description="Optimizer type (paged_adamw_8bit, paged_adamw_32bit, adamw_8bit, adamw_torch, adamw_hf, adafactor, sgd)"
+        description="Optimizer type (paged_adamw_8bit, paged_adamw_32bit, adamw_8bit, adamw_torch, adamw_hf, adafactor, sgd, muon)"
     )
     adam_beta1: float = Field(0.9, ge=0.8, le=0.99, description="Adam beta1 parameter (first moment decay)")
     adam_beta2: float = Field(0.999, ge=0.9, le=0.9999, description="Adam beta2 parameter (second moment decay)")
     adam_epsilon: float = Field(1e-8, ge=1e-9, le=1e-6, description="Adam epsilon for numerical stability")
+    muon_momentum: float = Field(0.95, ge=0.5, le=0.99, description="Muon momentum parameter")
 
     # Attention settings
     attn_implementation: str = Field(

@@ -45,6 +45,7 @@ except ImportError:
 
 from peft import LoraConfig
 from grimoire import GrimoireTrainer, TrainingConfig as GrimoireTrainingConfig, TrainerCallback
+from src.muon_support import MuonGrimoireTrainer
 from grimoire.losses import SFTLoss, ORPOLoss, DPOLoss, SimPOLoss, CPOLoss, IPOLoss, KTOLoss
 from grimoire.data import tokenize_sft, tokenize_preference, tokenize_kto
 
@@ -626,7 +627,13 @@ def run_worker(args):
                 FileProgressCallback(args.job_id, args.progress_file, job_manager)
             )
 
-        trainer = GrimoireTrainer(
+        trainer_cls = GrimoireTrainer
+        trainer_kwargs = {}
+        if config.optimizer_type == "muon":
+            trainer_cls = MuonGrimoireTrainer
+            trainer_kwargs["muon_momentum"] = config.muon_momentum
+
+        trainer = trainer_cls(
             model=model,
             tokenizer=tokenizer,
             config=grimoire_config,
@@ -635,6 +642,7 @@ def run_worker(args):
             eval_dataset=eval_dataset,
             peft_config=peft_config,
             callbacks=callbacks,
+            **trainer_kwargs,
         )
 
         # Capture W&B URL

@@ -74,7 +74,7 @@ class TestTrainingConfigFieldNames:
             "seed", "max_grad_norm", "weight_decay",
             "lr_scheduler_type", "logging_steps", "shuffle_dataset",
             "gradient_checkpointing", "optimizer_type",
-            "adam_beta1", "adam_beta2", "adam_epsilon",
+            "adam_beta1", "adam_beta2", "adam_epsilon", "muon_momentum",
             "attn_implementation", "eval_steps", "dataset",
         }
 

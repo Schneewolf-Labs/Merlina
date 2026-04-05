@@ -45,6 +45,7 @@ except ImportError:
         AutoModelForVLM = None
 from peft import LoraConfig, PeftModel, AutoPeftModelForCausalLM
 from grimoire import GrimoireTrainer, TrainingConfig, TrainerCallback
+from src.muon_support import MuonGrimoireTrainer
 from grimoire.losses import SFTLoss, ORPOLoss, DPOLoss, SimPOLoss, CPOLoss, IPOLoss, KTOLoss
 from grimoire.data import tokenize_sft, tokenize_preference, tokenize_kto
 
@@ -1280,7 +1281,13 @@ def run_training_sync(
             wandb_notes=config.wandb_notes,
         )
 
-        trainer = GrimoireTrainer(
+        trainer_cls = GrimoireTrainer
+        trainer_kwargs = {}
+        if config.optimizer_type == "muon":
+            trainer_cls = MuonGrimoireTrainer
+            trainer_kwargs["muon_momentum"] = config.muon_momentum
+
+        trainer = trainer_cls(
             model=model,
             tokenizer=tokenizer,
             config=grimoire_config,
@@ -1289,6 +1296,7 @@ def run_training_sync(
             eval_dataset=eval_dataset,
             peft_config=peft_config,
             callbacks=[WebSocketCallback(job_id, job_manager, event_loop)],
+            **trainer_kwargs,
         )
 
         # Capture W&B run URL after trainer init (accelerator owns the wandb run)
