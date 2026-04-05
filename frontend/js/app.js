@@ -71,9 +71,6 @@ class MerlinaApp {
         // Setup name generator
         this.setupNameGenerator();
 
-        // Setup optimizer-specific settings
-        this.setupOptimizerToggle();
-
         // Setup advanced settings toggle
         this.setupAdvancedToggle();
 
@@ -233,7 +230,6 @@ class MerlinaApp {
             adam_beta1: parseFloat(document.getElementById('adam-beta1')?.value || 0.9),
             adam_beta2: parseFloat(document.getElementById('adam-beta2')?.value || 0.999),
             adam_epsilon: parseFloat(document.getElementById('adam-epsilon')?.value || 1e-8),
-            muon_momentum: parseFloat(document.getElementById('muon-momentum')?.value || 0.95),
 
             // Attention
             attn_implementation: document.getElementById('attn-implementation')?.value || 'auto',
@@ -640,22 +636,6 @@ class MerlinaApp {
 
         trainingMode.addEventListener('change', (e) => updateFields(e.target.value));
         updateFields(trainingMode.value);
-    }
-
-    /**
-     * Show/hide Muon-specific settings based on optimizer selection
-     */
-    setupOptimizerToggle() {
-        const optimizerType = document.getElementById('optimizer-type');
-        const muonSettings = document.getElementById('muon-settings');
-        if (!optimizerType || !muonSettings) return;
-
-        const toggle = (value) => {
-            muonSettings.style.display = value === 'muon' ? 'flex' : 'none';
-        };
-
-        optimizerType.addEventListener('change', (e) => toggle(e.target.value));
-        toggle(optimizerType.value);
     }
 
     /**

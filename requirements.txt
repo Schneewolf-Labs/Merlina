@@ -17,7 +17,6 @@ accelerate>=0.24.0
 grimoire-rl @ git+https://github.com/Schneewolf-Labs/grimoire.git
 peft>=0.6.0
 bitsandbytes>=0.41.0
-muon-optimizer>=0.1.0
 datasets>=2.14.0
 
 # Utilities

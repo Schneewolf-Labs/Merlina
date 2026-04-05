@@ -1292,7 +1292,6 @@ Complete training configuration schema.
   "adam_beta1": 0.9,
   "adam_beta2": 0.999,
   "adam_epsilon": 1e-8,
-  "muon_momentum": 0.95,
 
   "attn_implementation": "auto",
 

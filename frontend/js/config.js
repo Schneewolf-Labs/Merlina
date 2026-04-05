@@ -274,7 +274,6 @@ class ConfigManager {
             adam_beta1: parseFloat(document.getElementById('adam-beta1')?.value || 0.9),
             adam_beta2: parseFloat(document.getElementById('adam-beta2')?.value || 0.999),
             adam_epsilon: parseFloat(document.getElementById('adam-epsilon')?.value || 1e-8),
-            muon_momentum: parseFloat(document.getElementById('muon-momentum')?.value || 0.95),
             attn_implementation: document.getElementById('attn-implementation')?.value || 'auto',
             eval_steps: parseFloat(document.getElementById('eval-steps')?.value || 0.2),
             dataset: {
@@ -520,13 +519,6 @@ class ConfigManager {
         this.setInputValue('adam-beta1', config.adam_beta1 || 0.9);
         this.setInputValue('adam-beta2', config.adam_beta2 || 0.999);
         this.setInputValue('adam-epsilon', config.adam_epsilon || 1e-8);
-        this.setInputValue('muon-momentum', config.muon_momentum || 0.95);
-
-        // Toggle Muon settings visibility
-        const muonSettings = document.getElementById('muon-settings');
-        if (muonSettings) {
-            muonSettings.style.display = (config.optimizer_type === 'muon') ? 'flex' : 'none';
-        }
 
         // Attention settings
         this.setInputValue('attn-implementation', config.attn_implementation || 'auto');

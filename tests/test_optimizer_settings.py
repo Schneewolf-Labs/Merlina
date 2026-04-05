@@ -94,7 +94,6 @@ def test_optimizer_settings():
 
         # Muon optimizer settings
         "optimizer_type": "muon",
-        "muon_momentum": 0.95,
 
         # Other required fields
         "lora_r": 64,
@@ -106,9 +105,7 @@ def test_optimizer_settings():
 
     print("✅ Muon config created:")
     print(f"  - optimizer_type: {config_dict_muon['optimizer_type']}")
-    print(f"  - muon_momentum: {config_dict_muon['muon_momentum']}")
     assert config_dict_muon['optimizer_type'] == 'muon'
-    assert config_dict_muon['muon_momentum'] == 0.95
 
     # Test 4: Show optimizer comparison
     print("\n" + "="*60)
