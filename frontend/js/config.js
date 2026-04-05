@@ -274,6 +274,12 @@ class ConfigManager {
             adam_beta1: parseFloat(document.getElementById('adam-beta1')?.value || 0.9),
             adam_beta2: parseFloat(document.getElementById('adam-beta2')?.value || 0.999),
             adam_epsilon: parseFloat(document.getElementById('adam-epsilon')?.value || 1e-8),
+            adafactor_relative_step: document.getElementById('adafactor-relative-step')?.checked ?? false,
+            adafactor_scale_parameter: document.getElementById('adafactor-scale-parameter')?.checked ?? false,
+            adafactor_warmup_init: document.getElementById('adafactor-warmup-init')?.checked ?? false,
+            adafactor_decay_rate: parseFloat(document.getElementById('adafactor-decay-rate')?.value || -0.8),
+            adafactor_beta1: document.getElementById('adafactor-beta1')?.value ? parseFloat(document.getElementById('adafactor-beta1').value) : null,
+            adafactor_clip_threshold: parseFloat(document.getElementById('adafactor-clip-threshold')?.value || 1.0),
             attn_implementation: document.getElementById('attn-implementation')?.value || 'auto',
             eval_steps: parseFloat(document.getElementById('eval-steps')?.value || 0.2),
             dataset: {
@@ -519,6 +525,24 @@ class ConfigManager {
         this.setInputValue('adam-beta1', config.adam_beta1 || 0.9);
         this.setInputValue('adam-beta2', config.adam_beta2 || 0.999);
         this.setInputValue('adam-epsilon', config.adam_epsilon || 1e-8);
+
+        // Adafactor settings
+        this.setCheckboxValue('adafactor-relative-step', config.adafactor_relative_step);
+        this.setCheckboxValue('adafactor-scale-parameter', config.adafactor_scale_parameter);
+        this.setCheckboxValue('adafactor-warmup-init', config.adafactor_warmup_init);
+        this.setInputValue('adafactor-decay-rate', config.adafactor_decay_rate ?? -0.8);
+        if (config.adafactor_beta1 != null) {
+            this.setInputValue('adafactor-beta1', config.adafactor_beta1);
+        } else {
+            const beta1El = document.getElementById('adafactor-beta1');
+            if (beta1El) beta1El.value = '';
+        }
+        this.setInputValue('adafactor-clip-threshold', config.adafactor_clip_threshold ?? 1.0);
+
+        // Update optimizer settings visibility
+        if (typeof window.updateOptimizerSettingsVisibility === 'function') {
+            window.updateOptimizerSettingsVisibility();
+        }
 
         // Attention settings
         this.setInputValue('attn-implementation', config.attn_implementation || 'auto');

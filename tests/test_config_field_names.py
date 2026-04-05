@@ -75,6 +75,9 @@ class TestTrainingConfigFieldNames:
             "lr_scheduler_type", "logging_steps", "shuffle_dataset",
             "gradient_checkpointing", "optimizer_type",
             "adam_beta1", "adam_beta2", "adam_epsilon",
+            "adafactor_relative_step", "adafactor_scale_parameter",
+            "adafactor_warmup_init", "adafactor_decay_rate",
+            "adafactor_beta1", "adafactor_clip_threshold",
             "attn_implementation", "eval_steps", "dataset",
         }
 

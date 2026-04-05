@@ -326,6 +326,14 @@ class TrainingConfig(BaseModel):
     adam_beta2: float = Field(0.999, ge=0.9, le=0.9999, description="Adam beta2 parameter (second moment decay)")
     adam_epsilon: float = Field(1e-8, ge=1e-9, le=1e-6, description="Adam epsilon for numerical stability")
 
+    # Adafactor-specific settings
+    adafactor_relative_step: bool = Field(False, description="Use relative step size instead of explicit learning rate")
+    adafactor_scale_parameter: bool = Field(False, description="Scale parameter by RMS of parameter tensor")
+    adafactor_warmup_init: bool = Field(False, description="Time-dependent warmup initialization (requires relative_step=True)")
+    adafactor_decay_rate: float = Field(-0.8, ge=-1.0, le=0.0, description="Coefficient for computing running averages of squared gradient")
+    adafactor_beta1: Optional[float] = Field(None, ge=0.0, le=1.0, description="Momentum coefficient (None disables momentum)")
+    adafactor_clip_threshold: float = Field(1.0, ge=0.1, le=10.0, description="Threshold for root-mean-square gradient clipping")
+
     # Attention settings
     attn_implementation: str = Field(
         "auto",
