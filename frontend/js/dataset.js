@@ -198,6 +198,12 @@ class DatasetManager {
         } else if (sourceType === 'local_file') {
             document.getElementById('local-source-config').style.display = 'block';
         }
+
+        // Show/hide streaming option (only for HuggingFace sources)
+        const streamingGroup = document.getElementById('streaming-group');
+        if (streamingGroup) {
+            streamingGroup.style.display = sourceType === 'huggingface' ? '' : 'none';
+        }
     }
 
     /**
@@ -713,6 +719,12 @@ class DatasetManager {
         const maxSamples = document.getElementById('max-samples')?.value;
         if (maxSamples) {
             config.max_samples = parseInt(maxSamples);
+        }
+
+        // Streaming mode
+        const streamingCheckbox = document.getElementById('dataset-streaming');
+        if (streamingCheckbox?.checked && sourceType === 'huggingface') {
+            config.source.streaming = true;
         }
 
         // Deduplication

@@ -444,6 +444,13 @@
                         </div>
                     </div>
                     <div class="form-row" style="margin-top: 10px;">
+                        <div class="form-group" style="flex: 1;" id="streaming-group">
+                            <label style="display: flex; align-items: center; cursor: pointer; user-select: none;">
+                                <input type="checkbox" id="dataset-streaming" style="margin-right: 10px; width: 18px; height: 18px; cursor: pointer;">
+                                <span>Stream Large Dataset</span>
+                            </label>
+                            <small style="color: #888; font-size: 0.85em;">Streams rows in batches instead of loading all at once. Recommended for 100k+ row HuggingFace datasets.</small>
+                        </div>
                         <div class="form-group" style="flex: 1;">
                             <label style="display: flex; align-items: center; cursor: pointer; user-select: none;">
                                 <input type="checkbox" id="deduplicate" style="margin-right: 10px; width: 18px; height: 18px; cursor: pointer;">
