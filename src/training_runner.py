@@ -1278,13 +1278,18 @@ def run_training_sync(
             project_name=wandb_project,
             wandb_tags=config.wandb_tags or [],
             wandb_notes=config.wandb_notes,
-            # Adafactor settings
-            adafactor_relative_step=config.adafactor_relative_step,
-            adafactor_scale_parameter=config.adafactor_scale_parameter,
-            adafactor_warmup_init=config.adafactor_warmup_init,
-            adafactor_decay_rate=config.adafactor_decay_rate,
-            adafactor_beta1=config.adafactor_beta1,
-            adafactor_clip_threshold=config.adafactor_clip_threshold,
+            **(
+                {
+                    "adafactor_relative_step": config.adafactor_relative_step,
+                    "adafactor_scale_parameter": config.adafactor_scale_parameter,
+                    "adafactor_warmup_init": config.adafactor_warmup_init,
+                    "adafactor_decay_rate": config.adafactor_decay_rate,
+                    "adafactor_beta1": config.adafactor_beta1,
+                    "adafactor_clip_threshold": config.adafactor_clip_threshold,
+                }
+                if config.optimizer_type == "adafactor"
+                else {}
+            ),
         )
 
         trainer = GrimoireTrainer(
