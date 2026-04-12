@@ -63,7 +63,7 @@ from dataset_handlers import (
 from src.job_manager import JobManager
 from src.websocket_manager import websocket_manager
 from src.preflight_checks import is_local_model_path
-from src.utils import get_num_gpus, calculate_effective_batch_size, get_torch_dtype
+from src.utils import get_num_gpus, calculate_effective_batch_size, get_torch_dtype, fix_vlm_state_dict_on_disk
 
 logger = logging.getLogger(__name__)
 
@@ -235,51 +235,53 @@ def _run_background_upload(
                 )
                 model_merged = model_merged.merge_and_unload()
 
-                logger.info(f"📤 Pushing merged model to HuggingFace Hub as {repo_visibility} repository...")
-                logger.info(f"   Repository: {config.output_name}")
+                # Save merged model to a temp directory, fix VLM key issues,
+                # then upload the corrected files.
+                import tempfile
+                merge_dir = tempfile.mkdtemp(prefix="merlina_merge_")
+                logger.info(f"Saving merged model to {merge_dir}...")
+                model_merged.save_pretrained(merge_dir)
 
-                model_merged.push_to_hub(
-                    config.output_name,
+                # Save tokenizer into the same directory
+                tokenizer = AutoTokenizer.from_pretrained(final_output_dir)
+                tokenizer.save_pretrained(merge_dir)
+
+                # Copy processor files for VLMs
+                if is_vlm:
+                    try:
+                        processor = AutoProcessor.from_pretrained(final_output_dir, trust_remote_code=True)
+                        processor.save_pretrained(merge_dir)
+                    except Exception:
+                        try:
+                            processor = AutoProcessor.from_pretrained(config.base_model, trust_remote_code=True)
+                            processor.save_pretrained(merge_dir)
+                        except Exception as proc_err:
+                            logger.warning(f"Could not save processor: {proc_err}")
+
+                # Fix VLM state-dict key nesting and graft missing weights
+                if is_vlm:
+                    fixed = fix_vlm_state_dict_on_disk(
+                        merge_dir,
+                        base_model_name=config.base_model,
+                        is_vlm=True,
+                    )
+                    if fixed:
+                        logger.info("VLM state dict issues fixed before upload")
+
+                # Upload the corrected directory
+                logger.info(f"📤 Uploading merged model to HuggingFace Hub as {repo_visibility} repository...")
+                logger.info(f"   Repository: {config.output_name}")
+                api.upload_folder(
+                    folder_path=merge_dir,
+                    repo_id=config.output_name,
                     token=config.hf_token,
-                    private=config.hf_hub_private
+                    commit_message=f"Upload merged model trained with Merlina ({training_mode})",
                 )
                 logger.info(f"✅ Merged model uploaded successfully!")
 
-                # Upload tokenizer separately
-                tokenizer = AutoTokenizer.from_pretrained(final_output_dir)
-                tokenizer.push_to_hub(
-                    config.output_name,
-                    token=config.hf_token,
-                    private=config.hf_hub_private
-                )
-                logger.info(f"✅ Tokenizer uploaded successfully!")
-
-                # Upload processor for VLMs (image processor, preprocessor_config, etc.)
-                if is_vlm:
-                    try:
-                        # Try loading from final_output_dir first (where _save_processor saved it)
-                        processor = AutoProcessor.from_pretrained(final_output_dir, trust_remote_code=True)
-                        processor.push_to_hub(
-                            config.output_name,
-                            token=config.hf_token,
-                            private=config.hf_hub_private
-                        )
-                        logger.info(f"✅ Processor uploaded successfully!")
-                    except Exception as proc_err:
-                        logger.warning(f"⚠️ Could not upload processor from output dir: {proc_err}")
-                        # Fall back to loading processor from the base model directly
-                        try:
-                            processor = AutoProcessor.from_pretrained(config.base_model, trust_remote_code=True)
-                            processor.push_to_hub(
-                                config.output_name,
-                                token=config.hf_token,
-                                private=config.hf_hub_private
-                            )
-                            logger.info(f"✅ Processor uploaded from base model successfully!")
-                        except Exception as base_proc_err:
-                            logger.warning(f"⚠️ Could not upload processor from base model either: {base_proc_err}")
-
                 # Clean up
+                import shutil as _shutil
+                _shutil.rmtree(merge_dir, ignore_errors=True)
                 del model_merged, base_model_reload
                 gc.collect()
 
