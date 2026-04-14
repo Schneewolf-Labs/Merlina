@@ -34,6 +34,7 @@ class JobRecord:
     metrics: Optional[Dict[str, Any]] = None
     wandb_url: Optional[str] = None
     stop_requested: bool = False
+    upload_error: Optional[str] = None
 
 
 class JobManager:
@@ -110,6 +111,10 @@ class JobManager:
             if 'stop_requested' not in existing_columns:
                 cursor.execute("ALTER TABLE jobs ADD COLUMN stop_requested INTEGER DEFAULT 0")
                 logger.info("Added stop_requested column to jobs table")
+
+            if 'upload_error' not in existing_columns:
+                cursor.execute("ALTER TABLE jobs ADD COLUMN upload_error TEXT")
+                logger.info("Added upload_error column to jobs table")
 
             # Training metrics table (for time-series data)
             cursor.execute("""
@@ -211,7 +216,8 @@ class JobManager:
         output_dir: Optional[str] = None,
         metrics: Optional[Dict[str, Any]] = None,
         wandb_url: Optional[str] = None,
-        stop_requested: Optional[bool] = None
+        stop_requested: Optional[bool] = None,
+        upload_error: Optional[str] = None
     ) -> bool:
         """
         Update job fields.
@@ -273,6 +279,10 @@ class JobManager:
         if stop_requested is not None:
             updates.append("stop_requested = ?")
             params.append(int(stop_requested))
+
+        if upload_error is not None:
+            updates.append("upload_error = ?")
+            params.append(upload_error)
 
         if not updates:
             return False
@@ -523,5 +533,6 @@ class JobManager:
             output_dir=row["output_dir"],
             metrics=json.loads(row["metrics"]) if row["metrics"] else None,
             wandb_url=row["wandb_url"] if "wandb_url" in row.keys() else None,
-            stop_requested=bool(row["stop_requested"]) if "stop_requested" in row.keys() else False
+            stop_requested=bool(row["stop_requested"]) if "stop_requested" in row.keys() else False,
+            upload_error=row["upload_error"] if "upload_error" in row.keys() else None
         )

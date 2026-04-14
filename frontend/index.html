@@ -284,6 +284,28 @@
                             <small style="color: #888; font-size: 0.85em;">Optional: Reasoning/thinking process (for Qwen3)</small>
                         </div>
 
+                        <!-- System Prompt Override -->
+                        <div style="margin-top: 15px; padding: 15px; border: 1px solid var(--light-purple); border-radius: 10px; background: #faf8ff;">
+                            <label style="font-weight: bold; color: var(--primary-purple); display: block; margin-bottom: 8px;">System Prompt Override (Optional)</label>
+                            <textarea id="system-prompt-override" class="magic-input" rows="3" placeholder="Enter a system prompt to inject into dataset rows..." style="width: 100%; resize: vertical;"></textarea>
+                            <div style="margin-top: 8px;">
+                                <label style="font-size: 0.9em; color: #555;">Override Mode:</label>
+                                <div style="display: flex; gap: 20px; margin-top: 5px;">
+                                    <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.9em;">
+                                        <input type="radio" name="system-prompt-mode" value="fill_empty" checked style="cursor: pointer;">
+                                        <span>Fill empty only</span>
+                                    </label>
+                                    <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.9em;">
+                                        <input type="radio" name="system-prompt-mode" value="replace_all" style="cursor: pointer;">
+                                        <span>Replace all</span>
+                                    </label>
+                                </div>
+                            </div>
+                            <small style="color: #888; font-size: 0.85em; display: block; margin-top: 6px;">
+                                "Fill empty" sets the system prompt only for rows without one. "Replace all" overwrites every row's system prompt.
+                            </small>
+                        </div>
+
                         <!-- Sample Preview -->
                         <div id="column-sample-preview" style="margin-top: 15px; display: none;">
                             <div style="font-weight: bold; color: var(--primary-purple); margin-bottom: 10px;">
@@ -1193,6 +1215,7 @@
                             📤 Upload to Hub
                         </button>
                     </div>
+                    <div id="upload-error-message" style="display: none; margin-top: 10px; padding: 10px 14px; background: #fff3cd; color: #856404; border: 1px solid #ffc107; border-radius: 8px; font-size: 0.9em;"></div>
                 </div>
             </div>
         </div>

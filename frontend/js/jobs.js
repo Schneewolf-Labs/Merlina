@@ -371,6 +371,17 @@ class JobManager {
         if (uploadHubButton) {
             uploadHubButton.style.display = ['completed', 'stopped'].includes(status.status) ? '' : 'none';
         }
+
+        // Show upload error warning if present
+        const uploadErrorEl = document.getElementById('upload-error-message');
+        if (uploadErrorEl) {
+            if (status.upload_error && status.status === 'completed') {
+                uploadErrorEl.textContent = `Upload failed: ${status.upload_error}`;
+                uploadErrorEl.style.display = 'block';
+            } else {
+                uploadErrorEl.style.display = 'none';
+            }
+        }
     }
 
     /**
@@ -384,7 +395,11 @@ class JobManager {
      * Handle job completed event
      */
     handleJobCompleted(data) {
-        this.toast.success('Training completed successfully!');
+        if (data.upload_error) {
+            this.toast.warning(`Training completed, but upload failed: ${data.upload_error}`);
+        } else {
+            this.toast.success('Training completed successfully!');
+        }
         this.stopMonitoring();
         // Refresh job list once on completion to get final state
         this.loadJobs();
@@ -427,6 +442,10 @@ class JobManager {
         if (retryButton) {
             retryButton.style.display = 'none';
         }
+
+        // Hide upload error
+        const uploadErrorEl = document.getElementById('upload-error-message');
+        if (uploadErrorEl) uploadErrorEl.style.display = 'none';
 
         // Hide upload button
         const uploadHubButton = document.getElementById('upload-hub-button');

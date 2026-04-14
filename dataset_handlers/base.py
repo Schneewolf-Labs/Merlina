@@ -69,6 +69,8 @@ class DatasetPipeline:
         additional_loaders: Optional[list[tuple]] = None,
         deduplicate: bool = False,
         dedupe_strategy: DedupeStrategy = "prompt_chosen",
+        system_prompt: Optional[str] = None,
+        system_prompt_mode: str = "fill_empty",
     ):
         """
         Initialize dataset pipeline.
@@ -92,6 +94,10 @@ class DatasetPipeline:
                 - "chosen": Based on chosen field only
                 - "prompt_chosen": Based on combined prompt+chosen (default)
                 - "exact": Based on all fields
+            system_prompt: Optional system prompt to inject into dataset rows
+            system_prompt_mode: How to apply system_prompt:
+                - "fill_empty": Only fill rows where system is empty/missing
+                - "replace_all": Replace the system field in all rows
         """
         self.loader = loader
         self.formatter = formatter
@@ -105,6 +111,8 @@ class DatasetPipeline:
         self.additional_loaders = additional_loaders or []
         self.deduplicate = deduplicate
         self.dedupe_strategy = dedupe_strategy
+        self.system_prompt = system_prompt
+        self.system_prompt_mode = system_prompt_mode
 
     def _load_and_map_source(self, loader, column_mapping, convert_messages):
         """Load a single source and apply its column mapping + messages conversion."""
@@ -155,6 +163,9 @@ class DatasetPipeline:
         # Validate schema
         logger.info("Validating dataset schema...")
         self._validate_schema(dataset)
+
+        # Apply system prompt override
+        dataset = self._apply_system_prompt_override(dataset)
 
         # Deduplicate if enabled
         if self.deduplicate:
@@ -208,6 +219,9 @@ class DatasetPipeline:
         if self.column_mapping:
             dataset = self._apply_column_mapping(dataset)
 
+        # Apply system prompt override
+        dataset = self._apply_system_prompt_override(dataset)
+
         # Calculate valid range
         start_idx = min(offset, len(dataset))
         end_idx = min(start_idx + num_samples, len(dataset))
@@ -244,6 +258,9 @@ class DatasetPipeline:
         if self.column_mapping:
             dataset = self._apply_column_mapping(dataset)
 
+        # Apply system prompt override
+        dataset = self._apply_system_prompt_override(dataset)
+
         # Validate schema
         self._validate_schema(dataset)
 
@@ -279,6 +296,9 @@ class DatasetPipeline:
         # Apply column mapping if provided
         if self.column_mapping:
             dataset = self._apply_column_mapping(dataset)
+
+        # Apply system prompt override
+        dataset = self._apply_system_prompt_override(dataset)
 
         columns = set(dataset.column_names)
         stats = {
@@ -357,6 +377,31 @@ class DatasetPipeline:
         stats["est_total_tokens"] = round(total_est_tokens, 0)
 
         return stats
+
+    def _apply_system_prompt_override(self, dataset: Dataset) -> Dataset:
+        """Apply system prompt override to the dataset if configured."""
+        if not self.system_prompt:
+            return dataset
+
+        # Ensure the system column exists
+        if 'system' not in dataset.column_names:
+            dataset = dataset.add_column('system', [''] * len(dataset))
+
+        prompt_text = self.system_prompt
+        mode = self.system_prompt_mode
+
+        def override_system(row):
+            if mode == 'replace_all':
+                row['system'] = prompt_text
+            else:  # fill_empty
+                current = row.get('system')
+                if current is None or (isinstance(current, str) and current.strip() == ''):
+                    row['system'] = prompt_text
+            return row
+
+        logger.info(f"Applying system prompt override (mode={mode})")
+        dataset = dataset.map(override_system, desc="Applying system prompt override")
+        return dataset
 
     def _apply_column_mapping(self, dataset: Dataset) -> Dataset:
         """Apply column name mapping to dataset using self.column_mapping"""

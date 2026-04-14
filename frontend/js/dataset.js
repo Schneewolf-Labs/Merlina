@@ -739,6 +739,14 @@ class DatasetManager {
             config.convert_messages_format = true;  // Default to true
         }
 
+        // System prompt override
+        const systemPrompt = document.getElementById('system-prompt-override')?.value?.trim();
+        if (systemPrompt) {
+            config.system_prompt = systemPrompt;
+            const modeRadio = document.querySelector('input[name="system-prompt-mode"]:checked');
+            config.system_prompt_mode = modeRadio ? modeRadio.value : 'fill_empty';
+        }
+
         // Add additional dataset sources
         const additionalSources = this.getAdditionalSources();
         if (additionalSources.length > 0) {

@@ -114,6 +114,7 @@ class JobsProxy:
             "total_steps": job.total_steps,
             "loss": job.loss,
             "error": job.error,
+            "upload_error": job.upload_error,
             "wandb_url": job.wandb_url
         }
 
@@ -233,6 +234,13 @@ class DatasetConfig(BaseModel):
     # Additional options
     test_size: float = Field(0.01, ge=0.001, le=0.5, description="Fraction of data for evaluation")
     max_samples: Optional[int] = Field(None, description="Limit dataset size (for testing)")
+
+    # System prompt override
+    system_prompt: Optional[str] = Field(None, description="Override the system prompt for all dataset rows")
+    system_prompt_mode: str = Field(
+        "fill_empty",
+        description="How to apply system_prompt: 'fill_empty' (only rows with empty/missing system) or 'replace_all' (all rows)"
+    )
 
     # Training mode (affects schema validation)
     training_mode: str = Field("orpo", description="Training mode: 'sft', 'orpo', 'dpo', 'simpo', 'cpo', 'ipo', or 'kto'. For SFT/KTO, rejected column is optional.")
@@ -374,6 +382,7 @@ class JobStatus(BaseModel):
     total_steps: Optional[int] = None
     loss: Optional[float] = None
     error: Optional[str] = None
+    upload_error: Optional[str] = None
     wandb_url: Optional[str] = None
     queue_position: Optional[int] = None
     queue_state: Optional[str] = None
@@ -739,6 +748,7 @@ async def get_job_status(job_id: str):
         total_steps=job.get("total_steps"),
         loss=job.get("loss"),
         error=job.get("error"),
+        upload_error=job.get("upload_error"),
         wandb_url=job.get("wandb_url"),
         queue_position=queue_status.get("position"),
         queue_state=queue_status.get("state")
@@ -773,6 +783,7 @@ async def get_job_history(limit: int = 50, offset: int = 0, status: Optional[str
                 "updated_at": job.updated_at,
                 "output_dir": job.output_dir,
                 "error": job.error,
+                "upload_error": job.upload_error,
                 "config_summary": {
                     "base_model": job.config.get("base_model", ""),
                     "output_name": job.config.get("output_name", ""),
@@ -937,6 +948,9 @@ async def upload_job(job_id: str, request: UploadJobRequest):
         event_loop = asyncio.get_running_loop()
     except RuntimeError:
         event_loop = None
+
+    # Clear any previous upload error before retrying
+    job_manager.update_job(job_id, upload_error="")
 
     # Start upload in background thread
     from src.training_runner import _run_background_upload
@@ -1286,7 +1300,9 @@ async def preview_dataset(config: DatasetConfig, offset: int = 0, limit: int = 1
             test_size=config.test_size,
             max_samples=config.max_samples,
             training_mode=config.training_mode,
-            convert_messages_format=config.convert_messages_format
+            convert_messages_format=config.convert_messages_format,
+            system_prompt=config.system_prompt,
+            system_prompt_mode=config.system_prompt_mode,
         )
 
         # Preview raw data with offset and limit
@@ -1361,7 +1377,9 @@ async def preview_formatted_dataset(config: DatasetConfig, offset: int = 0, limi
             test_size=config.test_size,
             max_samples=config.max_samples,
             training_mode=config.training_mode,
-            convert_messages_format=config.convert_messages_format
+            convert_messages_format=config.convert_messages_format,
+            system_prompt=config.system_prompt,
+            system_prompt_mode=config.system_prompt_mode,
         )
 
         # Preview formatted data with offset and limit
@@ -1412,7 +1430,9 @@ async def get_dataset_stats(config: DatasetConfig):
             test_size=config.test_size,
             max_samples=config.max_samples,
             training_mode=config.training_mode,
-            convert_messages_format=config.convert_messages_format
+            convert_messages_format=config.convert_messages_format,
+            system_prompt=config.system_prompt,
+            system_prompt_mode=config.system_prompt_mode,
         )
 
         stats = pipeline.compute_stats()

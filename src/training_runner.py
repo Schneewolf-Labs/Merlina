@@ -226,7 +226,7 @@ def _run_background_upload(
                 base_model_reload = reload_cls.from_pretrained(
                     config.base_model,
                     low_cpu_mem_usage=True,
-                    torch_dtype=torch.bfloat16,
+                    dtype=torch.bfloat16,
                     device_map="cpu",  # Force CPU to avoid GPU conflicts
                     trust_remote_code=True,
                 )
@@ -336,9 +336,9 @@ def _run_background_upload(
         readme_content = generate_model_readme(config, training_mode, is_vlm=is_vlm)
         upload_model_readme(full_repo_id, readme_content, config.hf_token)
 
-        # Update job status after successful upload
+        # Update job status after successful upload (clear any prior upload_error)
         logger.info(f"✅ Background upload completed for job {job_id}")
-        job_manager.update_job(job_id, status="completed", progress=1.0, output_dir=final_output_dir)
+        job_manager.update_job(job_id, status="completed", progress=1.0, output_dir=final_output_dir, upload_error="")
 
         send_websocket_update(
             websocket_manager.send_completion(
@@ -349,16 +349,25 @@ def _run_background_upload(
         )
 
     except Exception as upload_error:
-        logger.error(f"❌ Background upload failed for job {job_id}: {str(upload_error)}", exc_info=True)
+        error_msg = str(upload_error)
+        logger.error(f"❌ Background upload failed for job {job_id}: {error_msg}", exc_info=True)
         logger.warning("⚠️ Training completed successfully, but upload failed")
         logger.info(f"💾 Model saved locally at: {final_output_dir}")
-        # Mark as completed anyway since training succeeded - upload is optional
-        job_manager.update_job(job_id, status="completed", progress=1.0, output_dir=final_output_dir)
+        # Mark as completed — training succeeded. Store the upload error separately
+        # so the user can see what went wrong and retry.
+        job_manager.update_job(
+            job_id,
+            status="completed",
+            progress=1.0,
+            output_dir=final_output_dir,
+            upload_error=error_msg
+        )
 
         send_websocket_update(
             websocket_manager.send_completion(
                 job_id=job_id,
-                output_dir=final_output_dir
+                output_dir=final_output_dir,
+                upload_error=error_msg
             ),
             event_loop
         )
@@ -1006,7 +1015,7 @@ def run_training_sync(
             config.base_model,
             quantization_config=bnb_config,
             attn_implementation=attn_implementation,
-            torch_dtype=torch_dtype if not bnb_config else None,
+            dtype=torch_dtype if not bnb_config else None,
             device_map="auto",
             trust_remote_code=True,
         )
@@ -1087,6 +1096,8 @@ def run_training_sync(
             additional_loaders=additional_loaders if additional_loaders else None,
             deduplicate=config.dataset.deduplicate,
             dedupe_strategy=config.dataset.dedupe_strategy,
+            system_prompt=config.dataset.system_prompt,
+            system_prompt_mode=config.dataset.system_prompt_mode,
         )
 
         train_dataset, eval_dataset = pipeline.prepare()
@@ -1369,40 +1380,51 @@ def run_training_sync(
         # This prevents OOM when loading the model again for merging
         logger.info("🧹 Cleaning up training resources to free VRAM...")
         del trainer, model
+        # Set to None so the finally block's _cleanup_training_resources
+        # doesn't hit NameError after del
+        model = None
+        trainer = None
         gc.collect()
         torch.cuda.empty_cache()
         logger.info("✅ VRAM freed successfully")
 
         # Optional: merge and upload (runs in background thread to not block queue)
+        # Wrapped in its own try/except so upload failures never mark the job as "failed"
+        # — training already succeeded at this point.
         upload_thread_started = False
-        if config.push_to_hub:
-            # Check if we should upload (main process in distributed, or always in single GPU)
-            is_distributed = torch.distributed.is_initialized()
-            should_upload = (not is_distributed) or (torch.distributed.get_rank() == 0)
+        try:
+            if config.push_to_hub:
+                # Check if we should upload (main process in distributed, or always in single GPU)
+                is_distributed = torch.distributed.is_initialized()
+                should_upload = (not is_distributed) or (torch.distributed.get_rank() == 0)
 
-            if should_upload:
-                # Validate HF token is provided
-                if not config.hf_token:
-                    logger.warning("⚠️ push_to_hub enabled but no HF token provided - skipping upload")
-                    logger.info("💡 Provide HF_TOKEN in .env or via hf_token parameter to enable uploads")
+                if should_upload:
+                    # Validate HF token is provided
+                    if not config.hf_token:
+                        logger.warning("⚠️ push_to_hub enabled but no HF token provided - skipping upload")
+                        logger.info("💡 Provide HF_TOKEN in .env or via hf_token parameter to enable uploads")
+                    else:
+                        # Start upload in a background thread
+                        # This allows the job queue worker to continue processing other jobs
+                        # while the upload (which can take a long time) runs in the background
+                        # Note: Using daemon=False so uploads can complete even during shutdown
+                        # The thread handles its own error cases gracefully
+                        logger.info("📤 Starting background upload thread...")
+                        upload_thread = threading.Thread(
+                            target=_run_background_upload,
+                            args=(config, final_output_dir, training_mode, job_id, job_manager, event_loop, is_vlm),
+                            name=f"UploadThread-{job_id}",
+                            daemon=False  # Non-daemon to allow upload completion
+                        )
+                        upload_thread.start()
+                        upload_thread_started = True
+                        logger.info(f"📤 Background upload thread started for job {job_id}")
                 else:
-                    # Start upload in a background thread
-                    # This allows the job queue worker to continue processing other jobs
-                    # while the upload (which can take a long time) runs in the background
-                    # Note: Using daemon=False so uploads can complete even during shutdown
-                    # The thread handles its own error cases gracefully
-                    logger.info("📤 Starting background upload thread...")
-                    upload_thread = threading.Thread(
-                        target=_run_background_upload,
-                        args=(config, final_output_dir, training_mode, job_id, job_manager, event_loop, is_vlm),
-                        name=f"UploadThread-{job_id}",
-                        daemon=False  # Non-daemon to allow upload completion
-                    )
-                    upload_thread.start()
-                    upload_thread_started = True
-                    logger.info(f"📤 Background upload thread started for job {job_id}")
-            else:
-                logger.info("⏭️ Skipping HuggingFace upload (not main process in distributed training)")
+                    logger.info("⏭️ Skipping HuggingFace upload (not main process in distributed training)")
+        except Exception as upload_setup_err:
+            logger.error(f"❌ Failed to start upload for job {job_id}: {upload_setup_err}", exc_info=True)
+            logger.warning("⚠️ Training completed successfully, but upload could not be started")
+            job_manager.update_job(job_id, upload_error=str(upload_setup_err))
 
         # Mark as completed or stopped (unless upload thread is running - it will handle final status)
         if upload_thread_started:

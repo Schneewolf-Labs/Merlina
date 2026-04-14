@@ -273,7 +273,8 @@ class WebSocketManager:
         self,
         job_id: str,
         output_dir: str,
-        final_metrics: Optional[Dict[str, Any]] = None
+        final_metrics: Optional[Dict[str, Any]] = None,
+        upload_error: Optional[str] = None
     ):
         """
         Send job completion notification.
@@ -282,6 +283,7 @@ class WebSocketManager:
             job_id: Job identifier
             output_dir: Path to saved model
             final_metrics: Final training metrics
+            upload_error: Upload error message if upload failed (training still succeeded)
         """
         message = {
             "type": "completed",
@@ -292,6 +294,9 @@ class WebSocketManager:
 
         if final_metrics:
             message["final_metrics"] = final_metrics
+
+        if upload_error:
+            message["upload_error"] = upload_error
 
         await self.broadcast_to_job(job_id, message)
 

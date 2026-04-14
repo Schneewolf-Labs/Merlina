@@ -285,7 +285,9 @@ class ConfigManager {
             dataset: {
                 source: datasetSource,
                 format: datasetFormat,
-                test_size: parseFloat(document.getElementById('test-size')?.value || 0.01)
+                test_size: parseFloat(document.getElementById('test-size')?.value || 0.01),
+                system_prompt: document.getElementById('system-prompt-override')?.value?.trim() || undefined,
+                system_prompt_mode: document.querySelector('input[name="system-prompt-mode"]:checked')?.value || 'fill_empty'
             }
         };
 
@@ -593,6 +595,15 @@ class ConfigManager {
 
             if (config.dataset.test_size) {
                 this.setInputValue('test-size', config.dataset.test_size);
+            }
+
+            // Restore system prompt override
+            if (config.dataset.system_prompt) {
+                this.setInputValue('system-prompt-override', config.dataset.system_prompt);
+            }
+            if (config.dataset.system_prompt_mode) {
+                const radio = document.querySelector(`input[name="system-prompt-mode"][value="${config.dataset.system_prompt_mode}"]`);
+                if (radio) radio.checked = true;
             }
 
             // Restore additional sources
