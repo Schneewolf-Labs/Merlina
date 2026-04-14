@@ -60,6 +60,7 @@ from dataset_handlers.factory import create_loader_from_config
 
 from src.job_manager import JobManager
 from src.model_card import generate_wandb_run_name
+from src.utils import fix_vlm_state_dict_on_disk
 
 logger = logging.getLogger(__name__)
 
@@ -146,10 +147,31 @@ def _do_hub_upload(config, final_output_dir: str, training_mode: str, job_id: st
             )
             merged = PeftModel.from_pretrained(base, final_output_dir, device_map="cpu")
             merged = merged.merge_and_unload()
-            merged.push_to_hub(config.output_name, token=config.hf_token, private=config.hf_hub_private)
 
+            # Save locally, fix VLM key issues, then upload
+            import tempfile, shutil as _shutil
+            _, is_vlm = _get_auto_model_class(config.base_model, getattr(config, "model_type", "auto"))
+            merge_dir = tempfile.mkdtemp(prefix="merlina_merge_")
+            merged.save_pretrained(merge_dir)
             tokenizer = AutoTokenizer.from_pretrained(final_output_dir)
-            tokenizer.push_to_hub(config.output_name, token=config.hf_token, private=config.hf_hub_private)
+            tokenizer.save_pretrained(merge_dir)
+
+            if is_vlm:
+                fixed = fix_vlm_state_dict_on_disk(
+                    merge_dir,
+                    base_model_name=config.base_model,
+                    is_vlm=True,
+                )
+                if fixed:
+                    logger.info("VLM state dict issues fixed before upload")
+
+            api.upload_folder(
+                folder_path=merge_dir,
+                repo_id=config.output_name,
+                token=config.hf_token,
+                commit_message=f"Upload merged model ({training_mode})",
+            )
+            _shutil.rmtree(merge_dir, ignore_errors=True)
             del merged, base
             gc.collect()
         except Exception as e:

@@ -157,16 +157,18 @@ class TestUploadProcessorPush:
         config.model_type = "vlm"
         return config
 
+    @patch("src.training_runner.fix_vlm_state_dict_on_disk")
     @patch("src.training_runner.upload_model_readme")
     @patch("src.training_runner.generate_model_readme")
     @patch("src.training_runner.websocket_manager")
     @patch("src.training_runner.HfApi")
     @patch("src.training_runner.PeftModel")
     @patch("src.training_runner._get_auto_model_class")
-    def test_merge_upload_pushes_processor(
-        self, mock_get_cls, mock_peft, mock_hfapi, mock_ws, mock_readme, mock_upload_readme
+    def test_merge_upload_saves_processor(
+        self, mock_get_cls, mock_peft, mock_hfapi, mock_ws, mock_readme, mock_upload_readme,
+        mock_fix_vlm
     ):
-        """During LoRA merge upload, processor should be pushed to HF Hub."""
+        """During LoRA merge upload, processor should be saved to merge dir."""
         config = self._make_config()
 
         # Setup model merge mocks
@@ -203,13 +205,12 @@ class TestUploadProcessorPush:
             is_vlm=True,
         )
 
-        # Verify processor was pushed
-        mock_proc.push_to_hub.assert_called_once_with(
-            "user/test-vlm-model",
-            token="hf_test_token",
-            private=False,
-        )
+        # Verify processor was saved to merge dir (not pushed individually)
+        mock_proc.save_pretrained.assert_called_once()
+        # Verify the whole directory was uploaded via upload_folder
+        mock_api.upload_folder.assert_called_once()
 
+    @patch("src.training_runner.fix_vlm_state_dict_on_disk")
     @patch("src.training_runner.upload_model_readme")
     @patch("src.training_runner.generate_model_readme")
     @patch("src.training_runner.websocket_manager")
@@ -217,9 +218,10 @@ class TestUploadProcessorPush:
     @patch("src.training_runner.PeftModel")
     @patch("src.training_runner._get_auto_model_class")
     def test_merge_upload_continues_if_no_processor(
-        self, mock_get_cls, mock_peft, mock_hfapi, mock_ws, mock_readme, mock_upload_readme
+        self, mock_get_cls, mock_peft, mock_hfapi, mock_ws, mock_readme, mock_upload_readme,
+        mock_fix_vlm
     ):
-        """Upload should succeed even if processor push fails (text-only model)."""
+        """Upload should succeed even if processor save fails (text-only model)."""
         config = self._make_config()
 
         mock_model_cls = MagicMock()
@@ -250,12 +252,6 @@ class TestUploadProcessorPush:
             event_loop=None,
         )
 
-        # Job should still be marked completed
-        completed_calls = [
-            c for c in job_manager.update_job.call_args_list
-            if c.kwargs.get('status') == 'completed' or
-            (len(c.args) > 1 and 'completed' in str(c))
-        ]
         # Verify upload didn't crash - job_manager should have been called
         assert job_manager.update_job.called
 
