@@ -90,9 +90,12 @@ class JobManager {
 
             if (Object.keys(jobs).length > 0) {
                 for (const [jobId, job] of Object.entries(jobs)) {
-                    // Update or create local tracking
+                    // Update or create local tracking, preserving name from API
                     if (!this.activeJobs[jobId]) {
-                        this.activeJobs[jobId] = { name: jobId };
+                        this.activeJobs[jobId] = { name: job.name || jobId };
+                    } else if (job.name && this.activeJobs[jobId].name === jobId) {
+                        // Update name if we only had the job_id as fallback
+                        this.activeJobs[jobId].name = job.name;
                     }
                     this.activeJobs[jobId].status = job.status;
                     this.activeJobs[jobId].progress = job.progress;

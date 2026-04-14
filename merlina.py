@@ -130,7 +130,8 @@ class JobsProxy:
         for job in jobs_list:
             yield job.job_id, {
                 "status": job.status,
-                "progress": job.progress
+                "progress": job.progress,
+                "name": job.config.get("output_name", job.job_id) if job.config else job.job_id
             }
 
 jobs = JobsProxy()
