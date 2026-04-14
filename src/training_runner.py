@@ -209,7 +209,10 @@ def _run_background_upload(
             private=config.hf_hub_private,
             exist_ok=True
         )
-        logger.info(f"📦 Repository ready: {repo_url}")
+        # Use the fully-qualified repo_id (with namespace) from create_repo
+        # config.output_name may lack the user/org prefix, causing 404s on upload
+        full_repo_id = repo_url.repo_id
+        logger.info(f"📦 Repository ready: {full_repo_id}")
 
         # Handle upload based on whether LoRA was used and merge preference
         if config.use_lora and config.merge_lora_before_upload:
@@ -270,10 +273,10 @@ def _run_background_upload(
 
                 # Upload the corrected directory
                 logger.info(f"📤 Uploading merged model to HuggingFace Hub as {repo_visibility} repository...")
-                logger.info(f"   Repository: {config.output_name}")
+                logger.info(f"   Repository: {full_repo_id}")
                 api.upload_folder(
                     folder_path=merge_dir,
-                    repo_id=config.output_name,
+                    repo_id=full_repo_id,
                     token=config.hf_token,
                     commit_message=f"Upload merged model trained with Merlina ({training_mode})",
                 )
@@ -293,7 +296,7 @@ def _run_background_upload(
                 # Upload the saved model directory directly (contains adapter files)
                 api.upload_folder(
                     folder_path=final_output_dir,
-                    repo_id=config.output_name,
+                    repo_id=full_repo_id,
                     token=config.hf_token,
                     commit_message=f"Upload LoRA adapter trained with Merlina ({training_mode})"
                 )
@@ -310,12 +313,12 @@ def _run_background_upload(
                 logger.info(f"📤 Uploading full model to HuggingFace Hub as {repo_visibility} repository...")
                 commit_msg = f"Upload model trained with Merlina ({training_mode})"
 
-            logger.info(f"   Repository: {config.output_name}")
+            logger.info(f"   Repository: {full_repo_id}")
 
             # Upload the entire model directory directly - no model loading needed!
             api.upload_folder(
                 folder_path=final_output_dir,
-                repo_id=config.output_name,
+                repo_id=full_repo_id,
                 token=config.hf_token,
                 commit_message=commit_msg
             )
@@ -327,11 +330,11 @@ def _run_background_upload(
                 logger.info(f"✅ Model uploaded successfully!")
 
         # Generate and upload README with model card
-        hub_url = f"https://huggingface.co/{config.output_name}"
+        hub_url = f"https://huggingface.co/{full_repo_id}"
         logger.info(f"🎉 Model published at: {hub_url}")
         logger.info("📝 Generating model card README...")
         readme_content = generate_model_readme(config, training_mode, is_vlm=is_vlm)
-        upload_model_readme(config.output_name, readme_content, config.hf_token)
+        upload_model_readme(full_repo_id, readme_content, config.hf_token)
 
         # Update job status after successful upload
         logger.info(f"✅ Background upload completed for job {job_id}")
