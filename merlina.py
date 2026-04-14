@@ -462,6 +462,10 @@ if FRONTEND_DIR.exists():
     @app.get("/merlina.png")
     async def serve_logo():
         return FileResponse(FRONTEND_DIR / "merlina.png", media_type="image/png")
+
+    @app.get("/favicon.ico")
+    async def serve_favicon():
+        return FileResponse(FRONTEND_DIR / "favicon.ico", media_type="image/x-icon")
 else:
     @app.get("/")
     async def root():
