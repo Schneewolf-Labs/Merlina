@@ -111,7 +111,45 @@ class MerlinaApp {
         // Load version information
         this.loadVersion();
 
+        // Load server-side secret availability to hint which tokens can be omitted
+        this.loadEnvSecretStatus();
+
         console.log('✨ Merlina initialized successfully!');
+    }
+
+    /**
+     * Fetch the server's .env secret status and update token inputs so
+     * users know which tokens are already configured and can be omitted.
+     */
+    async loadEnvSecretStatus() {
+        try {
+            const { MerlinaAPI } = await import('./api.js');
+            const status = await MerlinaAPI.getEnvSecrets();
+
+            const applyHint = (inputId, label) => {
+                const input = document.getElementById(inputId);
+                if (!input) return;
+                input.placeholder = `Using ${label} from server .env (leave blank) — or paste to override`;
+                input.removeAttribute('required');
+                const small = input.parentElement?.querySelector('small');
+                if (small) {
+                    small.innerHTML = `✓ ${label} is configured on the server via <code>.env</code>. ` +
+                                      `Leave this field blank to use it, or paste a token to override.`;
+                    small.style.color = '#2e7d32';
+                }
+            };
+
+            if (status?.hf_token) {
+                ['hf-token-preload', 'hf-token', 'inference-hf-token', 'upload-hf-token'].forEach(
+                    id => applyHint(id, 'HF_TOKEN')
+                );
+            }
+            if (status?.wandb_api_key) {
+                applyHint('wandb-key', 'WANDB_API_KEY');
+            }
+        } catch (error) {
+            console.warn('Failed to load env secret status:', error);
+        }
     }
 
     /**

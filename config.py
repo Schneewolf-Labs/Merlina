@@ -104,6 +104,50 @@ class Settings(BaseSettings):
                     logger.error(error)
 
 
+def resolve_hf_token(token: Optional[str]) -> Optional[str]:
+    """
+    Resolve the HuggingFace token to use.
+
+    Precedence:
+    1. Explicit token passed in (e.g., from HTTP request)
+    2. HF_TOKEN from settings (.env file / environment variables)
+
+    This lets clients omit ``hf_token`` from requests when the server
+    already has one configured via ``.env``, so secrets don't need to be
+    sent over HTTP.
+    """
+    if token:
+        return token
+    return settings.hf_token or os.getenv("HF_TOKEN") or None
+
+
+def resolve_wandb_key(key: Optional[str]) -> Optional[str]:
+    """
+    Resolve the Weights & Biases API key to use.
+
+    Precedence:
+    1. Explicit key passed in (e.g., from HTTP request)
+    2. WANDB_API_KEY from settings (.env file / environment variables)
+    """
+    if key:
+        return key
+    return settings.wandb_api_key or os.getenv("WANDB_API_KEY") or None
+
+
+def env_secret_status() -> dict:
+    """
+    Report which secrets are available from the server environment.
+
+    Used by the frontend to show users whether they need to provide
+    tokens in the UI or can rely on the server's ``.env`` configuration.
+    The actual secret values are never returned.
+    """
+    return {
+        "hf_token": bool(settings.hf_token or os.getenv("HF_TOKEN")),
+        "wandb_api_key": bool(settings.wandb_api_key or os.getenv("WANDB_API_KEY")),
+    }
+
+
 def validate_cuda_visible_devices(cuda_str: str) -> dict:
     """
     Validate CUDA_VISIBLE_DEVICES string before applying it.

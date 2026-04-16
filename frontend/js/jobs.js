@@ -556,11 +556,9 @@ class JobManager {
     async uploadCurrentJob() {
         if (!this.currentJobId) return;
 
-        const hfToken = document.getElementById('upload-hf-token')?.value?.trim();
-        if (!hfToken) {
-            this.toast.error('HuggingFace token is required');
-            return;
-        }
+        const hfToken = document.getElementById('upload-hf-token')?.value?.trim() || null;
+        // Token may be blank if HF_TOKEN is configured in the server's .env —
+        // the backend resolves it and returns 400 if neither source has one.
 
         const outputName = document.getElementById('upload-repo-name')?.value?.trim() || null;
         const mergeLora = document.getElementById('upload-merge-lora')?.checked ?? true;
