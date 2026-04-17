@@ -1,3 +1,5 @@
+.env
+
 # Node.js (installed by CI for Playwright tests)
 node_modules/
 package.json
