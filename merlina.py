@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocke
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from datasets import load_dataset, Dataset
 from transformers import (
@@ -51,7 +51,7 @@ from src.gpu_utils import get_gpu_manager
 from src.presets import get_preset, get_all_presets
 
 # Import configuration
-from config import settings
+from config import settings, resolve_hf_token, resolve_wandb_key, env_secret_status
 
 # Import version information
 from version import __version__, get_version_info, get_version_string
@@ -370,6 +370,17 @@ class TrainingConfig(BaseModel):
     wandb_tags: Optional[list[str]] = Field(None, description="W&B tags for organizing runs")
     wandb_notes: Optional[str] = Field(None, description="Notes about this training run")
 
+    @model_validator(mode="after")
+    def _fill_secrets_from_env(self):
+        """
+        Fall back to server-side ``.env`` secrets when not provided in the
+        request. Keeps tokens out of HTTP bodies when the server has them
+        configured locally.
+        """
+        self.hf_token = resolve_hf_token(self.hf_token)
+        self.wandb_key = resolve_wandb_key(self.wandb_key)
+        return self
+
 class JobResponse(BaseModel):
     job_id: str
     status: str
@@ -396,6 +407,11 @@ class InferenceLoadRequest(BaseModel):
     model_name: str = Field(..., description="HuggingFace model ID, local path, or name of a trained model in models/ directory")
     use_4bit: bool = Field(True, description="Load with 4-bit quantization")
     hf_token: Optional[str] = Field(None, description="HuggingFace token for gated models")
+
+    @model_validator(mode="after")
+    def _fill_hf_token_from_env(self):
+        self.hf_token = resolve_hf_token(self.hf_token)
+        return self
 
 class InferenceChatRequest(BaseModel):
     """Request to chat with the loaded model"""
@@ -568,6 +584,18 @@ async def api_info():
 async def get_version():
     """Get detailed version information"""
     return get_version_info()
+
+
+@app.get("/env/secrets")
+async def get_env_secrets_status():
+    """
+    Report which secrets are configured on the server via .env or environment.
+
+    Does NOT return the secret values — only booleans. The frontend uses this
+    to show which tokens are already available server-side so users don't
+    have to paste them into the UI.
+    """
+    return env_secret_status()
 
 
 @app.get("/presets")
@@ -893,10 +921,18 @@ async def retry_job(job_id: str, priority: Optional[str] = "normal"):
 
 
 class UploadJobRequest(BaseModel):
-    hf_token: str = Field(..., description="HuggingFace API token for authentication")
+    hf_token: Optional[str] = Field(
+        None,
+        description="HuggingFace API token. Optional if HF_TOKEN is set in the server's .env"
+    )
     output_name: Optional[str] = Field(None, description="Override repository name (defaults to original output_name)")
     merge_lora_before_upload: bool = Field(True, description="Merge LoRA with base model before uploading")
     hf_hub_private: bool = Field(True, description="Make HuggingFace Hub repository private")
+
+    @model_validator(mode="after")
+    def _fill_hf_token_from_env(self):
+        self.hf_token = resolve_hf_token(self.hf_token)
+        return self
 
 
 @app.post("/jobs/{job_id}/upload", response_model=JobResponse)
@@ -940,6 +976,12 @@ async def upload_job(job_id: str, request: UploadJobRequest):
     config = TypeAdapter(TrainingConfig).validate_python(job.config)
 
     # Apply upload overrides
+    if not request.hf_token:
+        raise HTTPException(
+            status_code=400,
+            detail="No HuggingFace token available. Provide hf_token in the request "
+                   "or set HF_TOKEN in the server's .env file."
+        )
     config.hf_token = request.hf_token
     config.merge_lora_before_upload = request.merge_lora_before_upload
     config.hf_hub_private = request.hf_hub_private
@@ -1277,7 +1319,8 @@ async def preview_dataset(config: DatasetConfig, offset: int = 0, limit: int = 1
         try:
             loader = create_loader_from_config(
                 source_config=config.source,
-                uploaded_datasets=uploaded_datasets
+                uploaded_datasets=uploaded_datasets,
+                hf_token=resolve_hf_token(None)
             )
         except LoaderCreationError as e:
             if "not found" in str(e):
@@ -1335,7 +1378,8 @@ async def preview_formatted_dataset(config: DatasetConfig, offset: int = 0, limi
         try:
             loader = create_loader_from_config(
                 source_config=config.source,
-                uploaded_datasets=uploaded_datasets
+                uploaded_datasets=uploaded_datasets,
+                hf_token=resolve_hf_token(None)
             )
         except LoaderCreationError as e:
             if "not found" in str(e):
@@ -1931,6 +1975,11 @@ class ModelPreloadRequest(BaseModel):
     model_name: str = Field(..., description="HuggingFace model ID")
     hf_token: Optional[str] = Field(None, description="HuggingFace API token (for gated models)")
 
+    @model_validator(mode="after")
+    def _fill_hf_token_from_env(self):
+        self.hf_token = resolve_hf_token(self.hf_token)
+        return self
+
 
 @app.post("/model/preload")
 async def preload_model_tokenizer(request: ModelPreloadRequest):
@@ -2000,6 +2049,11 @@ class ModelLayersRequest(BaseModel):
     """Request to detect LoRA-compatible layers in a model"""
     model_name: str = Field(..., description="HuggingFace model ID or local path")
     hf_token: Optional[str] = Field(None, description="HuggingFace API token (for gated models)")
+
+    @model_validator(mode="after")
+    def _fill_hf_token_from_env(self):
+        self.hf_token = resolve_hf_token(self.hf_token)
+        return self
 
 
 # Cache for model layer detection results

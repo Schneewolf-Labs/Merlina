@@ -210,9 +210,10 @@ With 4-bit quantization enabled (default):
 Configure via `.env` file or environment variables:
 
 ```bash
-# External services
+# External services — setting these here means clients don't need to send
+# tokens in HTTP request bodies. Tokens in requests still override env.
 WANDB_API_KEY=your_wandb_key       # Weights & Biases logging
-HF_TOKEN=your_huggingface_token    # HuggingFace Hub access
+HF_TOKEN=your_huggingface_token    # HuggingFace Hub access (gated models, uploads)
 
 # Server
 HOST=0.0.0.0                       # Server bind address

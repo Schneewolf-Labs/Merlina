@@ -1228,8 +1228,9 @@
                 <h2 id="upload-hub-modal-title">📤 Upload Model to HuggingFace Hub</h2>
                 <p style="color: var(--text-secondary); margin-bottom: 15px;">Push this job's trained model to HuggingFace Hub.</p>
                 <div class="form-group">
-                    <label for="upload-hf-token">HuggingFace Token <span style="color: var(--secondary-pink);">*</span></label>
-                    <input type="password" id="upload-hf-token" placeholder="hf_..." class="magic-input" required>
+                    <label for="upload-hf-token">HuggingFace Token</label>
+                    <input type="password" id="upload-hf-token" placeholder="hf_... (or leave blank to use server's .env HF_TOKEN)" class="magic-input">
+                    <small style="color: #888; font-size: 0.85em;">Optional if <code>HF_TOKEN</code> is set in the server's <code>.env</code>.</small>
                 </div>
                 <div class="form-group">
                     <label for="upload-repo-name">Repository Name (optional override)</label>

@@ -336,6 +336,11 @@ class MerlinaAPI {
         return this.fetch('/version');
     }
 
+    // Server-side secret availability (hf_token, wandb_api_key)
+    static async getEnvSecrets() {
+        return this.fetch('/env/secrets');
+    }
+
     // Inference endpoints
     static async listInferenceModels() {
         return this.fetch('/inference/models');
