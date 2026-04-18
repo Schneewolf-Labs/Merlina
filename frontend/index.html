@@ -873,6 +873,52 @@
                         </div>
                     </div>
 
+                    <!-- Grimoire Kernel Optimizations -->
+                    <div class="spell-section">
+                        <h3>🦁 Grimoire Optimizations</h3>
+                        <div class="form-row">
+                            <div class="form-group" style="flex: 1;">
+                                <label class="magic-checkbox">
+                                    <input type="checkbox" id="use-liger">
+                                    <span>Liger Kernel 🦁</span>
+                                </label>
+                                <small style="color: #888; font-size: 0.85em; display: block; margin-top: 5px;">
+                                    Patch model with fused Triton kernels (RMSNorm, RoPE, SwiGLU). Faster training, lower VRAM.
+                                </small>
+                            </div>
+                            <div class="form-group" style="flex: 1;">
+                                <label class="magic-checkbox">
+                                    <input type="checkbox" id="torch-compile">
+                                    <span>torch.compile ⚙️</span>
+                                </label>
+                                <small style="color: #888; font-size: 0.85em; display: block; margin-top: 5px;">
+                                    Wrap model with torch.compile for fused kernels (PyTorch 2.x). May add startup overhead.
+                                </small>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group" style="flex: 1;">
+                                <label>NEFTune Alpha</label>
+                                <input type="number" id="neftune-alpha" value="" placeholder="None (disabled)" min="0" max="20" step="0.5" class="magic-input">
+                                <small style="color: #888; font-size: 0.85em;">Embedding noise scale for regularization (try 5.0). Leave empty to disable.</small>
+                            </div>
+                            <div class="form-group" style="flex: 1;">
+                                <label class="magic-checkbox">
+                                    <input type="checkbox" id="eval-on-start">
+                                    <span>Evaluate on Start 📏</span>
+                                </label>
+                                <small style="color: #888; font-size: 0.85em; display: block; margin-top: 5px;">
+                                    Run a baseline eval before training begins.
+                                </small>
+                            </div>
+                        </div>
+                        <div style="margin-top: 10px; padding: 10px; background: #fef3c7; border-radius: 5px; border-left: 3px solid #f59e0b;">
+                            <div style="font-size: 0.85em; color: #92400e;">
+                                <strong>💡 Liger Kernel:</strong> Best on Llama, Mistral, Qwen, Gemma, and Phi family models. Requires <code>pip install liger-kernel</code>.
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Attention Configuration -->
                     <div class="spell-section">
                         <h3>⚡ Attention Implementation</h3>

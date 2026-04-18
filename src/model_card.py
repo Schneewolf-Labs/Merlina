@@ -244,6 +244,10 @@ def generate_wandb_run_name(config: Any) -> str:
         suffixes.append("4bit")
     if config.gradient_checkpointing:
         suffixes.append("gc")
+    if getattr(config, "use_liger", False):
+        suffixes.append("liger")
+    if getattr(config, "torch_compile", False):
+        suffixes.append("compile")
     # Only add beta for preference modes (SFT doesn't use beta)
     preference_modes = {"orpo", "dpo", "simpo", "cpo", "ipo", "kto"}
     if config.beta != 0.1 and config.training_mode in preference_modes:
