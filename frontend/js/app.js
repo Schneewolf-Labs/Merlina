@@ -294,6 +294,14 @@ class MerlinaApp {
             // Attention
             attn_implementation: document.getElementById('attn-implementation')?.value || 'auto',
 
+            // Grimoire kernel/regularization features
+            use_liger: document.getElementById('use-liger')?.checked ?? false,
+            torch_compile: document.getElementById('torch-compile')?.checked ?? false,
+            neftune_alpha: document.getElementById('neftune-alpha')?.value
+                ? parseFloat(document.getElementById('neftune-alpha').value)
+                : null,
+            eval_on_start: document.getElementById('eval-on-start')?.checked ?? false,
+
             // GPU
             gpu_ids: this.gpuManager.getSelectedGPUs(),
             multi_gpu_strategy: document.getElementById('multi-gpu-strategy')?.value || 'auto',

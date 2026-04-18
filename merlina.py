@@ -349,6 +349,26 @@ class TrainingConfig(BaseModel):
         description="Attention implementation (auto, flash_attention_2, sdpa, eager)"
     )
 
+    # Grimoire kernel/regularization features
+    use_liger: bool = Field(
+        False,
+        description="Patch model with Liger Kernel fused ops (RMSNorm, RoPE, SwiGLU) for faster, lower-VRAM training"
+    )
+    torch_compile: bool = Field(
+        False,
+        description="Wrap model with torch.compile for fused kernels (PyTorch 2.x)"
+    )
+    neftune_alpha: Optional[float] = Field(
+        None,
+        ge=0.0,
+        le=20.0,
+        description="NEFTune noise scale for embedding noise regularization (e.g. 5.0). None disables it."
+    )
+    eval_on_start: bool = Field(
+        False,
+        description="Run an evaluation pass before training begins (baseline metrics)"
+    )
+
     # GPU settings
     gpu_ids: Optional[list[int]] = Field(
         None,

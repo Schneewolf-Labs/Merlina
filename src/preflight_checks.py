@@ -572,6 +572,16 @@ class PreflightValidator:
                     "Consider using a more descriptive name."
                 )
 
+        # ===== Liger Kernel availability =====
+        if getattr(config, "use_liger", False):
+            try:
+                import liger_kernel  # noqa: F401
+            except ImportError:
+                self.errors.append(
+                    "use_liger is enabled but the 'liger-kernel' package is not installed. "
+                    "Install with: pip install liger-kernel"
+                )
+
         return {
             "effective_batch_size": effective_batch_size,
             "completion_length": config.max_length - config.max_prompt_length,

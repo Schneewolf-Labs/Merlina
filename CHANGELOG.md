@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-04-18 "Liger Familiar"
+
+### Added
+- **Liger Kernel support**: New `use_liger` flag patches the model with Grimoire's Liger Kernel fused ops (RMSNorm, RoPE, SwiGLU) for faster, lower-VRAM training on Llama, Mistral, Qwen, Gemma, and Phi family models. Pre-flight check verifies the `liger-kernel` package is installed when enabled.
+- **torch.compile integration**: New `torch_compile` flag wraps the model with `torch.compile` for fused PyTorch 2.x kernels.
+- **NEFTune regularization**: New `neftune_alpha` field exposes Grimoire's embedding-noise regularization (set e.g. `5.0` to enable, leave empty to disable).
+- **Eval-on-start**: New `eval_on_start` flag runs an initial baseline evaluation pass before training begins.
+- New "🦁 Grimoire Optimizations" section in the training UI exposing all of the above.
+- W&B run name suffixes (`-liger`, `-compile`) when these features are enabled.
+
+### Changed
+-
+
+### Fixed
+-
+
+
+
 ## [1.4.1] - 2026-03-28
 
 ### Fixed

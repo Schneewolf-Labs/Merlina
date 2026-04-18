@@ -281,6 +281,12 @@ class ConfigManager {
             adafactor_beta1: document.getElementById('adafactor-beta1')?.value ? parseFloat(document.getElementById('adafactor-beta1').value) : null,
             adafactor_clip_threshold: parseFloat(document.getElementById('adafactor-clip-threshold')?.value || 1.0),
             attn_implementation: document.getElementById('attn-implementation')?.value || 'auto',
+            use_liger: document.getElementById('use-liger')?.checked ?? false,
+            torch_compile: document.getElementById('torch-compile')?.checked ?? false,
+            neftune_alpha: document.getElementById('neftune-alpha')?.value
+                ? parseFloat(document.getElementById('neftune-alpha').value)
+                : null,
+            eval_on_start: document.getElementById('eval-on-start')?.checked ?? false,
             eval_steps: parseFloat(document.getElementById('eval-steps')?.value || 0.2),
             dataset: {
                 source: datasetSource,
@@ -548,6 +554,17 @@ class ConfigManager {
 
         // Attention settings
         this.setInputValue('attn-implementation', config.attn_implementation || 'auto');
+
+        // Grimoire kernel/regularization features
+        this.setCheckboxValue('use-liger', config.use_liger);
+        this.setCheckboxValue('torch-compile', config.torch_compile);
+        this.setCheckboxValue('eval-on-start', config.eval_on_start);
+        if (config.neftune_alpha != null) {
+            this.setInputValue('neftune-alpha', config.neftune_alpha);
+        } else {
+            const neftuneEl = document.getElementById('neftune-alpha');
+            if (neftuneEl) neftuneEl.value = '';
+        }
 
         // Dataset config
         if (config.dataset) {
