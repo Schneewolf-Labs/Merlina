@@ -11,9 +11,65 @@ import re
 import torch
 import logging
 from collections import OrderedDict
-from typing import Optional
+from dataclasses import fields as dataclass_fields, is_dataclass
+from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
+
+
+# Opt-in grimoire features exposed via Merlina's config. Each entry maps the
+# kwarg name to the value it takes when the user hasn't enabled the feature —
+# if the installed grimoire lacks the field AND the user actively set it, we
+# raise instead of silently dropping.
+_GRIMOIRE_OPT_IN_FEATURES: dict[str, Any] = {
+    "torch_compile": False,
+    "use_liger": False,
+    "neftune_alpha": None,
+    "eval_on_start": False,
+}
+
+
+def build_grimoire_config(config_cls, **kwargs):
+    """Instantiate grimoire's TrainingConfig, tolerating older grimoire versions.
+
+    Merlina exposes training flags (e.g. torch_compile, use_liger) that newer
+    grimoire releases accept as TrainingConfig fields. If the installed
+    grimoire predates those fields, passing them raises TypeError. This helper
+    filters kwargs to the fields actually declared on the supplied dataclass.
+
+    Safety rule: if the user *explicitly* enabled an opt-in feature (see
+    ``_GRIMOIRE_OPT_IN_FEATURES``) that the installed grimoire does not
+    support, we raise a clear RuntimeError rather than silently ignoring the
+    request. Defaults are dropped quietly with a debug log.
+    """
+    if not is_dataclass(config_cls):
+        raise TypeError(f"Expected a dataclass, got {config_cls!r}")
+
+    supported = {f.name for f in dataclass_fields(config_cls)}
+    unsupported = set(kwargs) - supported
+
+    enabled_but_missing = [
+        name
+        for name in unsupported
+        if name in _GRIMOIRE_OPT_IN_FEATURES
+        and kwargs[name] != _GRIMOIRE_OPT_IN_FEATURES[name]
+    ]
+    if enabled_but_missing:
+        raise RuntimeError(
+            "Installed grimoire TrainingConfig is missing fields that you "
+            f"enabled: {sorted(enabled_but_missing)}. Upgrade grimoire or "
+            "disable these features in your training config."
+        )
+
+    if unsupported:
+        logger.debug(
+            "Dropping grimoire TrainingConfig kwargs not supported by the "
+            "installed version: %s",
+            sorted(unsupported),
+        )
+
+    filtered = {k: v for k, v in kwargs.items() if k in supported}
+    return config_cls(**filtered)
 
 
 def get_num_gpus() -> int:

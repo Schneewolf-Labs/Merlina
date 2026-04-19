@@ -63,7 +63,13 @@ from dataset_handlers import (
 from src.job_manager import JobManager
 from src.websocket_manager import websocket_manager
 from src.preflight_checks import is_local_model_path
-from src.utils import get_num_gpus, calculate_effective_batch_size, get_torch_dtype, fix_vlm_state_dict_on_disk
+from src.utils import (
+    build_grimoire_config,
+    calculate_effective_batch_size,
+    fix_vlm_state_dict_on_disk,
+    get_num_gpus,
+    get_torch_dtype,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1269,7 +1275,8 @@ def run_training_sync(
             else:
                 eval_steps = int(config.eval_steps)
 
-        grimoire_config = TrainingConfig(
+        grimoire_config = build_grimoire_config(
+            TrainingConfig,
             output_dir=output_dir,
             num_epochs=config.num_epochs,
             batch_size=config.batch_size,
