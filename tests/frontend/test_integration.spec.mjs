@@ -157,22 +157,24 @@ test.describe('Training mode', () => {
 
     test('hides beta field in SFT mode', async ({ page }) => {
         await page.goto('/');
-        await page.locator('.section-nav-btn[data-section="config-section"]').click();
+        // Training mode lives in the Dataset section; change it there first.
+        await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
         await page.locator('#training-mode').selectOption('sft');
-        // Beta field or its container should be hidden
+        // Then navigate to the Training section to check the beta field.
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
         const betaField = page.locator('#beta');
         const betaContainer = betaField.locator('xpath=ancestor::div[contains(@class,"form-group")]');
-        // Either the field itself or its parent container should be hidden
         const isHidden = await betaContainer.evaluate(el => {
             return el.style.display === 'none' || el.hidden ||
                    window.getComputedStyle(el).display === 'none';
         }).catch(() => false);
 
-        // If not hidden by container, check the field directly
         if (!isHidden) {
             // In some implementations the field might just not be required
             // Check that switching back to ORPO shows it again
+            await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
             await page.locator('#training-mode').selectOption('orpo');
+            await page.locator('.section-nav-btn[data-section="config-section"]').click();
             await expect(betaField).toBeVisible();
         }
     });
