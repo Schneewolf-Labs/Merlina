@@ -10,18 +10,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [1.5.0] - 2026-04-18 "Liger Familiar"
 
 ### Added
+- **Multi-GPU DDP training**: When multiple GPUs are available, training now launches as a subprocess via `accelerate launch` for proper Distributed Data Parallel. New `multi_gpu_strategy` config field (`auto`/`ddp`/`single`) and UI selector. Includes a standalone `src/train_worker.py` entry point with file-based progress reporting and graceful SIGTERM stop.
+- **Upload / re-upload to HuggingFace Hub for finished jobs**: New `POST /jobs/{job_id}/upload` endpoint and "Upload to Hub" button in the job monitor lets you push trained artifacts after a job has completed or stopped — no retraining required. Configurable token, repo name, merge preference, and privacy per upload.
+- **Muon optimizer**: Select `muon` from the optimizer dropdown to use Grimoire's native MomentUm Orthogonalized by Newton-Schulz implementation, with `muon_momentum` config field (default `0.95`).
+- **Full Adafactor configuration**: Exposes `relative_step`, `scale_parameter`, `warmup_init`, `decay_rate`, `beta1`, and `clip_threshold` through Pydantic config, training runners, and frontend UI with conditional show/hide based on optimizer selection.
 - **Liger Kernel support**: New `use_liger` flag patches the model with Grimoire's Liger Kernel fused ops (RMSNorm, RoPE, SwiGLU) for faster, lower-VRAM training on Llama, Mistral, Qwen, Gemma, and Phi family models. Pre-flight check verifies the `liger-kernel` package is installed when enabled.
 - **torch.compile integration**: New `torch_compile` flag wraps the model with `torch.compile` for fused PyTorch 2.x kernels.
 - **NEFTune regularization**: New `neftune_alpha` field exposes Grimoire's embedding-noise regularization (set e.g. `5.0` to enable, leave empty to disable).
 - **Eval-on-start**: New `eval_on_start` flag runs an initial baseline evaluation pass before training begins.
 - New "🦁 Grimoire Optimizations" section in the training UI exposing all of the above.
 - W&B run name suffixes (`-liger`, `-compile`) when these features are enabled.
+- **Server-side secrets**: HF and W&B tokens can now be set in `.env` and clients may omit them from request bodies. New `GET /env/secrets` endpoint (booleans only) and frontend hint marking token inputs optional when the server already has them.
+- **System prompt override**: New per-job system prompt override with `fill_empty` (only fill missing) and `replace_all` (overwrite every sample) modes.
+- **Persistent job names**: `/jobs` now returns the stored `output_name` so the sidebar shows friendly names (e.g. `Hemlock2-Coder-7B`) instead of raw job IDs after page or server reloads.
+- **Torch version pre-flight checks**: Startup warning and pre-flight check verify `torch >= 2.5.0` and torchvision compatibility.
+- **Decoupled upload errors**: Upload failures no longer mark a successful training run as `failed`. Upload errors are stored in a new `upload_error` field (DB migration included), surfaced as a warning banner in the UI with a retry button.
+- Favicon generated from `merlina.png`.
 
 ### Changed
--
+- HuggingFace Hub uploads now save the merged model to disk first, then push via `upload_folder`, instead of streaming through `push_to_hub`. This enables the new VLM state-dict repair pass before upload.
+- `torch`, `torchvision`, `torchaudio`, and `xformers` removed from `requirements.txt`. GPU environments (RunPod, Colab, etc.) ship a CUDA-matched torch build; letting pip upgrade torch independently broke `torchvision::nms`. README documents the correct `--index-url` install.
+- Model cards now include `pipeline_tag` in YAML frontmatter (`image-text-to-text` for VLMs, `text-generation` for LLMs) plus VLM-specific tags so HuggingFace classifies and surfaces models correctly.
+- Replaced deprecated `torch_dtype` with `dtype` in `from_pretrained` calls.
+- Added `.env` to `.gitignore`.
 
 ### Fixed
--
+- **VLM state dict on merge+upload**: After PEFT `merge_and_unload` on VLM architectures (e.g. Qwen3.5-VL), `save_pretrained` could produce triple-nested `language_model` keys, misplaced visual prefixes, and missing MTP/visual weights. New `fix_vlm_state_dict_on_disk()` validates and repairs the saved safetensors before upload.
+- **VLMs unloadable with `AutoProcessor.from_pretrained()`**: Processor and `preprocessor_config.json` are now copied from the base model and saved/uploaded alongside the merged model.
+- **VLM `generation_config.json`** is now saved from the base model so merged VLMs use the correct `eos_token_id` and other generation defaults.
+- **VLMs misclassified as text-only on HuggingFace** even with vision weights present — fixed via the model card `pipeline_tag` change above.
+- **HF Hub `404 Repository Not Found` on upload**: `upload_folder()` was being called with the bare `output_name` instead of the namespace-prefixed `repo_id` returned by `create_repo()`.
+- **Adafactor kwargs leaked to other optimizers**: Adafactor-specific keyword arguments are now only passed to `TrainingConfig` when the optimizer is actually `adafactor`, preventing crashes with `adamw_8bit_paged` and friends.
+- **Multi-GPU was doubling steps and producing NaN loss**: Direct multi-GPU runs without `accelerate launch` caused incorrect optimization-step accounting and NaN loss from `device_map="auto"` sharding. Fixed by the new DDP subprocess path.
+- **`train_worker` crash modes**: Guarded `import wandb` for environments without it, propagate `was_stopped` to the upload step so stopped jobs aren't marked `completed`, guarded `eval_dataset.map()` against `None` when `test_size` produces no eval split, and wrapped config loading in `try/except` so failures land in the progress file/DB instead of crashing silently.
+- **`UnboundLocalError` masquerading as a training failure**: `del trainer, model` left names unbound for the `finally` block, causing the outer `except` to record a successful run as failed. Variables are now reassigned to `None` after `del` and upload setup is wrapped in its own `try/except`.
+- **Upload button invisible**: Replaced undefined `--accent-gold` CSS variable with `--wizard-yellow`, and ensured all jobs are tracked in `activeJobs` on load so status is available when opening details from the sidebar.
+- **`multi_gpu_strategy` accepted invalid values**: Now typed as `Literal["auto", "ddp", "single"]` so Pydantic rejects bad input at validation time. Shared `_make_training_callback()` between `/train` and `/jobs/{job_id}/retry` to eliminate divergent behavior.
 
 
 
