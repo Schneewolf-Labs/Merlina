@@ -504,15 +504,28 @@ def merge_lora_to_directory(
     is_vlm: bool = False,
 ) -> Path:
     """
-    Produce a merged HuggingFace-format checkpoint on disk.
+    Produce a fully-populated merged HuggingFace-format checkpoint on disk.
 
     Mirrors the CPU bf16 merge used by ``_run_background_upload`` but
     writes to a caller-owned directory so multiple consumers (HF upload,
-    GGUF export) can share a single merge. Moved here so the training
-    runner can call it for GGUF without duplicating the merge code.
+    GGUF export) can share a single merge.
+
+    The output directory will contain *everything a downstream consumer
+    needs to load and run the model*:
+      - merged model weights + ``config.json``
+      - tokenizer (from the trained adapter dir, falling back to the base)
+      - VLM processor / image_processor / preprocessor_config.json (when
+        ``is_vlm=True``), with the same fallback chain
+      - generation_config.json (mirrors what the local save does)
+      - chat_template.jinja, if the adapter dir saved one
+      - VLM state-dict key fix-ups via ``fix_vlm_state_dict_on_disk``
+
+    Failures saving auxiliary artifacts (tokenizer / processor / gen
+    config) are logged but never fatal — a merge that produces weights
+    is still useful even if, e.g., the processor save fails.
     """
-    # Imports are deferred so ``src.gguf_exporter`` remains lightweight
-    # enough to import in CI / resolver tests that mock heavy ML deps.
+    # Imports are deferred so ``src.gguf_exporter`` stays importable in
+    # CI / resolver tests that mock heavy ML deps.
     import torch  # type: ignore
     from peft import PeftModel  # type: ignore
     from transformers import AutoTokenizer  # type: ignore
@@ -540,16 +553,74 @@ def merge_lora_to_directory(
 
     merged.save_pretrained(str(output_dir))
 
-    tokenizer = AutoTokenizer.from_pretrained(str(adapter_dir))
-    tokenizer.save_pretrained(str(output_dir))
+    # --- Tokenizer (try adapter dir first, fall back to base model) ---
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(str(adapter_dir))
+        tokenizer.save_pretrained(str(output_dir))
+    except Exception as exc:
+        logger.warning(
+            "Could not save tokenizer from adapter dir %s: %s — falling back to base",
+            adapter_dir, exc,
+        )
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(base_model, trust_remote_code=True)
+            tokenizer.save_pretrained(str(output_dir))
+        except Exception as exc2:
+            logger.error("Tokenizer save failed for both adapter and base: %s", exc2)
 
+    # --- VLM processor / image_processor (adapter dir → base model fallback) ---
+    if is_vlm:
+        from transformers import AutoProcessor  # type: ignore
+        processor_saved = False
+        for source in (str(adapter_dir), base_model):
+            try:
+                processor = AutoProcessor.from_pretrained(source, trust_remote_code=True)
+                processor.save_pretrained(str(output_dir))
+                logger.info("Saved VLM processor from %s to %s", source, output_dir)
+                processor_saved = True
+                break
+            except Exception as exc:
+                logger.debug("Processor load from %s failed: %s", source, exc)
+        if not processor_saved:
+            logger.warning(
+                "Could not save VLM processor for %s — image input may not work",
+                base_model,
+            )
+
+    # --- Generation config (always try base model — adapter dir rarely has it) ---
+    try:
+        from transformers import GenerationConfig  # type: ignore
+        try:
+            gen_config = GenerationConfig.from_pretrained(str(adapter_dir))
+        except Exception:
+            gen_config = GenerationConfig.from_pretrained(base_model, trust_remote_code=True)
+        gen_config.save_pretrained(str(output_dir))
+    except Exception as exc:
+        logger.debug("No generation config available to save: %s", exc)
+
+    # --- Chat template sidecar — copy if the trainer saved one ---
+    for template_name in ("chat_template.jinja", "chat_template.json"):
+        candidate = adapter_dir / template_name
+        if candidate.is_file():
+            try:
+                import shutil as _shutil
+                _shutil.copy2(candidate, output_dir / template_name)
+            except Exception as exc:
+                logger.debug("Could not copy %s: %s", template_name, exc)
+
+    # --- VLM state-dict key nesting fix (must run after weights are on disk) ---
     if is_vlm:
         try:
-            from transformers import AutoProcessor  # type: ignore
-            processor = AutoProcessor.from_pretrained(str(adapter_dir), trust_remote_code=True)
-            processor.save_pretrained(str(output_dir))
+            from .utils import fix_vlm_state_dict_on_disk  # type: ignore
+            fixed = fix_vlm_state_dict_on_disk(
+                str(output_dir),
+                base_model_name=base_model,
+                is_vlm=True,
+            )
+            if fixed:
+                logger.info("VLM state-dict issues fixed in merged dir")
         except Exception as exc:
-            logger.warning("Could not save VLM processor to %s: %s", output_dir, exc)
+            logger.warning("VLM state-dict fix-up failed in %s: %s", output_dir, exc)
 
     del merged, base_model_reload
     try:
