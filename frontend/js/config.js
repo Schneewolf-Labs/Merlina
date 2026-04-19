@@ -196,19 +196,33 @@ class ConfigManager {
      * Get current configuration from form
      */
     getCurrentConfig() {
-        // Get dataset config
-        const sourceType = document.getElementById('dataset-source-type')?.value || 'huggingface';
-        let datasetSource = { source_type: sourceType };
+        // Gather dataset cards from the unified datasets list. The first card
+        // becomes DatasetConfig.source; any additional cards become
+        // additional_sources[]. We read the raw DOM so unfilled fields still
+        // round-trip (saving shouldn't enforce validation).
+        const cards = Array.from(document.querySelectorAll('#datasets-list .dataset-card'));
+        const readCardSource = (card) => {
+            const t = card.querySelector('.ds-source-type')?.value || 'huggingface';
+            const src = { source_type: t };
+            if (t === 'huggingface') {
+                src.repo_id = card.querySelector('.ds-repo')?.value || '';
+                src.split = card.querySelector('.ds-split')?.value || 'train';
+            } else if (t === 'local_file') {
+                src.file_path = card.querySelector('.ds-local-path')?.value || '';
+                src.file_format = card.querySelector('.ds-local-format')?.value || '';
+            } else if (t === 'upload') {
+                src.dataset_id = card.dataset.uploadId || '';
+            }
+            const mapping = this.readCardColumnMapping(card);
+            if (Object.keys(mapping).length > 0) src.column_mapping = mapping;
+            return src;
+        };
 
-        if (sourceType === 'huggingface') {
-            datasetSource.repo_id = document.getElementById('hf-repo-id')?.value || '';
-            datasetSource.split = document.getElementById('hf-split')?.value || 'train';
-        } else if (sourceType === 'local_file') {
-            datasetSource.file_path = document.getElementById('local-file-path')?.value || '';
-            datasetSource.file_format = document.getElementById('local-file-format')?.value || '';
-        } else if (sourceType === 'upload') {
-            datasetSource.dataset_id = window.uploadedDatasetId || '';
-        }
+        const firstCard = cards[0];
+        let datasetSource = firstCard
+            ? readCardSource(firstCard)
+            : { source_type: 'huggingface', repo_id: '', split: 'train' };
+        const additionalSources = cards.slice(1).map(readCardSource);
 
         const formatType = document.getElementById('dataset-format-type')?.value || 'tokenizer';
         let datasetFormat = { format_type: formatType };
@@ -239,12 +253,6 @@ class ConfigManager {
 
         // Get training mode
         const trainingMode = document.getElementById('training-mode')?.value || 'orpo';
-
-        // Get column mapping if configured
-        const columnMapping = this.getColumnMapping();
-        if (columnMapping && Object.keys(columnMapping).length > 0) {
-            datasetSource.column_mapping = columnMapping;
-        }
 
         // Build complete config
         const config = {
@@ -290,8 +298,10 @@ class ConfigManager {
             eval_steps: parseFloat(document.getElementById('eval-steps')?.value || 0.2),
             dataset: {
                 source: datasetSource,
+                additional_sources: additionalSources,
                 format: datasetFormat,
                 test_size: parseFloat(document.getElementById('test-size')?.value || 0.01),
+                convert_messages_format: document.getElementById('convert-messages-checkbox')?.checked ?? true,
                 system_prompt: document.getElementById('system-prompt-override')?.value?.trim() || undefined,
                 system_prompt_mode: document.querySelector('input[name="system-prompt-mode"]:checked')?.value || 'fill_empty'
             }
@@ -568,31 +578,9 @@ class ConfigManager {
 
         // Dataset config
         if (config.dataset) {
-            if (config.dataset.source) {
-                const source = config.dataset.source;
-                this.setInputValue('dataset-source-type', source.source_type || 'huggingface');
-
-                if (source.repo_id) this.setInputValue('hf-repo-id', source.repo_id);
-                if (source.split) this.setInputValue('hf-split', source.split);
-                if (source.file_path) this.setInputValue('local-file-path', source.file_path);
-                if (source.file_format) this.setInputValue('local-file-format', source.file_format);
-
-                // Trigger source type change to show correct config
-                const sourceTypeEl = document.getElementById('dataset-source-type');
-                if (sourceTypeEl) {
-                    sourceTypeEl.dispatchEvent(new Event('change'));
-                }
-
-                // Restore column mapping if present
-                if (source.column_mapping) {
-                    this.restoreColumnMapping(source.column_mapping);
-                }
-            }
-
             if (config.dataset.format) {
                 this.setInputValue('dataset-format-type', config.dataset.format.format_type || 'tokenizer');
 
-                // Trigger format type change
                 const formatTypeEl = document.getElementById('dataset-format-type');
                 if (formatTypeEl) {
                     formatTypeEl.dispatchEvent(new Event('change'));
@@ -614,7 +602,6 @@ class ConfigManager {
                 this.setInputValue('test-size', config.dataset.test_size);
             }
 
-            // Restore system prompt override
             if (config.dataset.system_prompt) {
                 this.setInputValue('system-prompt-override', config.dataset.system_prompt);
             }
@@ -623,73 +610,23 @@ class ConfigManager {
                 if (radio) radio.checked = true;
             }
 
-            // Restore additional sources
-            if (config.dataset.additional_sources && config.dataset.additional_sources.length > 0) {
-                // Clear existing additional datasets
-                const listEl = document.getElementById('additional-datasets-list');
-                if (listEl) listEl.innerHTML = '';
-
-                // Use the DatasetManager to add cards
-                const dsManager = window.datasetManager;
-                if (dsManager) {
-                    for (const src of config.dataset.additional_sources) {
-                        dsManager.addAdditionalDataset();
-                        const entries = listEl.querySelectorAll('.additional-dataset-entry');
-                        const card = entries[entries.length - 1];
-                        if (!card) continue;
-
-                        const sourceType = src.source_type || 'huggingface';
-                        const sourceTypeSel = card.querySelector('.ds-source-type');
-                        if (sourceTypeSel) {
-                            sourceTypeSel.value = sourceType;
-                            sourceTypeSel.dispatchEvent(new Event('change'));
-                        }
-
-                        if (sourceType === 'huggingface') {
-                            const repoInput = card.querySelector('.ds-repo');
-                            const splitInput = card.querySelector('.ds-split');
-                            if (repoInput) repoInput.value = src.repo_id || '';
-                            if (splitInput) splitInput.value = src.split || 'train';
-                        } else if (sourceType === 'local_file') {
-                            const pathInput = card.querySelector('.ds-local-path');
-                            const fmtSelect = card.querySelector('.ds-local-format');
-                            if (pathInput) pathInput.value = src.file_path || '';
-                            if (fmtSelect && src.file_format) fmtSelect.value = src.file_format;
-                        }
-
-                        // Restore per-card column mapping by pre-populating the dropdowns
-                        // with the known source columns (keys of the mapping) so selected
-                        // values survive even before the user clicks Inspect.
-                        if (src.column_mapping && Object.keys(src.column_mapping).length > 0) {
-                            const knownColumns = Object.keys(src.column_mapping);
-                            const pairs = [
-                                ['.ds-map-prompt', 'prompt'],
-                                ['.ds-map-chosen', 'chosen'],
-                                ['.ds-map-rejected', 'rejected'],
-                                ['.ds-map-system', 'system'],
-                                ['.ds-map-reasoning', 'reasoning'],
-                            ];
-                            const reverse = {};
-                            for (const [k, v] of Object.entries(src.column_mapping)) reverse[v] = k;
-                            for (const [sel, std] of pairs) {
-                                const dropdown = card.querySelector(sel);
-                                if (!dropdown) continue;
-                                // Populate options (dedupe)
-                                while (dropdown.options.length > 1) dropdown.remove(1);
-                                for (const col of knownColumns) {
-                                    const opt = document.createElement('option');
-                                    opt.value = col;
-                                    opt.textContent = col;
-                                    dropdown.appendChild(opt);
-                                }
-                                if (reverse[std]) dropdown.value = reverse[std];
-                            }
-                            card.querySelector('.ds-columns-list').textContent = knownColumns.join(', ');
-                            card.querySelector('.ds-colmap-config').style.display = 'block';
-                        }
-                    }
-                }
+            if (config.dataset.convert_messages_format !== undefined) {
+                this.setCheckboxValue('convert-messages-checkbox', config.dataset.convert_messages_format);
             }
+
+            // Rebuild dataset cards from source + additional_sources. The
+            // top-level column_mapping is the historical home for the first
+            // source's mapping, so merge it into source.column_mapping before
+            // restoring.
+            const primary = config.dataset.source ? { ...config.dataset.source } : null;
+            if (primary && config.dataset.column_mapping && !primary.column_mapping) {
+                primary.column_mapping = config.dataset.column_mapping;
+            }
+            const extras = Array.isArray(config.dataset.additional_sources)
+                ? config.dataset.additional_sources
+                : [];
+            const allSources = primary ? [primary, ...extras] : extras;
+            this.restoreDatasetCards(allSources);
         }
 
         // Optional fields
@@ -740,71 +677,99 @@ class ConfigManager {
     }
 
     /**
-     * Get column mapping from UI (mirrors DatasetManager.getColumnMapping)
+     * Read the {sourceCol: standardName} mapping from a dataset card.
      */
-    getColumnMapping() {
+    readCardColumnMapping(card) {
         const mapping = {};
-
-        const promptCol = document.getElementById('map-prompt')?.value;
-        const chosenCol = document.getElementById('map-chosen')?.value;
-        const rejectedCol = document.getElementById('map-rejected')?.value;
-        const systemCol = document.getElementById('map-system')?.value;
-        const reasoningCol = document.getElementById('map-reasoning')?.value;
-
-        if (promptCol) mapping[promptCol] = 'prompt';
-        if (chosenCol) mapping[chosenCol] = 'chosen';
-        if (rejectedCol) mapping[rejectedCol] = 'rejected';
-        if (systemCol) mapping[systemCol] = 'system';
-        if (reasoningCol) mapping[reasoningCol] = 'reasoning';
-
+        const pairs = [
+            ['.ds-map-prompt', 'prompt'],
+            ['.ds-map-chosen', 'chosen'],
+            ['.ds-map-rejected', 'rejected'],
+            ['.ds-map-system', 'system'],
+            ['.ds-map-reasoning', 'reasoning'],
+        ];
+        for (const [selector, target] of pairs) {
+            const val = card.querySelector(selector)?.value;
+            if (val) mapping[val] = target;
+        }
         return mapping;
     }
 
     /**
-     * Restore column mapping to UI dropdowns
-     * @param {Object} columnMapping - Mapping like {"original_col": "prompt", "other_col": "chosen"}
+     * Rebuild all dataset cards from an array of DatasetSource objects.
      */
-    restoreColumnMapping(columnMapping) {
-        // Reverse the mapping to find: standard_field -> original_column
-        const reverseMapping = {};
-        for (const [originalCol, standardField] of Object.entries(columnMapping)) {
-            reverseMapping[standardField] = originalCol;
+    restoreDatasetCards(sources) {
+        const listEl = document.getElementById('datasets-list');
+        const dsManager = window.datasetManager;
+        if (!listEl || !dsManager) return;
+
+        listEl.innerHTML = '';
+        dsManager.datasetCounter = 0;
+
+        if (sources.length === 0) {
+            // Always keep at least one card so the UI isn't empty.
+            dsManager.addDataset({ canRemove: false });
+            return;
         }
 
-        // Show the column mapping config section
-        const columnMappingConfig = document.getElementById('column-mapping-config');
-        if (columnMappingConfig) {
-            columnMappingConfig.style.display = 'block';
-        }
-
-        // Get all original column names from the mapping
-        const columns = Object.keys(columnMapping);
-
-        // Populate the dropdowns with the saved column names
-        const selectIds = ['map-prompt', 'map-chosen', 'map-rejected', 'map-system', 'map-reasoning'];
-        selectIds.forEach(selectId => {
-            const select = document.getElementById(selectId);
-            if (!select) return;
-
-            // Clear existing options except first (empty option)
-            while (select.options.length > 1) {
-                select.remove(1);
-            }
-
-            // Add column options
-            columns.forEach(col => {
-                const option = document.createElement('option');
-                option.value = col;
-                option.textContent = col;
-                select.appendChild(option);
-            });
-
-            // Set the saved value
-            const standardField = selectId.replace('map-', '');
-            if (reverseMapping[standardField]) {
-                select.value = reverseMapping[standardField];
-            }
+        sources.forEach((src, idx) => {
+            const card = dsManager.addDataset({ canRemove: idx > 0 });
+            if (!card) return;
+            this.populateCardFromSource(card, src);
         });
+    }
+
+    /**
+     * Apply a DatasetSource object to a card (source fields + column mapping).
+     */
+    populateCardFromSource(card, src) {
+        const sourceType = src.source_type || 'huggingface';
+        const sourceTypeSel = card.querySelector('.ds-source-type');
+        if (sourceTypeSel) {
+            sourceTypeSel.value = sourceType;
+            sourceTypeSel.dispatchEvent(new Event('change'));
+        }
+
+        if (sourceType === 'huggingface') {
+            const repoInput = card.querySelector('.ds-repo');
+            const splitInput = card.querySelector('.ds-split');
+            if (repoInput) repoInput.value = src.repo_id || '';
+            if (splitInput) splitInput.value = src.split || 'train';
+        } else if (sourceType === 'local_file') {
+            const pathInput = card.querySelector('.ds-local-path');
+            const fmtSelect = card.querySelector('.ds-local-format');
+            if (pathInput) pathInput.value = src.file_path || '';
+            if (fmtSelect && src.file_format) fmtSelect.value = src.file_format;
+        } else if (sourceType === 'upload' && src.dataset_id) {
+            card.dataset.uploadId = src.dataset_id;
+        }
+
+        if (src.column_mapping && Object.keys(src.column_mapping).length > 0) {
+            const knownColumns = Object.keys(src.column_mapping);
+            const pairs = [
+                ['.ds-map-prompt', 'prompt'],
+                ['.ds-map-chosen', 'chosen'],
+                ['.ds-map-rejected', 'rejected'],
+                ['.ds-map-system', 'system'],
+                ['.ds-map-reasoning', 'reasoning'],
+            ];
+            const reverse = {};
+            for (const [k, v] of Object.entries(src.column_mapping)) reverse[v] = k;
+            for (const [sel, std] of pairs) {
+                const dropdown = card.querySelector(sel);
+                if (!dropdown) continue;
+                while (dropdown.options.length > 1) dropdown.remove(1);
+                for (const col of knownColumns) {
+                    const opt = document.createElement('option');
+                    opt.value = col;
+                    opt.textContent = col;
+                    dropdown.appendChild(opt);
+                }
+                if (reverse[std]) dropdown.value = reverse[std];
+            }
+            card.querySelector('.ds-columns-list').textContent = knownColumns.join(', ');
+            card.querySelector('.ds-colmap-config').style.display = 'block';
+        }
     }
 
     /**
