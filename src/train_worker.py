@@ -60,7 +60,7 @@ from dataset_handlers.factory import create_loader_from_config
 
 from src.job_manager import JobManager
 from src.model_card import generate_wandb_run_name
-from src.utils import fix_vlm_state_dict_on_disk
+from src.utils import build_grimoire_config, fix_vlm_state_dict_on_disk
 
 logger = logging.getLogger(__name__)
 
@@ -615,7 +615,8 @@ def run_worker(args):
             else:
                 eval_steps = int(config.eval_steps)
 
-        grimoire_config = GrimoireTrainingConfig(
+        grimoire_config = build_grimoire_config(
+            GrimoireTrainingConfig,
             output_dir=output_dir,
             num_epochs=config.num_epochs,
             batch_size=config.batch_size,
