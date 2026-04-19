@@ -629,23 +629,63 @@ class ConfigManager {
                 const listEl = document.getElementById('additional-datasets-list');
                 if (listEl) listEl.innerHTML = '';
 
-                // Use the DatasetManager to add entries
+                // Use the DatasetManager to add cards
                 const dsManager = window.datasetManager;
                 if (dsManager) {
                     for (const src of config.dataset.additional_sources) {
                         dsManager.addAdditionalDataset();
                         const entries = listEl.querySelectorAll('.additional-dataset-entry');
-                        const lastEntry = entries[entries.length - 1];
-                        if (lastEntry) {
-                            const repoInput = lastEntry.querySelector('.additional-ds-repo');
-                            const splitInput = lastEntry.querySelector('.additional-ds-split');
-                            const colmapInput = lastEntry.querySelector('.additional-ds-colmap');
+                        const card = entries[entries.length - 1];
+                        if (!card) continue;
+
+                        const sourceType = src.source_type || 'huggingface';
+                        const sourceTypeSel = card.querySelector('.ds-source-type');
+                        if (sourceTypeSel) {
+                            sourceTypeSel.value = sourceType;
+                            sourceTypeSel.dispatchEvent(new Event('change'));
+                        }
+
+                        if (sourceType === 'huggingface') {
+                            const repoInput = card.querySelector('.ds-repo');
+                            const splitInput = card.querySelector('.ds-split');
                             if (repoInput) repoInput.value = src.repo_id || '';
                             if (splitInput) splitInput.value = src.split || 'train';
-                            if (colmapInput && src.column_mapping) {
-                                colmapInput.value = Object.entries(src.column_mapping)
-                                    .map(([k, v]) => `${k}=${v}`).join(', ');
+                        } else if (sourceType === 'local_file') {
+                            const pathInput = card.querySelector('.ds-local-path');
+                            const fmtSelect = card.querySelector('.ds-local-format');
+                            if (pathInput) pathInput.value = src.file_path || '';
+                            if (fmtSelect && src.file_format) fmtSelect.value = src.file_format;
+                        }
+
+                        // Restore per-card column mapping by pre-populating the dropdowns
+                        // with the known source columns (keys of the mapping) so selected
+                        // values survive even before the user clicks Inspect.
+                        if (src.column_mapping && Object.keys(src.column_mapping).length > 0) {
+                            const knownColumns = Object.keys(src.column_mapping);
+                            const pairs = [
+                                ['.ds-map-prompt', 'prompt'],
+                                ['.ds-map-chosen', 'chosen'],
+                                ['.ds-map-rejected', 'rejected'],
+                                ['.ds-map-system', 'system'],
+                                ['.ds-map-reasoning', 'reasoning'],
+                            ];
+                            const reverse = {};
+                            for (const [k, v] of Object.entries(src.column_mapping)) reverse[v] = k;
+                            for (const [sel, std] of pairs) {
+                                const dropdown = card.querySelector(sel);
+                                if (!dropdown) continue;
+                                // Populate options (dedupe)
+                                while (dropdown.options.length > 1) dropdown.remove(1);
+                                for (const col of knownColumns) {
+                                    const opt = document.createElement('option');
+                                    opt.value = col;
+                                    opt.textContent = col;
+                                    dropdown.appendChild(opt);
+                                }
+                                if (reverse[std]) dropdown.value = reverse[std];
                             }
+                            card.querySelector('.ds-columns-list').textContent = knownColumns.join(', ');
+                            card.querySelector('.ds-colmap-config').style.display = 'block';
                         }
                     }
                 }

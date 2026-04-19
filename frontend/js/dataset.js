@@ -107,10 +107,68 @@ class DatasetManager {
         }
 
         this.additionalDatasetCounter = 0;
+
+        // React to training-mode changes for column mapping UI
+        const trainingModeEl = document.getElementById('training-mode');
+        if (trainingModeEl) {
+            trainingModeEl.addEventListener('change', (e) => {
+                this.updateColumnMappingForMode(e.target.value);
+            });
+            // Apply once on init
+            this.updateColumnMappingForMode(trainingModeEl.value);
+        }
     }
 
     /**
-     * Add an additional dataset source entry to the UI
+     * Update the rejected-column UI based on training mode.
+     * Paired preference modes: Required (red badge, dropdown enabled)
+     * KTO: Optional (gray badge, dropdown enabled)
+     * SFT: Not used (gray badge, dropdown disabled)
+     */
+    updateColumnMappingForMode(mode) {
+        const PAIRED = ['orpo', 'dpo', 'simpo', 'cpo', 'ipo'];
+        const badge = document.getElementById('rejected-badge');
+        const group = document.getElementById('map-rejected-group');
+        const select = document.getElementById('map-rejected');
+        const hint = document.getElementById('rejected-column-hint');
+        if (!badge || !select || !group || !hint) return;
+
+        badge.classList.remove('required', 'optional', 'not-used');
+
+        if (mode === 'sft') {
+            badge.textContent = 'Not used';
+            badge.classList.add('not-used');
+            group.classList.add('field-disabled');
+            select.disabled = true;
+            hint.textContent = 'SFT only uses the chosen response — this field is ignored.';
+        } else if (mode === 'kto') {
+            badge.textContent = 'Optional';
+            badge.classList.add('optional');
+            group.classList.remove('field-disabled');
+            select.disabled = false;
+            hint.textContent = 'Optional for KTO — provide to split into negative examples, or leave empty.';
+        } else if (PAIRED.includes(mode)) {
+            badge.textContent = 'Required';
+            badge.classList.add('required');
+            group.classList.remove('field-disabled');
+            select.disabled = false;
+            hint.textContent = 'Non-preferred response — required for preference optimization.';
+        } else {
+            badge.textContent = 'Optional';
+            badge.classList.add('optional');
+            group.classList.remove('field-disabled');
+            select.disabled = false;
+            hint.textContent = 'Non-preferred response.';
+        }
+
+        // Propagate to any additional-dataset cards
+        document.querySelectorAll('#additional-datasets-list .additional-dataset-entry')
+            .forEach(card => this.applyModeToCard(card, mode));
+    }
+
+    /**
+     * Add an additional dataset source entry to the UI as a full card
+     * with its own source config, inspect button, and column mapping.
      */
     addAdditionalDataset() {
         this.additionalDatasetCounter++;
@@ -118,60 +176,292 @@ class DatasetManager {
         const container = document.getElementById('additional-datasets-list');
         if (!container) return;
 
-        const entry = document.createElement('div');
-        entry.className = 'additional-dataset-entry';
-        entry.dataset.id = id;
-        entry.style.cssText = 'border: 1px solid var(--light-purple); border-radius: 10px; padding: 15px; margin-bottom: 10px; position: relative; background: #faf8ff;';
-        entry.innerHTML = `
-            <button type="button" class="remove-dataset-btn" data-id="${id}" style="position: absolute; top: 8px; right: 8px; background: none; border: none; cursor: pointer; font-size: 1.2em; color: #999;" title="Remove dataset">&times;</button>
-            <div class="form-group" style="margin-bottom: 8px;">
-                <label style="font-size: 0.9em;">HuggingFace Repository ID</label>
-                <input type="text" class="magic-input additional-ds-repo" placeholder="username/dataset-name">
+        // Primary dataset is implicitly #1, so additional cards start at #2
+        const displayNum = container.querySelectorAll('.additional-dataset-entry').length + 2;
+
+        const card = document.createElement('div');
+        card.className = 'dataset-card additional-dataset-entry';
+        card.dataset.id = id;
+        card.innerHTML = `
+            <div class="dataset-card-header">
+                <span class="dataset-card-title">📦 Dataset ${displayNum}</span>
+                <button type="button" class="remove-dataset-btn" title="Remove dataset">&times;</button>
             </div>
-            <div class="form-row" style="gap: 10px;">
-                <div class="form-group" style="flex: 1;">
-                    <label style="font-size: 0.9em;">Split</label>
-                    <input type="text" class="magic-input additional-ds-split" value="train">
+            <div class="dataset-card-body">
+                <div class="form-group">
+                    <label>Source Type</label>
+                    <select class="magic-select ds-source-type">
+                        <option value="huggingface">HuggingFace Dataset</option>
+                        <option value="local_file">Local File Path</option>
+                    </select>
                 </div>
-                <div class="form-group" style="flex: 2;">
-                    <label style="font-size: 0.9em;">Column Mapping (optional, comma-separated key=value)</label>
-                    <input type="text" class="magic-input additional-ds-colmap" placeholder="e.g. input=prompt,output=chosen,bad=rejected">
+
+                <div class="ds-hf-config">
+                    <div class="form-row">
+                        <div class="form-group" style="flex: 2;">
+                            <label>Repository ID</label>
+                            <input type="text" class="magic-input ds-repo" placeholder="username/dataset-name">
+                        </div>
+                        <div class="form-group" style="flex: 1;">
+                            <label>Split</label>
+                            <input type="text" class="magic-input ds-split" value="train">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="ds-local-config" style="display: none;">
+                    <div class="form-row">
+                        <div class="form-group" style="flex: 2;">
+                            <label>File Path</label>
+                            <input type="text" class="magic-input ds-local-path" placeholder="/path/to/dataset.json">
+                        </div>
+                        <div class="form-group" style="flex: 1;">
+                            <label>Format</label>
+                            <select class="magic-select ds-local-format">
+                                <option value="">Auto-detect</option>
+                                <option value="json">JSON</option>
+                                <option value="csv">CSV</option>
+                                <option value="parquet">Parquet</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <button type="button" class="action-button ds-inspect-btn" style="width: 100%; margin-top: 8px;">
+                    🔍 Inspect Columns
+                </button>
+
+                <div class="ds-colmap-config" style="display: none; margin-top: 12px;">
+                    <div class="ds-columns-summary" style="background: #f5f7fa; padding: 10px; border-radius: 8px; margin-bottom: 10px; font-size: 0.85em;">
+                        <strong style="color: var(--primary-purple);">Columns:</strong>
+                        <span class="ds-columns-list"></span>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label>Prompt <span class="col-badge required">Required</span></label>
+                            <select class="magic-select ds-map-prompt">
+                                <option value="">-- Select --</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Chosen <span class="col-badge required">Required</span></label>
+                            <select class="magic-select ds-map-chosen">
+                                <option value="">-- Select --</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group ds-map-rejected-group">
+                            <label>Rejected <span class="col-badge ds-rejected-badge required">Required</span></label>
+                            <select class="magic-select ds-map-rejected">
+                                <option value="">-- None --</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>System <span class="col-badge optional">Optional</span></label>
+                            <select class="magic-select ds-map-system">
+                                <option value="">-- None --</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label>Reasoning <span class="col-badge optional">Optional</span></label>
+                        <select class="magic-select ds-map-reasoning">
+                            <option value="">-- None --</option>
+                        </select>
+                    </div>
                 </div>
             </div>
         `;
-        container.appendChild(entry);
+        container.appendChild(card);
 
-        entry.querySelector('.remove-dataset-btn').addEventListener('click', () => {
-            entry.remove();
+        // Wire remove button
+        card.querySelector('.remove-dataset-btn').addEventListener('click', () => {
+            card.remove();
+            this.renumberAdditionalCards();
         });
+
+        // Wire source-type toggle
+        const sourceTypeSel = card.querySelector('.ds-source-type');
+        sourceTypeSel.addEventListener('change', (e) => {
+            const t = e.target.value;
+            card.querySelector('.ds-hf-config').style.display = t === 'huggingface' ? 'block' : 'none';
+            card.querySelector('.ds-local-config').style.display = t === 'local_file' ? 'block' : 'none';
+        });
+
+        // Wire inspect button
+        card.querySelector('.ds-inspect-btn').addEventListener('click', () => {
+            this.inspectCardColumns(card);
+        });
+
+        // Reflect current training mode on the card's rejected field
+        const mode = document.getElementById('training-mode')?.value || 'orpo';
+        this.applyModeToCard(card, mode);
+    }
+
+    /**
+     * Re-number the "Dataset N" titles after a card is removed.
+     */
+    renumberAdditionalCards() {
+        const cards = document.querySelectorAll('#additional-datasets-list .additional-dataset-entry');
+        cards.forEach((card, idx) => {
+            const titleEl = card.querySelector('.dataset-card-title');
+            if (titleEl) titleEl.textContent = `📦 Dataset ${idx + 2}`;
+        });
+    }
+
+    /**
+     * Build a minimal DatasetConfig for a card to pass to /dataset/columns.
+     */
+    buildCardSourceConfig(card) {
+        const sourceType = card.querySelector('.ds-source-type').value;
+        const source = { source_type: sourceType };
+
+        if (sourceType === 'huggingface') {
+            const repoId = card.querySelector('.ds-repo').value.trim();
+            if (!repoId) throw new Error('Repository ID is required');
+            source.repo_id = repoId;
+            source.split = card.querySelector('.ds-split').value.trim() || 'train';
+        } else if (sourceType === 'local_file') {
+            const filePath = card.querySelector('.ds-local-path').value.trim();
+            if (!filePath) throw new Error('File path is required');
+            source.file_path = filePath;
+            const fmt = card.querySelector('.ds-local-format').value;
+            if (fmt) source.file_format = fmt;
+        }
+
+        return {
+            source: source,
+            format: { format_type: 'chatml' },  // Dummy format — only source matters for /dataset/columns
+            test_size: 0.1
+        };
+    }
+
+    /**
+     * Inspect columns for a single additional-dataset card.
+     */
+    async inspectCardColumns(card) {
+        const btn = card.querySelector('.ds-inspect-btn');
+        try {
+            LoadingManager.show(btn, '⏳ Loading columns...');
+            const cfg = this.buildCardSourceConfig(card);
+            const data = await MerlinaAPI.getDatasetColumns(cfg);
+
+            // Populate mapping dropdowns
+            const selects = [
+                ['.ds-map-prompt', 'prompt'],
+                ['.ds-map-chosen', 'chosen'],
+                ['.ds-map-rejected', 'rejected'],
+                ['.ds-map-system', 'system'],
+                ['.ds-map-reasoning', 'reasoning'],
+            ];
+            selects.forEach(([selector, target]) => {
+                const sel = card.querySelector(selector);
+                if (!sel) return;
+                // Clear options except first
+                while (sel.options.length > 1) sel.remove(1);
+                data.columns.forEach(col => {
+                    const opt = document.createElement('option');
+                    opt.value = col;
+                    opt.textContent = col;
+                    sel.appendChild(opt);
+                });
+                // Auto-select if column name matches
+                if (data.columns.includes(target)) sel.value = target;
+            });
+
+            // Show columns list + mapping UI
+            card.querySelector('.ds-columns-list').textContent = data.columns.join(', ');
+            card.querySelector('.ds-colmap-config').style.display = 'block';
+
+            this.toast.success(`Found ${data.columns.length} columns`);
+        } catch (error) {
+            console.error('Card inspect failed:', error);
+            this.toast.error(`Inspect failed: ${error.message}`);
+        } finally {
+            LoadingManager.hide(btn);
+        }
+    }
+
+    /**
+     * Apply the current training mode to a single card's rejected-column UI.
+     */
+    applyModeToCard(card, mode) {
+        const PAIRED = ['orpo', 'dpo', 'simpo', 'cpo', 'ipo'];
+        const badge = card.querySelector('.ds-rejected-badge');
+        const group = card.querySelector('.ds-map-rejected-group');
+        const select = card.querySelector('.ds-map-rejected');
+        if (!badge || !group || !select) return;
+
+        badge.classList.remove('required', 'optional', 'not-used');
+        if (mode === 'sft') {
+            badge.textContent = 'Not used';
+            badge.classList.add('not-used');
+            group.classList.add('field-disabled');
+            select.disabled = true;
+        } else if (mode === 'kto') {
+            badge.textContent = 'Optional';
+            badge.classList.add('optional');
+            group.classList.remove('field-disabled');
+            select.disabled = false;
+        } else if (PAIRED.includes(mode)) {
+            badge.textContent = 'Required';
+            badge.classList.add('required');
+            group.classList.remove('field-disabled');
+            select.disabled = false;
+        } else {
+            badge.textContent = 'Optional';
+            badge.classList.add('optional');
+            group.classList.remove('field-disabled');
+            select.disabled = false;
+        }
+    }
+
+    /**
+     * Read a card's column mapping into a {sourceCol: standardName} object.
+     */
+    getCardColumnMapping(card) {
+        const mapping = {};
+        const pairs = [
+            ['.ds-map-prompt', 'prompt'],
+            ['.ds-map-chosen', 'chosen'],
+            ['.ds-map-rejected', 'rejected'],
+            ['.ds-map-system', 'system'],
+            ['.ds-map-reasoning', 'reasoning'],
+        ];
+        for (const [selector, target] of pairs) {
+            const val = card.querySelector(selector)?.value;
+            if (val) mapping[val] = target;
+        }
+        return mapping;
     }
 
     /**
      * Get additional dataset sources from the UI
      */
     getAdditionalSources() {
-        const entries = document.querySelectorAll('.additional-dataset-entry');
+        const cards = document.querySelectorAll('#additional-datasets-list .additional-dataset-entry');
         const sources = [];
-        for (const entry of entries) {
-            const repoId = entry.querySelector('.additional-ds-repo')?.value?.trim();
-            if (!repoId) continue;
+        for (const card of cards) {
+            const sourceType = card.querySelector('.ds-source-type')?.value || 'huggingface';
+            const source = { source_type: sourceType };
 
-            const source = {
-                source_type: 'huggingface',
-                repo_id: repoId,
-                split: entry.querySelector('.additional-ds-split')?.value?.trim() || 'train',
-            };
+            if (sourceType === 'huggingface') {
+                const repoId = card.querySelector('.ds-repo')?.value?.trim();
+                if (!repoId) continue;
+                source.repo_id = repoId;
+                source.split = card.querySelector('.ds-split')?.value?.trim() || 'train';
+            } else if (sourceType === 'local_file') {
+                const filePath = card.querySelector('.ds-local-path')?.value?.trim();
+                if (!filePath) continue;
+                source.file_path = filePath;
+                const fmt = card.querySelector('.ds-local-format')?.value;
+                if (fmt) source.file_format = fmt;
+            }
 
-            const colmapStr = entry.querySelector('.additional-ds-colmap')?.value?.trim();
-            if (colmapStr) {
-                const mapping = {};
-                for (const pair of colmapStr.split(',')) {
-                    const [key, value] = pair.split('=').map(s => s.trim());
-                    if (key && value) mapping[key] = value;
-                }
-                if (Object.keys(mapping).length > 0) {
-                    source.column_mapping = mapping;
-                }
+            const mapping = this.getCardColumnMapping(card);
+            if (Object.keys(mapping).length > 0) {
+                source.column_mapping = mapping;
             }
 
             sources.push(source);
