@@ -14,6 +14,7 @@ except ImportError:
     WebSocketManager = None
 
 from .preflight_checks import PreflightValidator, validate_config, ValidationError
+from .llama_cpp_resolver import resolve_llama_cpp, LlamaCppResolution
 
 # Utility functions and constants
 from .utils import (
@@ -67,6 +68,9 @@ __all__ = [
     'PreflightValidator',
     'validate_config',
     'ValidationError',
+    # llama.cpp integration
+    'resolve_llama_cpp',
+    'LlamaCppResolution',
     # Utilities
     'get_num_gpus',
     'calculate_effective_batch_size',

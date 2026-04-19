@@ -670,11 +670,31 @@ class PreflightValidator:
         except ImportError:
             xformers_available = False
 
+        llama_cpp_info = self._check_llama_cpp()
+
         return {
             "flash_attention": flash_available,
             "xformers": xformers_available,
+            "llama_cpp": llama_cpp_info,
             "issues": issues
         }
+
+    def _check_llama_cpp(self) -> Dict[str, Any]:
+        """
+        Report llama.cpp availability. Purely informational — missing binaries
+        surface as a single warning so GGUF export / synthetic-data features
+        can be grayed out in the UI without blocking training.
+        """
+        from .llama_cpp_resolver import resolve_llama_cpp
+
+        resolution = resolve_llama_cpp()
+
+        if not resolution.available:
+            # Only propagate the top-level hint, not the per-binary noise.
+            if resolution.warnings:
+                self.warnings.append(resolution.warnings[0])
+
+        return resolution.to_dict()
 
 
 def validate_config(config: Any) -> Tuple[bool, Dict[str, Any]]:
