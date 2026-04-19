@@ -115,6 +115,7 @@ class JobsProxy:
             "loss": job.loss,
             "error": job.error,
             "upload_error": job.upload_error,
+            "gguf_error": job.gguf_error,
             "wandb_url": job.wandb_url
         }
 
@@ -319,6 +320,20 @@ class TrainingConfig(BaseModel):
     hf_token: Optional[str] = Field(None, description="HuggingFace token for pushing")
     wandb_key: Optional[str] = Field(None, description="Weights & Biases API key")
 
+    # GGUF export (llama.cpp)
+    export_gguf: bool = Field(
+        False,
+        description="After training, merge and export the model to one or more GGUF files via llama.cpp"
+    )
+    gguf_quant_types: list[str] = Field(
+        default_factory=lambda: ["Q4_K_M"],
+        description="GGUF quantization types to produce. Supported: F16, Q8_0, Q6_K, Q5_K_M, Q5_K_S, Q4_K_M, Q4_K_S, Q3_K_M, Q2_K"
+    )
+    keep_gguf_fp16: bool = Field(
+        False,
+        description="Retain the intermediate fp16 GGUF after quantization (also kept automatically if F16 is in gguf_quant_types)"
+    )
+
     # Priority 2 settings (advanced)
     shuffle_dataset: bool = Field(True, description="Shuffle training data")
     weight_decay: float = Field(0.01, ge=0.0, le=0.5, description="L2 regularization strength")
@@ -401,6 +416,23 @@ class TrainingConfig(BaseModel):
         self.wandb_key = resolve_wandb_key(self.wandb_key)
         return self
 
+    @model_validator(mode="after")
+    def _validate_gguf_quant_types(self):
+        """Normalize + validate requested GGUF quant types (uppercase, dedup)."""
+        if not self.export_gguf:
+            return self
+        from src.gguf_exporter import normalize_quant_types
+        try:
+            self.gguf_quant_types = normalize_quant_types(self.gguf_quant_types)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        if not self.gguf_quant_types:
+            raise ValueError(
+                "export_gguf is enabled but gguf_quant_types is empty — "
+                "pick at least one (e.g. 'Q4_K_M')."
+            )
+        return self
+
 class JobResponse(BaseModel):
     job_id: str
     status: str
@@ -415,6 +447,7 @@ class JobStatus(BaseModel):
     loss: Optional[float] = None
     error: Optional[str] = None
     upload_error: Optional[str] = None
+    gguf_error: Optional[str] = None
     wandb_url: Optional[str] = None
     queue_position: Optional[int] = None
     queue_state: Optional[str] = None
@@ -425,12 +458,54 @@ class JobStatus(BaseModel):
 class InferenceLoadRequest(BaseModel):
     """Request to load a model for inference"""
     model_name: str = Field(..., description="HuggingFace model ID, local path, or name of a trained model in models/ directory")
-    use_4bit: bool = Field(True, description="Load with 4-bit quantization")
+    use_4bit: bool = Field(True, description="Load with 4-bit quantization (transformers backend only)")
     hf_token: Optional[str] = Field(None, description="HuggingFace token for gated models")
+
+    # llama.cpp / GGUF backend
+    backend: str = Field(
+        "transformers",
+        description="Inference backend: 'transformers' (base + LoRA on GPU) or 'llama_cpp' (GGUF via llama-server)"
+    )
+    gguf_path: Optional[str] = Field(
+        None,
+        description="Absolute path to a GGUF file. Required when backend='llama_cpp'. If omitted, the resolver looks for a manifest under ./models/{model_name}/gguf/"
+    )
+    gguf_quant_type: Optional[str] = Field(
+        None,
+        description="Preferred GGUF quant type when the model has multiple manifest entries (e.g. 'Q4_K_M'). Ignored if gguf_path is set."
+    )
+    llama_server_port: int = Field(
+        8080,
+        ge=1024,
+        le=65535,
+        description="Port to bind llama-server on (llama_cpp backend only)"
+    )
+    n_gpu_layers: int = Field(
+        -1,
+        ge=-1,
+        le=999,
+        description="Layers to offload to GPU for llama-server. -1 = all layers (recommended if VRAM allows), 0 = CPU only."
+    )
+    context_size: int = Field(
+        4096,
+        ge=256,
+        le=131072,
+        description="Context window for llama-server"
+    )
 
     @model_validator(mode="after")
     def _fill_hf_token_from_env(self):
         self.hf_token = resolve_hf_token(self.hf_token)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_backend(self):
+        self.backend = (self.backend or "transformers").lower()
+        if self.backend not in {"transformers", "llama_cpp"}:
+            raise ValueError(
+                f"Unknown inference backend '{self.backend}'. "
+                "Expected 'transformers' or 'llama_cpp'."
+            )
         return self
 
 class InferenceChatRequest(BaseModel):
@@ -461,8 +536,52 @@ _inference_state = {
     "is_lora": False,
     "base_model_name": None,
     "use_4bit": False,
+    # llama.cpp / GGUF backend
+    "backend": "transformers",       # "transformers" | "llama_cpp"
+    "llama_server": None,            # Optional[LlamaServerProcess]
+    "gguf_path": None,               # Optional[str] — absolute path of active GGUF
+    "gguf_quant_type": None,         # Optional[str]
 }
 _inference_lock = threading.Lock()
+
+
+def _unload_current_inference() -> Optional[str]:
+    """
+    Tear down whichever inference backend is active. Caller must NOT hold
+    ``_inference_lock`` — this function acquires it. Returns the name of
+    the previously loaded model, or ``None`` if nothing was loaded.
+    """
+    with _inference_lock:
+        prev_backend = _inference_state.get("backend")
+        prev_name = _inference_state.get("model_name")
+        llama_server = _inference_state.get("llama_server")
+
+        if _inference_state.get("model") is not None:
+            _inference_state["model"] = None
+        _inference_state["tokenizer"] = None
+        _inference_state["model_name"] = None
+        _inference_state["is_lora"] = False
+        _inference_state["base_model_name"] = None
+        _inference_state["use_4bit"] = False
+        _inference_state["backend"] = "transformers"
+        _inference_state["llama_server"] = None
+        _inference_state["gguf_path"] = None
+        _inference_state["gguf_quant_type"] = None
+
+    # Stop subprocess outside the lock so a slow shutdown doesn't block
+    # concurrent status queries.
+    if llama_server is not None:
+        try:
+            llama_server.stop()
+        except Exception:
+            logger.exception("Error while stopping llama-server")
+
+    if prev_backend != "llama_cpp":
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    return prev_name
 
 # Mount static files for frontend
 if FRONTEND_DIR.exists():
@@ -616,6 +735,24 @@ async def get_env_secrets_status():
     have to paste them into the UI.
     """
     return env_secret_status()
+
+
+@app.get("/llama-cpp/status")
+async def get_llama_cpp_status():
+    """
+    Report whether llama.cpp is resolvable so the UI can enable/disable
+    GGUF export controls without running the full preflight validator.
+
+    Returns the resolution dict (binaries list, source, warnings). Never
+    raises — a missing llama.cpp is not an error, just a disabled feature.
+    """
+    from src.llama_cpp_resolver import resolve_llama_cpp
+    from src.gguf_exporter import SUPPORTED_QUANT_TYPES, DEFAULT_QUANT_TYPES
+
+    resolution = resolve_llama_cpp().to_dict()
+    resolution["supported_quant_types"] = list(SUPPORTED_QUANT_TYPES)
+    resolution["default_quant_types"] = list(DEFAULT_QUANT_TYPES)
+    return resolution
 
 
 @app.get("/presets")
@@ -802,6 +939,7 @@ async def get_job_status(job_id: str):
         loss=job.get("loss"),
         error=job.get("error"),
         upload_error=job.get("upload_error"),
+        gguf_error=job.get("gguf_error"),
         wandb_url=job.get("wandb_url"),
         queue_position=queue_status.get("position"),
         queue_state=queue_status.get("state")
@@ -837,6 +975,7 @@ async def get_job_history(limit: int = 50, offset: int = 0, status: Optional[str
                 "output_dir": job.output_dir,
                 "error": job.error,
                 "upload_error": job.upload_error,
+                "gguf_error": job.gguf_error,
                 "config_summary": {
                     "base_model": job.config.get("base_model", ""),
                     "output_name": job.config.get("output_name", ""),
@@ -2259,6 +2398,35 @@ async def list_inference_models():
                 model_info["is_lora"] = False
                 model_info["base_model"] = None
 
+            # Attach GGUF manifest if the training job produced any.
+            gguf_manifest_path = model_dir / "gguf" / "manifest.json"
+            if gguf_manifest_path.is_file():
+                import json as _json
+                try:
+                    with open(gguf_manifest_path) as f:
+                        manifest = _json.load(f)
+                    # Surface just what the UI needs; keep the absolute
+                    # file path so the client can round-trip it into
+                    # /inference/load without re-reading the manifest.
+                    gguf_entries = []
+                    for artifact in manifest.get("artifacts", []):
+                        filename = artifact.get("filename")
+                        gguf_entries.append({
+                            "quant_type": artifact.get("quant_type"),
+                            "filename": filename,
+                            "size_bytes": artifact.get("size_bytes"),
+                            "path": artifact.get("path") or (
+                                str(model_dir / "gguf" / filename) if filename else None
+                            ),
+                        })
+                    if gguf_entries:
+                        model_info["gguf"] = gguf_entries
+                except Exception as exc:
+                    logger.debug(
+                        "Could not read GGUF manifest for %s: %s",
+                        model_dir.name, exc,
+                    )
+
             local_models.append(model_info)
 
     return {"models": local_models}
@@ -2268,25 +2436,77 @@ async def list_inference_models():
 async def load_inference_model(request: InferenceLoadRequest):
     """Load a model for inference."""
 
-    with _inference_lock:
-        # Unload existing model first
-        if _inference_state["model"] is not None:
-            del _inference_state["model"]
-            _inference_state["model"] = None
-            _inference_state["tokenizer"] = None
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+    # Unload any currently-loaded model (either backend).
+    _unload_current_inference()
 
     model_name = request.model_name
-    is_lora = False
-    base_model_name = None
 
-    # Check if it's a trained model from models/ directory
+    # Resolve the local models directory once — both backends use it.
     if settings.models_dir.is_absolute():
         models_dir = settings.models_dir
     else:
         models_dir = SCRIPT_DIR / settings.models_dir
+
+    # ---------------- llama.cpp / GGUF backend ----------------
+    if request.backend == "llama_cpp":
+        from src.llama_server import (
+            LlamaServerError,
+            LlamaServerProcess,
+            resolve_gguf_for_model,
+        )
+
+        # Resolve the GGUF file. Precedence:
+        #   1. explicit absolute path
+        #   2. models/{model_name}/gguf/manifest.json (optionally filtered by quant_type)
+        if request.gguf_path:
+            gguf_path = Path(request.gguf_path).expanduser()
+        else:
+            gguf_path = resolve_gguf_for_model(
+                models_dir,
+                model_name,
+                preferred_quant=request.gguf_quant_type,
+            )
+        if not gguf_path or not Path(gguf_path).is_file():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"No GGUF file found for '{model_name}'. Run the training "
+                    "job with export_gguf=True, or pass gguf_path explicitly."
+                ),
+            )
+
+        try:
+            server = LlamaServerProcess(
+                gguf_path=Path(gguf_path),
+                port=request.llama_server_port,
+                n_gpu_layers=request.n_gpu_layers,
+                context_size=request.context_size,
+            )
+            server.start()
+        except LlamaServerError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        with _inference_lock:
+            _inference_state["backend"] = "llama_cpp"
+            _inference_state["llama_server"] = server
+            _inference_state["model_name"] = model_name
+            _inference_state["gguf_path"] = str(gguf_path)
+            _inference_state["gguf_quant_type"] = request.gguf_quant_type
+
+        return {
+            "status": "loaded",
+            "backend": "llama_cpp",
+            "model_name": model_name,
+            "gguf_path": str(gguf_path),
+            "gguf_quant_type": request.gguf_quant_type,
+            "server_url": server.base_url,
+            "context_size": request.context_size,
+            "n_gpu_layers": request.n_gpu_layers,
+        }
+
+    # ---------------- transformers backend (existing path) ----------------
+    is_lora = False
+    base_model_name = None
     local_adapter_path = models_dir / model_name
 
     has_adapter = (
@@ -2382,6 +2602,7 @@ async def load_inference_model(request: InferenceLoadRequest):
             _inference_state["is_lora"] = is_lora
             _inference_state["base_model_name"] = base_model_name
             _inference_state["use_4bit"] = request.use_4bit
+            _inference_state["backend"] = "transformers"
 
         # Get memory usage
         gpu_mem = None
@@ -2390,6 +2611,7 @@ async def load_inference_model(request: InferenceLoadRequest):
 
         return {
             "status": "loaded",
+            "backend": "transformers",
             "model_name": model_name,
             "is_lora": is_lora,
             "base_model": base_model_name,
@@ -2413,25 +2635,15 @@ async def load_inference_model(request: InferenceLoadRequest):
 async def unload_inference_model():
     """Unload the current inference model to free VRAM"""
     with _inference_lock:
-        if _inference_state["model"] is None:
+        has_transformers_model = _inference_state.get("model") is not None
+        has_llama_server = _inference_state.get("llama_server") is not None
+        if not has_transformers_model and not has_llama_server:
             return {"status": "no_model", "message": "No model is currently loaded"}
 
-        model_name = _inference_state["model_name"]
-        del _inference_state["model"]
-        _inference_state["model"] = None
-        _inference_state["tokenizer"] = None
-        _inference_state["model_name"] = None
-        _inference_state["is_lora"] = False
-        _inference_state["base_model_name"] = None
-        _inference_state["use_4bit"] = False
-
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
+    prev_name = _unload_current_inference()
     return {
         "status": "unloaded",
-        "message": f"Model '{model_name}' unloaded",
+        "message": f"Model '{prev_name}' unloaded",
     }
 
 
@@ -2439,7 +2651,21 @@ async def unload_inference_model():
 async def inference_status():
     """Get the current inference model status"""
     with _inference_lock:
-        if _inference_state["model"] is None:
+        backend = _inference_state.get("backend", "transformers")
+        if backend == "llama_cpp":
+            server = _inference_state.get("llama_server")
+            if server is None or not server.is_running():
+                return {"loaded": False}
+            return {
+                "loaded": True,
+                "backend": "llama_cpp",
+                "model_name": _inference_state.get("model_name"),
+                "gguf_path": _inference_state.get("gguf_path"),
+                "gguf_quant_type": _inference_state.get("gguf_quant_type"),
+                "server_url": server.base_url,
+            }
+
+        if _inference_state.get("model") is None:
             return {"loaded": False}
 
         gpu_mem = None
@@ -2448,6 +2674,7 @@ async def inference_status():
 
         return {
             "loaded": True,
+            "backend": "transformers",
             "model_name": _inference_state["model_name"],
             "is_lora": _inference_state["is_lora"],
             "base_model": _inference_state["base_model_name"],
@@ -2460,8 +2687,41 @@ async def inference_status():
 async def inference_chat(request: InferenceChatRequest):
     """Generate a response from the loaded model"""
     with _inference_lock:
-        model = _inference_state["model"]
-        tokenizer = _inference_state["tokenizer"]
+        backend = _inference_state.get("backend", "transformers")
+        model = _inference_state.get("model")
+        tokenizer = _inference_state.get("tokenizer")
+        llama_server = _inference_state.get("llama_server")
+        active_name = _inference_state.get("model_name")
+
+    if backend == "llama_cpp":
+        from src.llama_server import LlamaServerError
+        if llama_server is None or not llama_server.is_running():
+            raise HTTPException(
+                status_code=400,
+                detail="No llama.cpp model loaded. Use /inference/load first",
+            )
+        try:
+            result = await asyncio.to_thread(
+                llama_server.chat,
+                request.messages,
+                max_tokens=request.max_new_tokens,
+                temperature=request.temperature,
+                top_p=request.top_p,
+                top_k=request.top_k,
+                repetition_penalty=request.repetition_penalty,
+                do_sample=request.do_sample,
+            )
+        except LlamaServerError as exc:
+            logger.error("llama-server chat failed: %s", exc)
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        return {
+            "response": result["content"],
+            "tokens_generated": result.get("completion_tokens"),
+            "model_name": active_name,
+            "backend": "llama_cpp",
+            "finish_reason": result.get("finish_reason"),
+        }
 
     if model is None or tokenizer is None:
         raise HTTPException(
@@ -2515,7 +2775,8 @@ async def inference_chat(request: InferenceChatRequest):
         return {
             "response": response_text,
             "tokens_generated": n_tokens,
-            "model_name": _inference_state["model_name"],
+            "model_name": active_name,
+            "backend": "transformers",
         }
 
     except Exception as e:

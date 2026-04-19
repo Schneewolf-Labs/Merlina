@@ -313,6 +313,11 @@ class MerlinaApp {
             merge_lora_before_upload: document.getElementById('merge-lora-before-upload')?.checked ?? true,
             hf_hub_private: document.getElementById('hf-hub-private')?.checked ?? true,
 
+            // GGUF export (llama.cpp)
+            export_gguf: document.getElementById('export-gguf')?.checked ?? false,
+            gguf_quant_types: Array.from(document.querySelectorAll('.gguf-quant:checked')).map(cb => cb.value),
+            keep_gguf_fp16: document.getElementById('keep-gguf-fp16')?.checked ?? false,
+
             // API Keys
             wandb_key: document.getElementById('wandb-key')?.value || null,
             hf_token: document.getElementById('hf-token')?.value || document.getElementById('hf-token-preload')?.value || null,
@@ -904,6 +909,54 @@ class MerlinaApp {
             if (pushHub.checked) {
                 hfHubConfig.style.display = 'block';
             }
+        }
+
+        // GGUF export config
+        const exportGguf = document.getElementById('export-gguf');
+        const ggufConfig = document.getElementById('gguf-export-config');
+        if (exportGguf && ggufConfig) {
+            exportGguf.addEventListener('change', (e) => {
+                ggufConfig.style.display = e.target.checked ? 'block' : 'none';
+            });
+            if (exportGguf.checked) {
+                ggufConfig.style.display = 'block';
+            }
+        }
+
+        // Check llama.cpp availability and update the hint / disable state
+        this.refreshGgufAvailabilityHint();
+    }
+
+    /**
+     * Probe the validator for llama.cpp availability and update the UI.
+     * Never blocks form submission — missing llama.cpp surfaces as a
+     * dimmed hint + disabled checkbox so users can still train.
+     */
+    async refreshGgufAvailabilityHint() {
+        const exportGguf = document.getElementById('export-gguf');
+        const hint = document.getElementById('gguf-availability-hint');
+        if (!exportGguf || !hint) return;
+
+        try {
+            const resp = await fetch('/llama-cpp/status');
+            if (!resp.ok) return;
+            const data = await resp.json();
+            if (data.available) {
+                const source = data.source || 'resolver';
+                hint.textContent = `— ready (${source})`;
+                hint.style.color = '#10b981';
+                exportGguf.disabled = false;
+            } else {
+                hint.textContent = '— llama.cpp not detected';
+                hint.style.color = '#ef4444';
+                exportGguf.disabled = true;
+                exportGguf.checked = false;
+                const cfg = document.getElementById('gguf-export-config');
+                if (cfg) cfg.style.display = 'none';
+            }
+        } catch (err) {
+            // Best-effort: if the endpoint doesn't exist, leave UI unchanged.
+            console.debug('llama.cpp status probe failed:', err);
         }
     }
 

@@ -215,6 +215,9 @@ class JobManager {
                 console.warn('WebSocket error, falling back to polling:', message);
                 this.useWebSocket = false;
                 this.startPollingMonitoring(jobId);
+            },
+            onGgufProgress: (data) => {
+                this.handleGgufProgress(data);
             }
         });
 
@@ -385,6 +388,63 @@ class JobManager {
                 uploadErrorEl.style.display = 'none';
             }
         }
+
+        // Show GGUF export warning if present (non-fatal — training still succeeded)
+        const ggufErrorEl = document.getElementById('gguf-error-message');
+        if (ggufErrorEl) {
+            if (status.gguf_error && status.status === 'completed') {
+                ggufErrorEl.textContent = `GGUF export: ${status.gguf_error}`;
+                ggufErrorEl.style.display = 'block';
+            } else {
+                ggufErrorEl.style.display = 'none';
+            }
+        }
+    }
+
+    /**
+     * Render a live GGUF export progress pill on the active job panel.
+     * Driven by gguf_progress WebSocket events.
+     */
+    handleGgufProgress(data) {
+        const pill = document.getElementById('gguf-progress-pill');
+        if (!pill) return;
+
+        const { stage, quant_type, current, total, message, error } = data;
+        pill.style.display = 'inline-flex';
+
+        const label = document.createElement('span');
+        const detail = document.createElement('span');
+        detail.style.opacity = '0.8';
+        detail.style.marginLeft = '6px';
+        detail.style.fontSize = '0.85em';
+
+        if (stage === 'merging') {
+            pill.className = 'status-badge status-training';
+            label.textContent = '🔀 merging for GGUF';
+        } else if (stage === 'converting') {
+            pill.className = 'status-badge status-training';
+            label.textContent = '🔮 converting → fp16 GGUF';
+        } else if (stage === 'quantizing') {
+            pill.className = 'status-badge status-training';
+            const progress = (current && total) ? ` (${current}/${total})` : '';
+            label.textContent = `⚗️ quantizing ${quant_type || ''}${progress}`.trim();
+        } else if (stage === 'complete') {
+            pill.className = 'status-badge status-completed';
+            label.textContent = '✨ GGUF export complete';
+            // Fade out after a few seconds
+            setTimeout(() => { pill.style.display = 'none'; }, 6000);
+        } else if (stage === 'error') {
+            pill.className = 'status-badge status-failed';
+            label.textContent = `⚠️ GGUF export failed`;
+            detail.textContent = error || message || '';
+        } else {
+            pill.className = 'status-badge status-training';
+            label.textContent = `GGUF: ${stage}`;
+        }
+
+        pill.innerHTML = '';
+        pill.appendChild(label);
+        if (detail.textContent) pill.appendChild(detail);
     }
 
     /**

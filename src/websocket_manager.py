@@ -300,6 +300,51 @@ class WebSocketManager:
 
         await self.broadcast_to_job(job_id, message)
 
+    async def send_gguf_progress(
+        self,
+        job_id: str,
+        stage: str,
+        message: str,
+        *,
+        quant_type: Optional[str] = None,
+        current: Optional[int] = None,
+        total: Optional[int] = None,
+        artifact_path: Optional[str] = None,
+        error: Optional[str] = None,
+    ):
+        """
+        Send a GGUF export progress update.
+
+        Args:
+            job_id: Job identifier
+            stage: One of "merging", "converting", "quantizing", "complete", "error"
+            message: Human-readable status text (last line of subprocess output)
+            quant_type: Current quant (e.g. "Q4_K_M") when applicable
+            current: Current quant index (1-based)
+            total: Total number of quants in the batch
+            artifact_path: Absolute path to a newly-produced GGUF file
+            error: Error message when ``stage`` == "error"
+        """
+        payload: Dict[str, Any] = {
+            "type": "gguf_progress",
+            "job_id": job_id,
+            "stage": stage,
+            "message": message,
+            "timestamp": time.time(),
+        }
+        if quant_type is not None:
+            payload["quant_type"] = quant_type
+        if current is not None:
+            payload["current"] = current
+        if total is not None:
+            payload["total"] = total
+        if artifact_path is not None:
+            payload["artifact_path"] = artifact_path
+        if error is not None:
+            payload["error"] = error
+
+        await self.broadcast_to_job(job_id, payload)
+
     def get_connection_count(self, job_id: Optional[str] = None) -> int:
         """
         Get number of active connections.

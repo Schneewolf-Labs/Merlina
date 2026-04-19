@@ -25,6 +25,7 @@ import logging
 import asyncio
 import threading
 from datetime import datetime
+from pathlib import Path
 from typing import Optional, Dict, Any, Callable
 
 from transformers import (
@@ -377,6 +378,139 @@ def _run_background_upload(
             ),
             event_loop
         )
+
+
+def _run_background_gguf_export(
+    config: Any,
+    final_output_dir: str,
+    job_id: str,
+    job_manager: JobManager,
+    event_loop=None,
+    is_vlm: bool = False,
+) -> None:
+    """
+    Merge LoRA (if any) and produce GGUF files via llama.cpp in a background thread.
+
+    Writes artifacts into ``{final_output_dir}/gguf/`` plus a ``manifest.json``
+    sidecar that the inference picker reads. Never raises — failures are
+    attached to the job record via ``gguf_error`` and surfaced as a warning.
+    """
+    from .gguf_exporter import (
+        GGUFExportError,
+        ProgressEvent,
+        export_gguf_artifacts,
+        merge_lora_to_directory,
+    )
+    from .llama_cpp_resolver import resolve_llama_cpp
+
+    output_name = getattr(config, "output_name", "model")
+    gguf_dir = os.path.join(final_output_dir, "gguf")
+    os.makedirs(gguf_dir, exist_ok=True)
+
+    def _progress(event: ProgressEvent) -> None:
+        if websocket_manager is None:
+            return
+        send_websocket_update(
+            websocket_manager.send_gguf_progress(
+                job_id=job_id,
+                stage=event.stage,
+                message=event.message,
+                quant_type=event.quant_type,
+                current=event.current,
+                total=event.total,
+                artifact_path=event.artifact_path,
+                error=event.error,
+            ),
+            event_loop,
+        )
+
+    try:
+        resolution = resolve_llama_cpp()
+        if not resolution.available:
+            hint = resolution.warnings[0] if resolution.warnings else "llama.cpp not available"
+            logger.warning("Skipping GGUF export: %s", hint)
+            job_manager.update_job(job_id, gguf_error=hint)
+            _progress(ProgressEvent(stage="error", message=hint, error=hint))
+            return
+
+        # If a LoRA adapter was trained, produce a merged checkpoint first.
+        # Non-LoRA jobs (full fine-tune) already saved full weights to
+        # ``final_output_dir``, so we can convert directly.
+        if getattr(config, "use_lora", True):
+            merge_dir = tempfile.mkdtemp(prefix="merlina_gguf_merge_")
+            logger.info("Merging LoRA for GGUF export → %s", merge_dir)
+            _progress(ProgressEvent(
+                stage="merging",
+                message=f"Merging LoRA adapter ({config.base_model}) on CPU for GGUF export",
+            ))
+            try:
+                merge_lora_to_directory(
+                    base_model=config.base_model,
+                    adapter_dir=Path(final_output_dir),
+                    output_dir=Path(merge_dir),
+                    model_type=getattr(config, "model_type", "auto"),
+                    is_vlm=is_vlm,
+                )
+                source_dir = Path(merge_dir)
+                cleanup_merge = True
+            except Exception as merge_err:
+                shutil.rmtree(merge_dir, ignore_errors=True)
+                msg = f"LoRA merge for GGUF failed: {merge_err}"
+                logger.warning(msg)
+                job_manager.update_job(job_id, gguf_error=msg)
+                _progress(ProgressEvent(stage="error", message=msg, error=msg))
+                return
+        else:
+            source_dir = Path(final_output_dir)
+            cleanup_merge = False
+
+        try:
+            result = export_gguf_artifacts(
+                source_dir=source_dir,
+                output_dir=Path(gguf_dir),
+                output_name=output_name,
+                quant_types=getattr(config, "gguf_quant_types", ["Q4_K_M"]),
+                resolution=resolution,
+                keep_fp16=getattr(config, "keep_gguf_fp16", False),
+                base_model=getattr(config, "base_model", None),
+                callback=_progress,
+            )
+        finally:
+            if cleanup_merge:
+                shutil.rmtree(source_dir, ignore_errors=True)
+
+        if not result.artifacts:
+            msg = "GGUF export produced no artifacts"
+            logger.warning(msg)
+            job_manager.update_job(job_id, gguf_error=msg)
+            return
+
+        if result.failed_quants:
+            warn = (
+                f"GGUF export partial: produced {len(result.artifacts)} "
+                f"artifact(s); failed quants: {', '.join(result.failed_quants)}"
+            )
+            logger.warning(warn)
+            job_manager.update_job(job_id, gguf_error=warn)
+        else:
+            # Clear any prior error on full success
+            job_manager.update_job(job_id, gguf_error="")
+
+        logger.info(
+            "GGUF export finished for job %s: %d artifact(s) in %s",
+            job_id,
+            len(result.artifacts),
+            gguf_dir,
+        )
+
+    except GGUFExportError as exc:
+        logger.warning("GGUF export aborted for job %s: %s", job_id, exc)
+        job_manager.update_job(job_id, gguf_error=str(exc))
+        _progress(ProgressEvent(stage="error", message=str(exc), error=str(exc)))
+    except Exception as exc:
+        logger.exception("Unexpected error during GGUF export for job %s", job_id)
+        job_manager.update_job(job_id, gguf_error=f"unexpected error: {exc}")
+        _progress(ProgressEvent(stage="error", message=str(exc), error=str(exc)))
 
 
 def send_websocket_update(coro, loop=None):
@@ -1436,6 +1570,33 @@ def run_training_sync(
             logger.error(f"❌ Failed to start upload for job {job_id}: {upload_setup_err}", exc_info=True)
             logger.warning("⚠️ Training completed successfully, but upload could not be started")
             job_manager.update_job(job_id, upload_error=str(upload_setup_err))
+
+        # Optional: GGUF export. Runs in its own background thread so it
+        # neither blocks the job queue nor serializes with the HF upload.
+        # Failures are non-fatal; stored on the job record as gguf_error.
+        gguf_thread_started = False
+        try:
+            if getattr(config, "export_gguf", False) and not was_stopped:
+                is_distributed = torch.distributed.is_initialized()
+                should_export = (not is_distributed) or (torch.distributed.get_rank() == 0)
+                if should_export:
+                    logger.info("🔮 Starting background GGUF export thread...")
+                    gguf_thread = threading.Thread(
+                        target=_run_background_gguf_export,
+                        args=(config, final_output_dir, job_id, job_manager, event_loop, is_vlm),
+                        name=f"GGUFExportThread-{job_id}",
+                        daemon=False,
+                    )
+                    gguf_thread.start()
+                    gguf_thread_started = True
+                else:
+                    logger.info("⏭️ Skipping GGUF export (not main process in distributed training)")
+        except Exception as gguf_setup_err:
+            logger.error(
+                f"❌ Failed to start GGUF export for job {job_id}: {gguf_setup_err}",
+                exc_info=True,
+            )
+            job_manager.update_job(job_id, gguf_error=str(gguf_setup_err))
 
         # Mark as completed or stopped (unless upload thread is running - it will handle final status)
         if upload_thread_started:

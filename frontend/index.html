@@ -995,6 +995,43 @@
                             </div>
                         </div>
 
+                        <!-- GGUF Export (llama.cpp) -->
+                        <div class="checkbox-group">
+                            <label class="magic-checkbox">
+                                <input type="checkbox" id="export-gguf">
+                                <span>🪄 Export to GGUF (llama.cpp) <span id="gguf-availability-hint" style="font-size: 0.8em; color: #a78bfa;"></span></span>
+                            </label>
+                        </div>
+
+                        <div id="gguf-export-config" style="margin-top: 15px; display: none;">
+                            <div style="padding: 15px; background: #f5f3ff; border-radius: 10px; border-left: 3px solid #8b5cf6;">
+                                <h4 style="margin-top: 0; color: #8b5cf6; font-size: 0.95em;">🔮 GGUF Quantization</h4>
+                                <small style="color: #888; font-size: 0.85em; display: block; margin-bottom: 10px;">
+                                    After training, Merlina will merge the adapter and brew one GGUF per selected quant. Larger quants keep more quality; smaller quants run on weaker hardware.
+                                </small>
+
+                                <div id="gguf-quant-group" class="gguf-quant-checkboxes" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 16px; margin-top: 10px;">
+                                    <label class="magic-checkbox"><input type="checkbox" class="gguf-quant" value="F16"><span>F16</span></label>
+                                    <label class="magic-checkbox"><input type="checkbox" class="gguf-quant" value="Q8_0"><span>Q8_0</span></label>
+                                    <label class="magic-checkbox"><input type="checkbox" class="gguf-quant" value="Q6_K"><span>Q6_K</span></label>
+                                    <label class="magic-checkbox"><input type="checkbox" class="gguf-quant" value="Q5_K_M"><span>Q5_K_M</span></label>
+                                    <label class="magic-checkbox"><input type="checkbox" class="gguf-quant" value="Q5_K_S"><span>Q5_K_S</span></label>
+                                    <label class="magic-checkbox"><input type="checkbox" class="gguf-quant" value="Q4_K_M" checked><span>Q4_K_M ⭐</span></label>
+                                    <label class="magic-checkbox"><input type="checkbox" class="gguf-quant" value="Q4_K_S"><span>Q4_K_S</span></label>
+                                    <label class="magic-checkbox"><input type="checkbox" class="gguf-quant" value="Q3_K_M"><span>Q3_K_M</span></label>
+                                    <label class="magic-checkbox"><input type="checkbox" class="gguf-quant" value="Q2_K"><span>Q2_K</span></label>
+                                </div>
+
+                                <label class="magic-checkbox" style="margin-top: 12px;">
+                                    <input type="checkbox" id="keep-gguf-fp16">
+                                    <span>Keep intermediate fp16 GGUF</span>
+                                </label>
+                                <small style="color: #888; font-size: 0.85em; display: block; margin-left: 30px; margin-top: 5px;">
+                                    The fp16 GGUF is ~2× the size of a 7B model but serves as a high-quality starting point for further quantization. Automatically kept when F16 is checked above.
+                                </small>
+                            </div>
+                        </div>
+
                         <div class="checkbox-group">
                             <label class="magic-checkbox">
                                 <input type="checkbox" id="use-wandb" checked>
@@ -1263,6 +1300,10 @@
                         </button>
                     </div>
                     <div id="upload-error-message" style="display: none; margin-top: 10px; padding: 10px 14px; background: #fff3cd; color: #856404; border: 1px solid #ffc107; border-radius: 8px; font-size: 0.9em;"></div>
+                    <div style="margin-top: 10px;">
+                        <span id="gguf-progress-pill" class="status-badge" style="display: none;"></span>
+                    </div>
+                    <div id="gguf-error-message" style="display: none; margin-top: 10px; padding: 10px 14px; background: #f5f3ff; color: #6d28d9; border: 1px solid #c4b5fd; border-radius: 8px; font-size: 0.9em;"></div>
                 </div>
             </div>
         </div>
