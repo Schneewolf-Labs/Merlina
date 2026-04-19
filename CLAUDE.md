@@ -468,6 +468,18 @@ Tests are structured for independent execution (not using pytest fixtures):
 - Fixtures stored in `tests/fixtures/` directory
 - Test data: `tests/fixtures/test_dataset.json`
 
+### Frontend Tests
+
+Playwright-based integration tests live in `tests/frontend/` (`test_integration.spec.mjs`, `test_ui.mjs`, `test_api.mjs`, `test_validation.mjs`, `test_theme.mjs`). They drive the real UI against `serve_for_tests.py`, which mocks ML dependencies so the server can boot without torch/transformers.
+
+**When you change anything in `frontend/` (index.html, CSS, or JS), update the corresponding frontend tests in the same change.** This includes:
+- Renaming, removing, or restructuring DOM elements — update selectors in the specs
+- Changing default states (what's visible/hidden on load) — update the assertions
+- Reworking flows (e.g. unifying primary/additional datasets into one list) — rewrite the affected describe blocks rather than leaving them pointing at dead IDs
+- Adding new user-facing behavior — add a test for it
+
+Don't land frontend changes that leave the specs referencing IDs or classes that no longer exist. A quick `grep -rn '#old-id' tests/frontend/` before committing catches most of these.
+
 ## Common Workflows
 
 ### Adding a New Dataset Formatter

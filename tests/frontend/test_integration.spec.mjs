@@ -179,38 +179,51 @@ test.describe('Training mode', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Dataset source switching
+// Dataset source switching (unified cards: first card is always present)
 // ═════════════════════════════════════════════════════════════════════════════
 
 test.describe('Dataset source selection', () => {
-    test('defaults to HuggingFace source', async ({ page }) => {
-        await page.goto('/');
-        const sourceSelect = page.locator('#dataset-source-type');
-        await expect(sourceSelect).toHaveValue('huggingface');
-    });
-
-    test('shows HF config when HuggingFace selected', async ({ page }) => {
+    test('first dataset card is present on load and defaults to HuggingFace', async ({ page }) => {
         await page.goto('/');
         await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
-        await expect(page.locator('#hf-source-config')).toBeVisible();
-        await expect(page.locator('#upload-source-config')).toBeHidden();
-        await expect(page.locator('#local-source-config')).toBeHidden();
+        const firstCard = page.locator('#datasets-list .dataset-card').first();
+        await expect(firstCard).toBeVisible();
+        await expect(firstCard.locator('.ds-source-type')).toHaveValue('huggingface');
+        await expect(firstCard.locator('.ds-hf-config')).toBeVisible();
+        await expect(firstCard.locator('.ds-upload-config')).toBeHidden();
+        await expect(firstCard.locator('.ds-local-config')).toBeHidden();
     });
 
     test('shows upload config when Upload selected', async ({ page }) => {
         await page.goto('/');
         await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
-        await page.locator('#dataset-source-type').selectOption('upload');
-        await expect(page.locator('#upload-source-config')).toBeVisible();
-        await expect(page.locator('#hf-source-config')).toBeHidden();
+        const firstCard = page.locator('#datasets-list .dataset-card').first();
+        await firstCard.locator('.ds-source-type').selectOption('upload');
+        await expect(firstCard.locator('.ds-upload-config')).toBeVisible();
+        await expect(firstCard.locator('.ds-hf-config')).toBeHidden();
     });
 
     test('shows local config when Local File selected', async ({ page }) => {
         await page.goto('/');
         await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
-        await page.locator('#dataset-source-type').selectOption('local_file');
-        await expect(page.locator('#local-source-config')).toBeVisible();
-        await expect(page.locator('#hf-source-config')).toBeHidden();
+        const firstCard = page.locator('#datasets-list .dataset-card').first();
+        await firstCard.locator('.ds-source-type').selectOption('local_file');
+        await expect(firstCard.locator('.ds-local-config')).toBeVisible();
+        await expect(firstCard.locator('.ds-hf-config')).toBeHidden();
+    });
+
+    test('Add Dataset button appends another card', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
+        const cards = page.locator('#datasets-list .dataset-card');
+        await expect(cards).toHaveCount(1);
+        await page.locator('#add-dataset-btn').click();
+        await expect(cards).toHaveCount(2);
+        // Second card is removable; first is not.
+        const firstRemove = cards.nth(0).locator('.remove-dataset-btn');
+        const secondRemove = cards.nth(1).locator('.remove-dataset-btn');
+        await expect(firstRemove).toBeHidden();
+        await expect(secondRemove).toBeVisible();
     });
 });
 
