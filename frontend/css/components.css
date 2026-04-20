@@ -1258,3 +1258,37 @@ textarea.magic-input {
     line-height: 1.4;
     white-space: pre-wrap;
 }
+
+/* ====== Export section tabs ====== */
+.export-tabs {
+    display: flex;
+    gap: 8px;
+    border-bottom: 2px solid #e5e7eb;
+    margin: 20px 0 15px 0;
+}
+
+.export-tab-btn {
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 10px 16px;
+    font-size: 0.95em;
+    cursor: pointer;
+    color: #6b7280;
+    margin-bottom: -2px;
+    transition: color 0.2s, border-color 0.2s;
+}
+
+.export-tab-btn:hover {
+    color: var(--primary-purple, #8b5cf6);
+}
+
+.export-tab-btn.active {
+    color: var(--primary-purple, #8b5cf6);
+    border-bottom-color: var(--primary-purple, #8b5cf6);
+    font-weight: 600;
+}
+
+.export-panel {
+    padding-top: 6px;
+}
