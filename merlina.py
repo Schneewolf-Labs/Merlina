@@ -384,6 +384,27 @@ class TrainingConfig(BaseModel):
         )
     )
 
+    # HuggingFace Jobs backend (remote training on HF Pro credits)
+    training_backend: Literal["local", "hf_jobs"] = Field(
+        "local",
+        description=(
+            "Where to run training: 'local' (this server's GPUs) or "
+            "'hf_jobs' (submit to HuggingFace Jobs — requires HF Pro, consumes credits)"
+        ),
+    )
+    hf_jobs_flavor: str = Field(
+        "a10g-large",
+        description="HF Jobs hardware flavor (e.g. t4-small, l4x1, a10g-large, a100-large, h200)",
+    )
+    hf_jobs_image: str = Field(
+        "ghcr.io/schneewolf-labs/merlina-hfjobs:latest",
+        description="Docker image used for HF Jobs runs (must have Merlina + deps baked in)",
+    )
+    hf_jobs_timeout: str = Field(
+        "6h",
+        description="Max wall time for an HF Job (e.g. '30m', '2h', '12h')",
+    )
+
     # Weights & Biases settings
     wandb_project: Optional[str] = Field(None, description="W&B project name (default: 'merlina-training')")
     wandb_run_name: Optional[str] = Field(None, description="W&B run name (auto-generated if not provided)")
@@ -682,6 +703,17 @@ def _make_training_callback(event_loop):
     def training_callback(job_id: str, config_dict: dict):
         from pydantic import TypeAdapter
         config_obj = TypeAdapter(TrainingConfig).validate_python(config_dict)
+
+        if config_obj.training_backend == "hf_jobs":
+            from src.hf_jobs_runner import run_training_hf_jobs
+            logger.info(
+                f"Submitting job {job_id} to HuggingFace Jobs "
+                f"(flavor={config_obj.hf_jobs_flavor})"
+            )
+            run_training_hf_jobs(
+                job_id, config_obj, job_manager, uploaded_datasets, event_loop
+            )
+            return
 
         strategy = config_obj.multi_gpu_strategy
         num_gpus = _get_distributed_gpu_count(config_obj)

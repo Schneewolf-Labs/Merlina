@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **HuggingFace Jobs backend (scaffold)**: New `training_backend="hf_jobs"` option submits a training run to HuggingFace Jobs instead of executing it on the local server. Intended for HF Pro users who want to spend their monthly Jobs credits on Merlina runs. Reuses `src/train_worker.py` inside a Docker image (`Dockerfile.hfjobs`); the config ships to the container in a base64-encoded env var, and progress is streamed back through the job's stdout logs (sentinel-prefixed JSONL, parsed by `src/hf_jobs_runner.py`). New config fields: `training_backend`, `hf_jobs_flavor`, `hf_jobs_image`, `hf_jobs_timeout`. Requires `huggingface_hub>=0.34` and a valid `hf_token`. Uploaded dataset blobs are not supported on this backend — use Hub or URL sources.
+
 ## [1.5.0] - 2026-04-18 "Liger Familiar"
 
 ### Added

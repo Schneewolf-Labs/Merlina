@@ -1,0 +1,44 @@
+# Docker image for running Merlina training on HuggingFace Jobs.
+#
+# Build & push (one-time; rebuild whenever deps or src change):
+#   docker build -f Dockerfile.hfjobs -t ghcr.io/schneewolf-labs/merlina-hfjobs:latest .
+#   docker push ghcr.io/schneewolf-labs/merlina-hfjobs:latest
+#
+# The image is referenced by TrainingConfig.hf_jobs_image; the job is
+# started via scripts/hf_jobs_entrypoint.sh, which reads the training
+# config from the MERLINA_CONFIG_B64 env var set by run_job().
+
+FROM pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    HF_HUB_ENABLE_HF_TRANSFER=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git \
+        ca-certificates \
+        coreutils \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/merlina
+
+COPY requirements.txt .
+
+# Upgrade huggingface_hub past the project floor (>=0.19) to the Jobs-capable
+# baseline (>=0.34). hf_transfer accelerates model downloads inside the job.
+RUN pip install --upgrade pip \
+    && pip install -r requirements.txt \
+    && pip install --upgrade "huggingface_hub>=0.34" hf_transfer
+
+# Copy only the pieces the worker needs at runtime.
+COPY src /opt/merlina/src
+COPY dataset_handlers /opt/merlina/dataset_handlers
+COPY scripts /opt/merlina/scripts
+COPY merlina.py config.py version.py /opt/merlina/
+
+RUN chmod +x /opt/merlina/scripts/hf_jobs_entrypoint.sh
+
+# Default command is overridden by the caller; kept here so the image is
+# runnable standalone for smoke tests.
+CMD ["/opt/merlina/scripts/hf_jobs_entrypoint.sh"]
