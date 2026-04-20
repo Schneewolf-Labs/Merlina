@@ -157,60 +157,105 @@ test.describe('Training mode', () => {
 
     test('hides beta field in SFT mode', async ({ page }) => {
         await page.goto('/');
-        await page.locator('.section-nav-btn[data-section="config-section"]').click();
+        // Training mode lives in the Dataset section; change it there first.
+        await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
         await page.locator('#training-mode').selectOption('sft');
-        // Beta field or its container should be hidden
+        // Then navigate to the Training section to check the beta field.
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
         const betaField = page.locator('#beta');
         const betaContainer = betaField.locator('xpath=ancestor::div[contains(@class,"form-group")]');
-        // Either the field itself or its parent container should be hidden
         const isHidden = await betaContainer.evaluate(el => {
             return el.style.display === 'none' || el.hidden ||
                    window.getComputedStyle(el).display === 'none';
         }).catch(() => false);
 
-        // If not hidden by container, check the field directly
         if (!isHidden) {
             // In some implementations the field might just not be required
             // Check that switching back to ORPO shows it again
+            await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
             await page.locator('#training-mode').selectOption('orpo');
+            await page.locator('.section-nav-btn[data-section="config-section"]').click();
             await expect(betaField).toBeVisible();
         }
     });
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// Dataset source switching
+// Dataset source switching (unified cards: first card is always present)
 // ═════════════════════════════════════════════════════════════════════════════
 
 test.describe('Dataset source selection', () => {
-    test('defaults to HuggingFace source', async ({ page }) => {
-        await page.goto('/');
-        const sourceSelect = page.locator('#dataset-source-type');
-        await expect(sourceSelect).toHaveValue('huggingface');
-    });
-
-    test('shows HF config when HuggingFace selected', async ({ page }) => {
+    test('first dataset card is present on load and defaults to HuggingFace', async ({ page }) => {
         await page.goto('/');
         await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
-        await expect(page.locator('#hf-source-config')).toBeVisible();
-        await expect(page.locator('#upload-source-config')).toBeHidden();
-        await expect(page.locator('#local-source-config')).toBeHidden();
+        const firstCard = page.locator('#datasets-list .dataset-card').first();
+        await expect(firstCard).toBeVisible();
+        await expect(firstCard.locator('.ds-source-type')).toHaveValue('huggingface');
+        await expect(firstCard.locator('.ds-hf-config')).toBeVisible();
+        await expect(firstCard.locator('.ds-upload-config')).toBeHidden();
+        await expect(firstCard.locator('.ds-local-config')).toBeHidden();
     });
 
     test('shows upload config when Upload selected', async ({ page }) => {
         await page.goto('/');
         await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
-        await page.locator('#dataset-source-type').selectOption('upload');
-        await expect(page.locator('#upload-source-config')).toBeVisible();
-        await expect(page.locator('#hf-source-config')).toBeHidden();
+        const firstCard = page.locator('#datasets-list .dataset-card').first();
+        await firstCard.locator('.ds-source-type').selectOption('upload');
+        await expect(firstCard.locator('.ds-upload-config')).toBeVisible();
+        await expect(firstCard.locator('.ds-hf-config')).toBeHidden();
     });
 
     test('shows local config when Local File selected', async ({ page }) => {
         await page.goto('/');
         await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
-        await page.locator('#dataset-source-type').selectOption('local_file');
-        await expect(page.locator('#local-source-config')).toBeVisible();
-        await expect(page.locator('#hf-source-config')).toBeHidden();
+        const firstCard = page.locator('#datasets-list .dataset-card').first();
+        await firstCard.locator('.ds-source-type').selectOption('local_file');
+        await expect(firstCard.locator('.ds-local-config')).toBeVisible();
+        await expect(firstCard.locator('.ds-hf-config')).toBeHidden();
+    });
+
+    test('Add Dataset button appends another card', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
+        const cards = page.locator('#datasets-list .dataset-card');
+        await expect(cards).toHaveCount(1);
+        await page.locator('#add-dataset-btn').click();
+        await expect(cards).toHaveCount(2);
+        // Second card is removable; first is not.
+        const firstRemove = cards.nth(0).locator('.remove-dataset-btn');
+        const secondRemove = cards.nth(1).locator('.remove-dataset-btn');
+        await expect(firstRemove).toBeHidden();
+        await expect(secondRemove).toBeVisible();
+    });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Training mode selector mirror (Dataset section ↔ Training section)
+// ═════════════════════════════════════════════════════════════════════════════
+
+test.describe('Training mode mirror', () => {
+    test('mirror selector exists in the Training section and starts in sync', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
+        const mirror = page.locator('#training-mode-config');
+        await expect(mirror).toBeVisible();
+        await expect(mirror).toHaveValue('orpo');
+    });
+
+    test('changing the Dataset selector updates the Training mirror', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
+        await page.locator('#training-mode').selectOption('dpo');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
+        await expect(page.locator('#training-mode-config')).toHaveValue('dpo');
+    });
+
+    test('changing the Training mirror updates the Dataset selector', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
+        await page.locator('#training-mode-config').selectOption('sft');
+        await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
+        await expect(page.locator('#training-mode')).toHaveValue('sft');
     });
 });
 

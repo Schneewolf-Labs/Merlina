@@ -63,12 +63,21 @@ def generate_model_readme(config: Any, training_mode: str, is_vlm: bool = False)
         frontmatter_lines.append("- text-generation")
     frontmatter_lines.append(f"- {training_mode.lower()}")  # sft or orpo
 
-    # Add dataset info if using HuggingFace dataset
+    # Add dataset info if using HuggingFace dataset(s). Includes every
+    # HuggingFace source the user concatenated — primary + additional.
+    hf_repo_ids = []
     if hasattr(config, 'dataset') and hasattr(config.dataset, 'source'):
-        source = config.dataset.source
-        if source.source_type == "huggingface" and source.repo_id:
-            frontmatter_lines.append(f"datasets:")
-            frontmatter_lines.append(f"- {source.repo_id}")
+        primary = config.dataset.source
+        if primary.source_type == "huggingface" and primary.repo_id:
+            hf_repo_ids.append(primary.repo_id)
+        for extra in getattr(config.dataset, 'additional_sources', None) or []:
+            if getattr(extra, 'source_type', None) == "huggingface" and getattr(extra, 'repo_id', None):
+                hf_repo_ids.append(extra.repo_id)
+
+    if hf_repo_ids:
+        frontmatter_lines.append("datasets:")
+        for repo_id in hf_repo_ids:
+            frontmatter_lines.append(f"- {repo_id}")
 
     # Add base model
     frontmatter_lines.append(f"base_model:")
@@ -141,6 +150,15 @@ def generate_model_readme(config: Any, training_mode: str, is_vlm: bool = False)
         "## Training Configuration",
         "",
         '\n'.join(config_lines),
+    ]
+
+    # If multiple datasets were concatenated, surface them in a body section
+    # so readers see more than just the YAML frontmatter.
+    dataset_section = _build_dataset_section(config)
+    if dataset_section:
+        readme_parts.extend(["", dataset_section])
+
+    readme_parts.extend([
         "",
         "---",
         "",
@@ -148,9 +166,39 @@ def generate_model_readme(config: Any, training_mode: str, is_vlm: bool = False)
         "",
         "[Merlina on GitHub](https://github.com/Schneewolf-Labs/Merlina)",
         "",
-    ]
+    ])
 
     return '\n'.join(readme_parts)
+
+
+def _build_dataset_section(config: Any) -> str:
+    """
+    Return a markdown section listing every dataset used for training when
+    more than one source was configured. Returns '' when there's a single
+    source (the YAML frontmatter alone is enough in that case).
+    """
+    if not hasattr(config, 'dataset') or not hasattr(config.dataset, 'source'):
+        return ""
+    sources = [config.dataset.source]
+    sources.extend(getattr(config.dataset, 'additional_sources', None) or [])
+    if len(sources) < 2:
+        return ""
+
+    def describe(src):
+        t = getattr(src, 'source_type', None)
+        if t == "huggingface" and getattr(src, 'repo_id', None):
+            split = getattr(src, 'split', None) or 'train'
+            return f"[`{src.repo_id}`](https://huggingface.co/datasets/{src.repo_id}) (split: `{split}`)"
+        if t == "local_file" and getattr(src, 'file_path', None):
+            return f"local file: `{src.file_path}`"
+        if t == "upload":
+            return "uploaded file"
+        return f"source: `{t or 'unknown'}`"
+
+    lines = ["## Datasets", "", f"Trained on {len(sources)} concatenated datasets:", ""]
+    for i, src in enumerate(sources, start=1):
+        lines.append(f"{i}. {describe(src)}")
+    return '\n'.join(lines)
 
 
 def upload_model_readme(repo_id: str, readme_content: str, token: str) -> None:

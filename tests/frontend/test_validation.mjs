@@ -277,6 +277,47 @@ describe('Validator.validateDatasetConfig', () => {
         const errors = Validator.validateDatasetConfig(config, 'orpo');
         assert.equal(errors.length, 0);
     });
+
+    it('requires rejected mapping on every additional dataset for paired modes', () => {
+        const config = {
+            source: { source_type: 'huggingface', repo_id: 'a/b' },
+            column_mapping: { p: 'prompt', c: 'chosen', r: 'rejected' },
+            additional_sources: [
+                {
+                    source_type: 'huggingface',
+                    repo_id: 'a/c',
+                    column_mapping: { p: 'prompt', c: 'chosen' },
+                },
+            ],
+        };
+        const errors = Validator.validateDatasetConfig(config, 'dpo');
+        assert.ok(errors.some(e => /Dataset 2.*[Rr]ejected/.test(e)));
+    });
+
+    it('blocks paired-mode cast when a dataset has no column mapping at all', () => {
+        const config = {
+            source: { source_type: 'huggingface', repo_id: 'a/b' },
+            // no column_mapping at all — user never inspected
+        };
+        const errors = Validator.validateDatasetConfig(config, 'orpo');
+        assert.ok(errors.some(e => /Dataset 1.*inspect/i.test(e)));
+    });
+
+    it('allows paired-mode cast when every card has rejected mapped', () => {
+        const config = {
+            source: { source_type: 'huggingface', repo_id: 'a/b' },
+            column_mapping: { p: 'prompt', c: 'chosen', r: 'rejected' },
+            additional_sources: [
+                {
+                    source_type: 'huggingface',
+                    repo_id: 'a/c',
+                    column_mapping: { p: 'prompt', c: 'chosen', r: 'rejected' },
+                },
+            ],
+        };
+        const errors = Validator.validateDatasetConfig(config, 'orpo');
+        assert.equal(errors.length, 0);
+    });
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

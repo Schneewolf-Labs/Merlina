@@ -141,181 +141,85 @@
             <section id="dataset-section" class="card nav-section" style="display: none;">
                 <h2>📚 Step 2: Configure Your Dataset</h2>
 
-                <!-- Dataset Source Selection -->
-                <div class="spell-section">
-                    <h3>🔮 Dataset Source</h3>
-                    <div class="form-group">
-                        <label>Source Type</label>
-                        <select id="dataset-source-type" class="magic-select">
-                            <option value="huggingface">HuggingFace Dataset</option>
-                            <option value="upload">Upload File</option>
-                            <option value="local_file">Local File Path</option>
-                        </select>
-                    </div>
-
-                    <!-- HuggingFace Source -->
-                    <div id="hf-source-config" class="source-config">
-                        <div class="form-group">
-                            <label>HuggingFace Repository ID</label>
-                            <input type="text" id="hf-repo-id" value="schneewolflabs/Athanorlite-DPO" class="magic-input">
-                            <small style="color: #888; font-size: 0.85em;">Example: username/dataset-name</small>
-                        </div>
-                        <div class="form-group">
-                            <label>Split</label>
-                            <input type="text" id="hf-split" value="train" class="magic-input">
-                        </div>
-                    </div>
-
-                    <!-- Upload Source -->
-                    <div id="upload-source-config" class="source-config" style="display: none;">
-                        <div class="form-group">
-                            <label>Upload Dataset File</label>
-                            <input type="file" id="dataset-file" accept=".json,.jsonl,.csv,.parquet" class="magic-input">
-                            <small style="color: #888; font-size: 0.85em;">Supported: JSON, JSONL, CSV, Parquet</small>
-                        </div>
-                        <div id="upload-status"></div>
-                        <button type="button" id="upload-button" class="action-button" style="margin-top: 10px;">
-                            📤 Upload Dataset
-                        </button>
-                    </div>
-
-                    <!-- Local File Source -->
-                    <div id="local-source-config" class="source-config" style="display: none;">
-                        <div class="form-group">
-                            <label>File Path</label>
-                            <input type="text" id="local-file-path" placeholder="/path/to/dataset.json" class="magic-input">
-                        </div>
-                        <div class="form-group">
-                            <label>File Format</label>
-                            <select id="local-file-format" class="magic-select">
-                                <option value="">Auto-detect</option>
-                                <option value="json">JSON</option>
-                                <option value="csv">CSV</option>
-                                <option value="parquet">Parquet</option>
-                            </select>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Additional Datasets -->
-                <div class="spell-section">
-                    <h3>➕ Additional Datasets (Optional)</h3>
-                    <small style="color: #888; font-size: 0.85em; display: block; margin-bottom: 12px;">
-                        Add more datasets to concatenate with the primary source. All datasets are combined before formatting and splitting.
+                <!-- Training Mode Selection (drives required columns below) -->
+                <div class="spell-section" id="training-mode-section">
+                    <h3>🎯 What are you training?</h3>
+                    <small style="color: #888; font-size: 0.85em; display: block; margin-bottom: 10px;">
+                        Choose a training method first — it determines which columns your dataset needs.
                     </small>
-                    <div id="additional-datasets-list"></div>
-                    <button type="button" id="add-dataset-btn" class="action-button" style="width: 100%; margin-top: 8px;">
-                        ➕ Add Another Dataset
+                    <div class="form-group">
+                        <label>Training Method</label>
+                        <select id="training-mode" class="magic-select">
+                            <option value="sft">SFT - Supervised Fine-Tuning</option>
+                            <option value="orpo" selected>ORPO - Odds Ratio Preference Optimization</option>
+                            <option value="dpo">DPO - Direct Preference Optimization</option>
+                            <option value="simpo">SimPO - Simple Preference Optimization</option>
+                            <option value="kto">KTO - Kahneman-Tversky Optimization</option>
+                            <option value="cpo">CPO - Contrastive Preference Optimization</option>
+                            <option value="ipo">IPO - Identity Preference Optimization</option>
+                        </select>
+                        <small id="training-mode-description" style="color: #888; font-size: 0.85em; display: block; margin-top: 8px;"></small>
+                    </div>
+                    <button type="button" id="apply-preset-btn" class="action-button" style="width: 100%; margin-top: 12px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: bold; padding: 12px;">
+                        📋 Apply Suggested Settings
+                    </button>
+                    <div id="preset-notes" style="display: none; margin-top: 10px; padding: 12px; background: #f0e6ff; border-radius: 8px; border-left: 3px solid var(--primary-purple); font-size: 0.85em; color: #444;"></div>
+                </div>
+
+                <!-- Datasets (unified: first card is always present, add more below) -->
+                <div class="spell-section">
+                    <h3>🔮 Datasets</h3>
+                    <small style="color: #888; font-size: 0.85em; display: block; margin-bottom: 12px;">
+                        Add one or more datasets. Each has its own source and column mapping. All datasets are concatenated, formatted, and split together.
+                    </small>
+                    <div id="datasets-list"></div>
+
+                    <!-- Messages Format Detection (global: visible when any dataset has a messages column) -->
+                    <div id="messages-format-notice" style="display: none; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 15px; border-radius: 10px; margin-top: 8px; color: white;">
+                        <div style="font-weight: bold; margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
+                            ✨ Messages Format Detected!
+                        </div>
+                        <div style="font-size: 0.9em; margin-bottom: 12px; opacity: 0.95;">
+                            One or more datasets use the common "messages" format. Enable auto-convert to transform into standard format (prompt, chosen, system).
+                        </div>
+                        <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.95em;">
+                            <input type="checkbox" id="convert-messages-checkbox" checked style="width: 18px; height: 18px; cursor: pointer;">
+                            <span>Auto-convert messages format</span>
+                        </label>
+                        <div style="margin-top: 10px; font-size: 0.85em; opacity: 0.9; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.3);">
+                            When enabled: user → prompt, assistant → chosen, system → system
+                        </div>
+                    </div>
+
+                    <button type="button" id="add-dataset-btn" class="action-button" style="width: 100%; margin-top: 12px;">
+                        ➕ Add Dataset
                     </button>
                 </div>
 
-                <!-- Column Mapping -->
+                <!-- System Prompt Override (applies to all datasets) -->
                 <div class="spell-section">
-                    <h3>🔗 Column Mapping</h3>
-                    <button type="button" id="inspect-columns-button" class="action-button" style="width: 100%; margin-bottom: 15px;">
-                        🔍 Inspect Dataset Columns
-                    </button>
-
-                    <div id="column-mapping-config" style="display: none;">
-                        <div style="background: #f5f7fa; padding: 15px; border-radius: 10px; margin-bottom: 15px;">
-                            <div style="font-weight: bold; color: var(--primary-purple); margin-bottom: 10px;">
-                                Available Columns: <span id="available-columns"></span>
-                            </div>
-                            <div style="font-size: 0.85em; color: #666;">
-                                Map your dataset columns to the standard format
-                            </div>
-                        </div>
-
-                        <!-- Messages Format Detection -->
-                        <div id="messages-format-notice" style="display: none; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 15px; border-radius: 10px; margin-bottom: 15px; color: white;">
-                            <div style="font-weight: bold; margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
-                                ✨ Messages Format Detected!
-                            </div>
-                            <div style="font-size: 0.9em; margin-bottom: 12px; opacity: 0.95;">
-                                This dataset uses the common "messages" format. Enable auto-convert to transform it into standard format (prompt, chosen, system).
-                            </div>
-                            <label style="display: flex; align-items: center; gap: 10px; cursor: pointer; font-size: 0.95em;">
-                                <input type="checkbox" id="convert-messages-checkbox" checked style="width: 18px; height: 18px; cursor: pointer;">
-                                <span>Auto-convert messages format</span>
+                    <h3>🧙 System Prompt Override (Optional)</h3>
+                    <small style="color: #888; font-size: 0.85em; display: block; margin-bottom: 10px;">
+                        Inject a system prompt across all datasets.
+                    </small>
+                    <div class="form-group">
+                        <textarea id="system-prompt-override" class="magic-input" rows="3" placeholder="Enter a system prompt to inject into dataset rows..." style="width: 100%; resize: vertical;"></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label style="font-size: 0.9em; color: var(--primary-purple);">Override Mode</label>
+                        <div style="display: flex; gap: 20px; margin-top: 5px;">
+                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.9em;">
+                                <input type="radio" name="system-prompt-mode" value="fill_empty" checked style="cursor: pointer;">
+                                <span>Fill empty only</span>
                             </label>
-                            <div id="messages-format-info" style="margin-top: 10px; font-size: 0.85em; opacity: 0.9; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.3);">
-                                When enabled: user → prompt, assistant → chosen, system → system
-                            </div>
+                            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.9em;">
+                                <input type="radio" name="system-prompt-mode" value="replace_all" style="cursor: pointer;">
+                                <span>Replace all</span>
+                            </label>
                         </div>
-
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Prompt Column</label>
-                                <select id="map-prompt" class="magic-select">
-                                    <option value="">-- Select Column --</option>
-                                </select>
-                                <small style="color: #888; font-size: 0.85em;">Required: User input/question</small>
-                            </div>
-                            <div class="form-group">
-                                <label>Chosen Column</label>
-                                <select id="map-chosen" class="magic-select">
-                                    <option value="">-- Select Column --</option>
-                                </select>
-                                <small style="color: #888; font-size: 0.85em;">Required: Preferred response</small>
-                            </div>
-                        </div>
-
-                        <div class="form-row">
-                            <div class="form-group">
-                                <label>Rejected Column</label>
-                                <select id="map-rejected" class="magic-select">
-                                    <option value="">-- None (SFT mode) --</option>
-                                </select>
-                                <small id="rejected-column-hint" style="color: #888; font-size: 0.85em;">Required for preference modes, optional for SFT & KTO</small>
-                            </div>
-                            <div class="form-group">
-                                <label>System Column (Optional)</label>
-                                <select id="map-system" class="magic-select">
-                                    <option value="">-- None --</option>
-                                </select>
-                                <small style="color: #888; font-size: 0.85em;">Optional: System message</small>
-                            </div>
-                        </div>
-
-                        <div class="form-group">
-                            <label>Reasoning Column (Optional)</label>
-                            <select id="map-reasoning" class="magic-select">
-                                <option value="">-- None --</option>
-                            </select>
-                            <small style="color: #888; font-size: 0.85em;">Optional: Reasoning/thinking process (for Qwen3)</small>
-                        </div>
-
-                        <!-- System Prompt Override -->
-                        <div style="margin-top: 15px; padding: 15px; border: 1px solid var(--light-purple); border-radius: 10px; background: #faf8ff;">
-                            <label style="font-weight: bold; color: var(--primary-purple); display: block; margin-bottom: 8px;">System Prompt Override (Optional)</label>
-                            <textarea id="system-prompt-override" class="magic-input" rows="3" placeholder="Enter a system prompt to inject into dataset rows..." style="width: 100%; resize: vertical;"></textarea>
-                            <div style="margin-top: 8px;">
-                                <label style="font-size: 0.9em; color: #555;">Override Mode:</label>
-                                <div style="display: flex; gap: 20px; margin-top: 5px;">
-                                    <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.9em;">
-                                        <input type="radio" name="system-prompt-mode" value="fill_empty" checked style="cursor: pointer;">
-                                        <span>Fill empty only</span>
-                                    </label>
-                                    <label style="display: flex; align-items: center; gap: 6px; cursor: pointer; font-size: 0.9em;">
-                                        <input type="radio" name="system-prompt-mode" value="replace_all" style="cursor: pointer;">
-                                        <span>Replace all</span>
-                                    </label>
-                                </div>
-                            </div>
-                            <small style="color: #888; font-size: 0.85em; display: block; margin-top: 6px;">
-                                "Fill empty" sets the system prompt only for rows without one. "Replace all" overwrites every row's system prompt.
-                            </small>
-                        </div>
-
-                        <!-- Sample Preview -->
-                        <div id="column-sample-preview" style="margin-top: 15px; display: none;">
-                            <div style="font-weight: bold; color: var(--primary-purple); margin-bottom: 10px;">
-                                Sample Data (First Row):
-                            </div>
-                            <div style="background: white; padding: 15px; border-radius: 10px; border: 1px solid var(--light-purple); max-height: 300px; overflow-y: auto;">
-                                <pre id="column-sample-content" style="margin: 0; font-size: 0.85em; white-space: pre-wrap;"></pre>
-                            </div>
-                        </div>
+                        <small style="color: #888; font-size: 0.85em; display: block; margin-top: 6px;">
+                            "Fill empty" sets the system prompt only for rows without one. "Replace all" overwrites every row's system prompt.
+                        </small>
                     </div>
                 </div>
 
@@ -516,6 +420,21 @@
                 </div>
 
                 <form id="training-form">
+                    <!-- Training Method (mirrors #training-mode in the Dataset section) -->
+                    <div class="form-group">
+                        <label>🎯 Training Method</label>
+                        <select id="training-mode-config" class="magic-select">
+                            <option value="sft">SFT - Supervised Fine-Tuning</option>
+                            <option value="orpo" selected>ORPO - Odds Ratio Preference Optimization</option>
+                            <option value="dpo">DPO - Direct Preference Optimization</option>
+                            <option value="simpo">SimPO - Simple Preference Optimization</option>
+                            <option value="kto">KTO - Kahneman-Tversky Optimization</option>
+                            <option value="cpo">CPO - Contrastive Preference Optimization</option>
+                            <option value="ipo">IPO - Identity Preference Optimization</option>
+                        </select>
+                        <small style="color: #888; font-size: 0.85em;">Same setting as "What are you training?" on Step 2 — kept in sync.</small>
+                    </div>
+
                     <!-- Output Name -->
                     <div class="form-group">
                         <label style="display: flex; align-items: center; justify-content: space-between;">
@@ -649,28 +568,6 @@
                                 </div>
                             </div>
                         </div>
-                    </div>
-
-                    <!-- Training Mode Selection -->
-                    <div class="spell-section">
-                        <h3>🎯 Training Mode</h3>
-                        <div class="form-group">
-                            <label>Training Method</label>
-                            <select id="training-mode" class="magic-select">
-                                <option value="sft">SFT - Supervised Fine-Tuning</option>
-                                <option value="orpo" selected>ORPO - Odds Ratio Preference Optimization</option>
-                                <option value="dpo">DPO - Direct Preference Optimization</option>
-                                <option value="simpo">SimPO - Simple Preference Optimization</option>
-                                <option value="kto">KTO - Kahneman-Tversky Optimization</option>
-                                <option value="cpo">CPO - Contrastive Preference Optimization</option>
-                                <option value="ipo">IPO - Identity Preference Optimization</option>
-                            </select>
-                            <small id="training-mode-description" style="color: #888; font-size: 0.85em; display: block; margin-top: 8px;"></small>
-                        </div>
-                        <button type="button" id="apply-preset-btn" class="action-button" style="width: 100%; margin-top: 12px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: bold; padding: 12px;">
-                            📋 Apply Suggested Settings
-                        </button>
-                        <div id="preset-notes" style="display: none; margin-top: 10px; padding: 12px; background: #f0e6ff; border-radius: 8px; border-left: 3px solid var(--primary-purple); font-size: 0.85em; color: #444;"></div>
                     </div>
 
                     <!-- Training Parameters -->
