@@ -227,20 +227,33 @@ class Validator {
             }
         }
 
-        // Check column mapping
-        if (config.column_mapping) {
-            const hasPrompt = Object.values(config.column_mapping).includes('prompt');
-            const hasChosen = Object.values(config.column_mapping).includes('chosen');
-            const hasRejected = Object.values(config.column_mapping).includes('rejected');
+        // Check column mapping. For paired preference modes (not SFT/KTO)
+        // every dataset needs a rejected column — validate each one
+        // individually and label by position so the user knows which to fix.
+        const PAIRED_PREFERENCE_MODES = ['orpo', 'dpo', 'simpo', 'cpo', 'ipo'];
+        const isPaired = PAIRED_PREFERENCE_MODES.includes(trainingMode);
 
-            if (!hasPrompt) errors.push('Prompt column must be mapped');
-            if (!hasChosen) errors.push('Chosen column must be mapped');
-            // Rejected is required for paired preference modes (not SFT or KTO)
-            const PAIRED_PREFERENCE_MODES = ['orpo', 'dpo', 'simpo', 'cpo', 'ipo'];
-            if (!hasRejected && PAIRED_PREFERENCE_MODES.includes(trainingMode)) {
-                errors.push('Rejected column must be mapped (required for preference optimization)');
+        const checkMapping = (mapping, label) => {
+            if (mapping) {
+                const hasPrompt = Object.values(mapping).includes('prompt');
+                const hasChosen = Object.values(mapping).includes('chosen');
+                const hasRejected = Object.values(mapping).includes('rejected');
+                if (!hasPrompt) errors.push(`${label}: Prompt column must be mapped`);
+                if (!hasChosen) errors.push(`${label}: Chosen column must be mapped`);
+                if (isPaired && !hasRejected) {
+                    errors.push(`${label}: Rejected column must be mapped — ${trainingMode.toUpperCase()} requires chosen/rejected pairs`);
+                }
+            } else if (isPaired) {
+                // Paired modes require explicit mapping so we can guarantee a
+                // rejected column. Tell the user to inspect that dataset.
+                errors.push(`${label}: inspect columns and map a Rejected column — ${trainingMode.toUpperCase()} requires chosen/rejected pairs`);
             }
-        }
+        };
+
+        checkMapping(config.column_mapping, 'Dataset 1');
+        (config.additional_sources || []).forEach((src, idx) => {
+            checkMapping(src.column_mapping, `Dataset ${idx + 2}`);
+        });
 
         return errors;
     }

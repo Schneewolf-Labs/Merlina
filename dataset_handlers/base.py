@@ -129,6 +129,27 @@ class DatasetPipeline:
 
         return dataset
 
+    def _load_combined(self):
+        """
+        Load the primary source plus any additional sources and concatenate
+        them. Used by preview/preview_formatted/compute_stats so those views
+        reflect the full combined dataset — matching what training sees.
+        Does not validate schema, deduplicate, subsample, shuffle, or split.
+        """
+        dataset = self._load_and_map_source(
+            self.loader, self.column_mapping, self.convert_messages_format
+        )
+
+        if self.additional_loaders:
+            all_datasets = [dataset]
+            for i, (extra_loader, extra_mapping, extra_convert) in enumerate(self.additional_loaders):
+                logger.info(f"Loading additional dataset {i + 1}/{len(self.additional_loaders)}...")
+                all_datasets.append(self._load_and_map_source(extra_loader, extra_mapping, extra_convert))
+            dataset = concatenate_datasets(all_datasets)
+
+        dataset = self._apply_system_prompt_override(dataset)
+        return dataset
+
     def prepare(self) -> tuple[Dataset, Dataset]:
         """
         Load, validate, format, and split dataset.
@@ -198,7 +219,8 @@ class DatasetPipeline:
 
     def preview(self, num_samples: int = 5, offset: int = 0) -> tuple[list[dict], int]:
         """
-        Load and preview raw dataset samples without formatting.
+        Load and preview raw dataset samples without formatting. Includes any
+        additional sources the caller configured.
 
         Args:
             num_samples: Number of samples to preview
@@ -207,26 +229,12 @@ class DatasetPipeline:
         Returns:
             Tuple of (list of raw dataset rows, total dataset length)
         """
-        dataset = self.loader.load()
+        dataset = self._load_combined()
         total_length = len(dataset)
 
-        # Convert messages format if detected and enabled
-        if self.convert_messages_format and has_messages_format(dataset):
-            logger.info("Detected messages format, converting to standard format...")
-            dataset = convert_messages_dataset(dataset)
+        start_idx = min(offset, total_length)
+        end_idx = min(start_idx + num_samples, total_length)
 
-        # Apply column mapping if provided
-        if self.column_mapping:
-            dataset = self._apply_column_mapping(dataset)
-
-        # Apply system prompt override
-        dataset = self._apply_system_prompt_override(dataset)
-
-        # Calculate valid range
-        start_idx = min(offset, len(dataset))
-        end_idx = min(start_idx + num_samples, len(dataset))
-
-        # Get samples from offset
         if start_idx < end_idx:
             preview_dataset = dataset.select(range(start_idx, end_idx))
             samples = [dict(row) for row in preview_dataset]
@@ -237,7 +245,8 @@ class DatasetPipeline:
 
     def preview_formatted(self, num_samples: int = 5, offset: int = 0) -> tuple[list[dict], int]:
         """
-        Load and preview formatted dataset samples.
+        Load and preview formatted dataset samples. Includes any additional
+        sources the caller configured.
 
         Args:
             num_samples: Number of samples to preview
@@ -246,29 +255,14 @@ class DatasetPipeline:
         Returns:
             Tuple of (list of formatted dataset rows, total dataset length)
         """
-        dataset = self.loader.load()
+        dataset = self._load_combined()
         total_length = len(dataset)
 
-        # Convert messages format if detected and enabled
-        if self.convert_messages_format and has_messages_format(dataset):
-            logger.info("Detected messages format, converting to standard format...")
-            dataset = convert_messages_dataset(dataset)
-
-        # Apply column mapping if provided
-        if self.column_mapping:
-            dataset = self._apply_column_mapping(dataset)
-
-        # Apply system prompt override
-        dataset = self._apply_system_prompt_override(dataset)
-
-        # Validate schema
         self._validate_schema(dataset)
 
-        # Calculate valid range
-        start_idx = min(offset, len(dataset))
-        end_idx = min(start_idx + num_samples, len(dataset))
+        start_idx = min(offset, total_length)
+        end_idx = min(start_idx + num_samples, total_length)
 
-        # Get samples from offset and format
         if start_idx < end_idx:
             preview_dataset = dataset.select(range(start_idx, end_idx))
             formatted = preview_dataset.map(self.formatter.format)
@@ -282,23 +276,13 @@ class DatasetPipeline:
         """
         Compute basic statistics about the dataset: row count, average lengths,
         token count estimates, and class balance info for preference modes.
+        Includes any additional sources the caller configured.
 
         Returns:
             Dictionary with dataset statistics
         """
-        dataset = self.loader.load()
+        dataset = self._load_combined()
         total_rows = len(dataset)
-
-        # Convert messages format if detected and enabled
-        if self.convert_messages_format and has_messages_format(dataset):
-            dataset = convert_messages_dataset(dataset)
-
-        # Apply column mapping if provided
-        if self.column_mapping:
-            dataset = self._apply_column_mapping(dataset)
-
-        # Apply system prompt override
-        dataset = self._apply_system_prompt_override(dataset)
 
         columns = set(dataset.column_names)
         stats = {

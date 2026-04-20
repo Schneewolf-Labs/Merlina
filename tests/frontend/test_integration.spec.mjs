@@ -230,6 +230,36 @@ test.describe('Dataset source selection', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
+// Training mode selector mirror (Dataset section ↔ Training section)
+// ═════════════════════════════════════════════════════════════════════════════
+
+test.describe('Training mode mirror', () => {
+    test('mirror selector exists in the Training section and starts in sync', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
+        const mirror = page.locator('#training-mode-config');
+        await expect(mirror).toBeVisible();
+        await expect(mirror).toHaveValue('orpo');
+    });
+
+    test('changing the Dataset selector updates the Training mirror', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
+        await page.locator('#training-mode').selectOption('dpo');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
+        await expect(page.locator('#training-mode-config')).toHaveValue('dpo');
+    });
+
+    test('changing the Training mirror updates the Dataset selector', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
+        await page.locator('#training-mode-config').selectOption('sft');
+        await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
+        await expect(page.locator('#training-mode')).toHaveValue('sft');
+    });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
 // LoRA settings toggle
 // ═════════════════════════════════════════════════════════════════════════════
 

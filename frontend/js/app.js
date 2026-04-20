@@ -704,6 +704,23 @@ class MerlinaApp {
 
         trainingMode.addEventListener('change', (e) => updateFields(e.target.value));
         updateFields(trainingMode.value);
+
+        // Mirror selector in the Training section: keep both in sync without
+        // firing infinite change loops.
+        const mirror = document.getElementById('training-mode-config');
+        if (mirror) {
+            mirror.value = trainingMode.value;
+            let syncing = false;
+            const copy = (from, to) => {
+                if (syncing || to.value === from.value) return;
+                syncing = true;
+                to.value = from.value;
+                to.dispatchEvent(new Event('change'));
+                syncing = false;
+            };
+            trainingMode.addEventListener('change', () => copy(trainingMode, mirror));
+            mirror.addEventListener('change', () => copy(mirror, trainingMode));
+        }
     }
 
     /**
@@ -1074,6 +1091,7 @@ class MerlinaApp {
                 'use-wandb',
                 'push-hub',
                 'training-mode',
+                'training-mode-config',
                 'dataset-format-type'
             ];
 

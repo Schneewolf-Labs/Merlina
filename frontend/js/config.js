@@ -516,8 +516,10 @@ class ConfigManager {
         if (config.modules_to_save) this.setInputValue('modules-to-save', config.modules_to_save);
         if (config.lora_task_type) this.setInputValue('lora-task-type', config.lora_task_type);
 
-        // Training settings
+        // Training settings — setting training-mode triggers the mirror sync
         this.setInputValue('training-mode', config.training_mode || 'orpo');
+        const trainingModeEl = document.getElementById('training-mode');
+        if (trainingModeEl) trainingModeEl.dispatchEvent(new Event('change'));
         this.setInputValue('max-length', config.max_length || 2048);
         this.setInputValue('max-prompt-length', config.max_prompt_length || 1024);
         this.setInputValue('epochs', config.num_epochs || config.num_train_epochs || 2);

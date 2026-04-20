@@ -7,6 +7,26 @@ import { sanitizeHTML } from './validation.js';
 
 const PAIRED_MODES = ['orpo', 'dpo', 'simpo', 'cpo', 'ipo'];
 
+// Column-name synonyms used to auto-map common dataset conventions onto our
+// standard fields. The first synonym present in the dataset wins.
+// Matching is case-insensitive on the source column name.
+const COLUMN_SYNONYMS = {
+    prompt: ['prompt', 'instruction', 'question'],
+    chosen: ['chosen', 'output', 'response', 'answer'],
+    rejected: ['rejected'],
+    system: ['system', 'system_prompt'],
+    reasoning: ['reasoning', 'thinking', 'thought', 'think'],
+};
+
+function pickSynonymMatch(columns, target) {
+    const lowerToOriginal = new Map(columns.map(c => [c.toLowerCase(), c]));
+    for (const candidate of COLUMN_SYNONYMS[target] || [target]) {
+        const match = lowerToOriginal.get(candidate.toLowerCase());
+        if (match) return match;
+    }
+    return null;
+}
+
 /**
  * Dataset Manager — unified handling of one or more dataset cards.
  *
@@ -405,7 +425,11 @@ class DatasetManager {
                     opt.textContent = col;
                     sel.appendChild(opt);
                 });
-                if (data.columns.includes(target)) sel.value = target;
+                // Auto-map using the synonym table so e.g. SFT-style
+                // instruction/output datasets drop straight into
+                // prompt/chosen without manual remapping.
+                const match = pickSynonymMatch(data.columns, target);
+                if (match) sel.value = match;
             });
 
             card.querySelector('.ds-columns-list').textContent = data.columns.join(', ');

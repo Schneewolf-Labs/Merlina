@@ -420,6 +420,21 @@
                 </div>
 
                 <form id="training-form">
+                    <!-- Training Method (mirrors #training-mode in the Dataset section) -->
+                    <div class="form-group">
+                        <label>🎯 Training Method</label>
+                        <select id="training-mode-config" class="magic-select">
+                            <option value="sft">SFT - Supervised Fine-Tuning</option>
+                            <option value="orpo" selected>ORPO - Odds Ratio Preference Optimization</option>
+                            <option value="dpo">DPO - Direct Preference Optimization</option>
+                            <option value="simpo">SimPO - Simple Preference Optimization</option>
+                            <option value="kto">KTO - Kahneman-Tversky Optimization</option>
+                            <option value="cpo">CPO - Contrastive Preference Optimization</option>
+                            <option value="ipo">IPO - Identity Preference Optimization</option>
+                        </select>
+                        <small style="color: #888; font-size: 0.85em;">Same setting as "What are you training?" on Step 2 — kept in sync.</small>
+                    </div>
+
                     <!-- Output Name -->
                     <div class="form-group">
                         <label style="display: flex; align-items: center; justify-content: space-between;">
