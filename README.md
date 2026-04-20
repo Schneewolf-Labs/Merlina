@@ -19,11 +19,14 @@ Train LLMs with ORPO, DPO, SimPO, CPO, IPO, KTO, and SFT using a delightful web 
 - 📝 **Multiple Formats** - ChatML, Llama 3, Mistral, custom templates, or **automatic tokenizer-based formatting**
 - 🤖 **Tokenizer Format** - Automatically uses the model's native chat template
 - 🗜️ **4-bit Quantization** - Train large models on consumer GPUs
+- 🪄 **GGUF Export** - Quantize any trained model to GGUF via llama.cpp (Q4_K_M, Q5_K_M, Q8_0, F16, and more)
+- 🔮 **llama-server Inference** - Swap between transformers (base + LoRA) and a llama-server GGUF backend from the UI
+- 📦 **Export & Artifacts** - Dedicated Export section for post-hoc GGUF, HuggingFace uploads, and per-model artifact browsing / cleanup
 - 📊 **Real-time Monitoring** - WebSocket updates with live metrics and GPU stats
 - 💾 **Persistent Job Storage** - SQLite database preserves jobs across restarts
 - 📋 **Job Queue** - Priority-based queue with configurable concurrency
 - ✅ **Pre-flight Validation** - Catch configuration errors before training starts
-- 🤗 **HuggingFace Integration** - Push models directly to the Hub (public or private)
+- 🤗 **HuggingFace Integration** - Push models directly to the Hub (public or private) with upload state tracking
 - 📈 **W&B Logging** - Detailed experiment tracking
 
 ## Quick Start
@@ -116,6 +119,32 @@ The interface lets you configure:
 
 The UI dynamically adapts based on the selected training mode, showing only the relevant parameters.
 
+## Export & Quantization
+
+After training, the **Export** section (step 6 in the nav) lets you work on any model under `./models/` without re-training. Three sub-panels:
+
+- **🪄 GGUF Export** — Merge LoRA (if any) and produce one GGUF per selected quant (F16, Q8_0, Q6_K, Q5_K_M, Q5_K_S, Q4_K_M, Q4_K_S, Q3_K_M, Q2_K). Progress streams live over WebSocket. Artifacts land in `./models/{name}/gguf/` with a `manifest.json` sidecar that the Inference picker reads.
+- **🤗 HuggingFace Upload** — Repo ID override, visibility, commit message, license/tags/description, and include-what checkboxes (LoRA adapter, merged full model, GGUF files, README). A "last uploaded" banner shows whether local files have been modified since your last push, plus full history of every upload attempt (success + failure).
+- **🗂️ Artifacts** — Categorized file browser (adapter, merged, GGUF, tokenizer, processor, config, readme) with sizes and per-file delete. Core files (`config.json`, `adapter_config.json`, tokenizer) are 🔒-protected from the API.
+
+### llama.cpp integration
+
+GGUF export and the llama-server inference backend are both powered by a local [llama.cpp](https://github.com/ggerganov/llama.cpp) install. Merlina finds the binaries in this order:
+
+1. `LLAMA_CPP_DIR` — path to a llama.cpp checkout (must contain `convert_hf_to_gguf.py` and `build/bin/`)
+2. `LLAMA_CPP_BIN_DIR` — path to just the built binaries
+3. System `$PATH` — if `llama-quantize`, `llama-server`, etc. are installed globally
+4. `./vendor/llama.cpp` — conventional local clone
+
+If none are found, the GGUF and llama-server features stay disabled in the UI and pre-flight emits an advisory warning (never a blocking error). Check `GET /llama-cpp/status` to see what the resolver found.
+
+### Inference backends
+
+The Inference section exposes two backends:
+
+- **transformers** — base model + LoRA adapter, runs on GPU with optional 4-bit quantization. The default.
+- **llama_cpp** — GGUF served by `llama-server` as a subprocess. Picked automatically when you select a GGUF entry from the model dropdown (they appear as indented sub-options per model).
+
 ## Directory Structure
 
 ```
@@ -133,7 +162,13 @@ merlina/
 │   ├── job_queue.py              # Priority-based job queue
 │   ├── websocket_manager.py      # Real-time updates
 │   ├── preflight_checks.py       # Configuration validation
-│   ├── training_runner.py        # Training logic
+│   ├── training_runner.py        # Training logic + sync merge orchestration
+│   ├── merge_artifact.py         # Ref-counted shared merged-model dir
+│   ├── gguf_exporter.py          # LoRA merge + GGUF convert/quantize pipeline
+│   ├── llama_cpp_resolver.py     # llama.cpp binary discovery
+│   ├── llama_server.py           # llama-server subprocess inference backend
+│   ├── upload_state.py           # Per-model HF upload history sidecar
+│   ├── model_artifacts.py        # Artifact inventory + safe deletion
 │   ├── config_manager.py         # Configuration management
 │   ├── gpu_utils.py              # GPU detection and monitoring
 │   ├── model_card.py             # Model card generation
@@ -184,6 +219,21 @@ merlina/
 - `POST /dataset/upload-file` — Upload dataset file
 - `GET /dataset/uploads` — List uploaded datasets
 
+**Export & Artifacts:**
+- `GET /models/{name}/artifacts` — Categorized file inventory (adapter, merged, GGUF, tokenizer, etc.)
+- `DELETE /models/{name}/artifacts?path=…` — Delete a file (protected core files refused)
+- `GET /models/{name}/upload-state` — Upload history + "local is newer" freshness hint
+- `POST /models/{name}/upload` — Post-hoc HuggingFace upload with advanced options
+- `POST /models/{name}/export-gguf` — Post-hoc GGUF export (merges LoRA + runs llama-quantize)
+- `GET /llama-cpp/status` — Resolver status (available binaries, supported quant types)
+
+**Inference:**
+- `GET /inference/models` — List local models (plus discovered GGUF artifacts per model)
+- `POST /inference/load` — Load a model (`backend: "transformers" | "llama_cpp"`)
+- `POST /inference/chat` — Send a chat completion to the loaded backend
+- `POST /inference/unload` — Free VRAM / stop llama-server
+- `GET /inference/status` — Current backend + model
+
 **Validation & Info:**
 - `POST /validate` — Validate configuration before training
 - `GET /version` — Current version info
@@ -191,7 +241,7 @@ merlina/
 - `GET /api/docs` — Interactive API documentation
 
 **WebSocket:**
-- `WS /ws/{job_id}` — Real-time training updates
+- `WS /ws/{job_id}` — Real-time training and export updates (status, metrics, `gguf_progress`)
 
 Full API documentation: **[API.md](API.md)**
 
@@ -223,6 +273,10 @@ PORT=8000                           # Server port
 CUDA_VISIBLE_DEVICES=0              # GPU selection
 MAX_CONCURRENT_JOBS=1               # Queue concurrency (increase for multi-GPU)
 LOG_LEVEL=INFO                      # Logging verbosity
+
+# llama.cpp (optional — enables GGUF export and llama-server inference)
+LLAMA_CPP_DIR=/opt/llama.cpp        # Path to a llama.cpp checkout (preferred)
+LLAMA_CPP_BIN_DIR=                  # Or just the binary directory
 ```
 
 See `.env.example` for all available options.

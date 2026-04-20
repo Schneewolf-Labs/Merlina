@@ -53,6 +53,10 @@
                 <span class="nav-step">5</span>
                 <span class="nav-label">Inference</span>
             </button>
+            <button class="section-nav-btn" data-section="export-section">
+                <span class="nav-step">6</span>
+                <span class="nav-label">Export</span>
+            </button>
         </nav>
 
         <!-- Main Content -->
@@ -892,6 +896,8 @@
                             </div>
                         </div>
 
+                        <!-- GGUF export moved to the dedicated "Export" section after Inference. -->
+
                         <div class="checkbox-group">
                             <label class="magic-checkbox">
                                 <input type="checkbox" id="use-wandb" checked>
@@ -1081,6 +1087,157 @@
                     </div>
                 </div>
             </section>
+
+            <!-- ═══════════════════════════════════════════════════════════ -->
+            <!-- Export Section                                               -->
+            <!-- ═══════════════════════════════════════════════════════════ -->
+            <section id="export-section" class="card nav-section" style="display: none;">
+                <h2>📦 Export & Publish</h2>
+                <p style="color: #888; margin-top: -10px;">
+                    Quantize trained models to GGUF, publish to HuggingFace Hub, and manage artifacts — all against any model under <code>./models/</code>.
+                </p>
+
+                <div class="form-group">
+                    <label for="export-model-select">Model</label>
+                    <select id="export-model-select" class="magic-input">
+                        <option value="">Loading models…</option>
+                    </select>
+                    <small id="export-model-info" style="color: #888; font-size: 0.85em; display: block; margin-top: 5px;"></small>
+                </div>
+
+                <!-- Tab switcher -->
+                <div id="export-tabs" class="export-tabs" role="tablist" style="display: flex; gap: 8px; margin: 20px 0 15px 0; border-bottom: 2px solid #e5e7eb;">
+                    <button type="button" class="export-tab-btn active" data-tab="gguf" role="tab" aria-selected="true">
+                        🪄 GGUF Export
+                    </button>
+                    <button type="button" class="export-tab-btn" data-tab="hub" role="tab" aria-selected="false">
+                        🤗 HuggingFace Upload
+                    </button>
+                    <button type="button" class="export-tab-btn" data-tab="artifacts" role="tab" aria-selected="false">
+                        🗂️ Artifacts
+                    </button>
+                </div>
+
+                <!-- GGUF panel -->
+                <div id="export-panel-gguf" class="export-panel" role="tabpanel">
+                    <div style="padding: 15px; background: #f5f3ff; border-radius: 10px; border-left: 3px solid #8b5cf6;">
+                        <h4 style="margin-top: 0; color: #8b5cf6;">🔮 GGUF Quantization</h4>
+                        <small style="color: #888; font-size: 0.85em; display: block; margin-bottom: 12px;">
+                            Merlina will merge the LoRA (if any) and brew one GGUF per selected quant. Larger quants keep more quality; smaller quants run on weaker hardware.
+                        </small>
+
+                        <div id="export-gguf-availability" style="margin-bottom: 10px; font-size: 0.9em;"></div>
+
+                        <div class="form-group" style="margin-bottom: 10px;">
+                            <label>Quantization types</label>
+                            <div class="gguf-quant-checkboxes" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px 16px; margin-top: 6px;">
+                                <label class="magic-checkbox"><input type="checkbox" class="export-gguf-quant" value="F16"><span>F16</span></label>
+                                <label class="magic-checkbox"><input type="checkbox" class="export-gguf-quant" value="Q8_0"><span>Q8_0</span></label>
+                                <label class="magic-checkbox"><input type="checkbox" class="export-gguf-quant" value="Q6_K"><span>Q6_K</span></label>
+                                <label class="magic-checkbox"><input type="checkbox" class="export-gguf-quant" value="Q5_K_M"><span>Q5_K_M</span></label>
+                                <label class="magic-checkbox"><input type="checkbox" class="export-gguf-quant" value="Q5_K_S"><span>Q5_K_S</span></label>
+                                <label class="magic-checkbox"><input type="checkbox" class="export-gguf-quant" value="Q4_K_M" checked><span>Q4_K_M ⭐</span></label>
+                                <label class="magic-checkbox"><input type="checkbox" class="export-gguf-quant" value="Q4_K_S"><span>Q4_K_S</span></label>
+                                <label class="magic-checkbox"><input type="checkbox" class="export-gguf-quant" value="Q3_K_M"><span>Q3_K_M</span></label>
+                                <label class="magic-checkbox"><input type="checkbox" class="export-gguf-quant" value="Q2_K"><span>Q2_K</span></label>
+                            </div>
+                        </div>
+
+                        <label class="magic-checkbox" style="margin-top: 4px;">
+                            <input type="checkbox" id="export-keep-fp16">
+                            <span>Keep intermediate fp16 GGUF</span>
+                        </label>
+
+                        <div style="margin-top: 15px;">
+                            <button type="button" id="export-gguf-start" class="action-button" style="background: var(--primary-purple); color: white;">
+                                ✨ Start GGUF Export
+                            </button>
+                            <span id="export-gguf-status" style="margin-left: 12px; font-size: 0.9em;"></span>
+                        </div>
+
+                        <div style="margin-top: 12px;">
+                            <span id="export-gguf-progress-pill" class="status-badge" style="display: none;"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- HuggingFace Hub panel -->
+                <div id="export-panel-hub" class="export-panel" role="tabpanel" style="display: none;">
+                    <div style="padding: 15px; background: #fff7ed; border-radius: 10px; border-left: 3px solid #f97316;">
+                        <h4 style="margin-top: 0; color: #f97316;">🤗 HuggingFace Hub Upload</h4>
+
+                        <div id="export-hub-status-banner" style="margin-bottom: 12px; display: none;"></div>
+
+                        <div class="form-group">
+                            <label for="export-hub-repo-id">Repository ID</label>
+                            <input type="text" id="export-hub-repo-id" class="magic-input" placeholder="user-or-org/model-name">
+                            <small style="color: #888; font-size: 0.85em;">Defaults to the model folder name. Add an org prefix (e.g. <code>myteam/</code>) to publish under an organization.</small>
+                        </div>
+
+                        <label class="magic-checkbox" style="margin-top: 6px;">
+                            <input type="checkbox" id="export-hub-private" checked>
+                            <span>🔒 Private repository</span>
+                        </label>
+
+                        <div class="form-group" style="margin-top: 12px;">
+                            <label>What to include</label>
+                            <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 16px; margin-top: 6px;">
+                                <label class="magic-checkbox"><input type="checkbox" id="export-hub-incl-adapter" checked><span>LoRA adapter</span></label>
+                                <label class="magic-checkbox"><input type="checkbox" id="export-hub-incl-merged"><span>Merged full model (triggers merge)</span></label>
+                                <label class="magic-checkbox"><input type="checkbox" id="export-hub-incl-gguf"><span>GGUF files</span></label>
+                                <label class="magic-checkbox"><input type="checkbox" id="export-hub-incl-readme" checked><span>README.md</span></label>
+                            </div>
+                        </div>
+
+                        <div class="form-group" style="margin-top: 10px;">
+                            <label for="export-hub-commit-message">Commit message</label>
+                            <input type="text" id="export-hub-commit-message" class="magic-input" placeholder="Upload via Merlina">
+                        </div>
+
+                        <details style="margin-top: 10px;">
+                            <summary style="cursor: pointer; color: #f97316; font-size: 0.9em;">Advanced metadata</summary>
+                            <div class="form-group" style="margin-top: 10px;">
+                                <label for="export-hub-license">License (SPDX)</label>
+                                <input type="text" id="export-hub-license" class="magic-input" placeholder="apache-2.0">
+                            </div>
+                            <div class="form-group">
+                                <label for="export-hub-tags">Tags (comma-separated)</label>
+                                <input type="text" id="export-hub-tags" class="magic-input" placeholder="text-generation, lora">
+                            </div>
+                            <div class="form-group">
+                                <label for="export-hub-description">Description</label>
+                                <textarea id="export-hub-description" class="magic-input" rows="2" placeholder="Short description for the model card"></textarea>
+                            </div>
+                            <div class="form-group">
+                                <label for="export-hub-token">HuggingFace token (override)</label>
+                                <input type="password" id="export-hub-token" class="magic-input" placeholder="Leave blank to use server .env">
+                            </div>
+                        </details>
+
+                        <div style="margin-top: 15px;">
+                            <button type="button" id="export-hub-start" class="action-button" style="background: #f97316; color: white;">
+                                📤 Upload to Hub
+                            </button>
+                            <span id="export-hub-status" style="margin-left: 12px; font-size: 0.9em;"></span>
+                        </div>
+                    </div>
+
+                    <div id="export-hub-history" style="margin-top: 15px; font-size: 0.9em;"></div>
+                </div>
+
+                <!-- Artifacts panel -->
+                <div id="export-panel-artifacts" class="export-panel" role="tabpanel" style="display: none;">
+                    <div style="padding: 15px; background: #f0f9ff; border-radius: 10px; border-left: 3px solid #0ea5e9;">
+                        <h4 style="margin-top: 0; color: #0ea5e9;">🗂️ Artifacts</h4>
+                        <small style="color: #888; font-size: 0.85em; display: block; margin-bottom: 12px;">
+                            Everything Merlina saved under <code>./models/{selected}/</code>. Protected files (config, tokenizer) can't be deleted via the UI.
+                        </small>
+
+                        <div id="export-artifacts-summary" style="margin-bottom: 10px; font-size: 0.9em; color: #555;"></div>
+                        <div id="export-artifacts-list"></div>
+                    </div>
+                </div>
+            </section>
         </main>
 
         <!-- Job Monitoring Modal -->
@@ -1160,6 +1317,10 @@
                         </button>
                     </div>
                     <div id="upload-error-message" style="display: none; margin-top: 10px; padding: 10px 14px; background: #fff3cd; color: #856404; border: 1px solid #ffc107; border-radius: 8px; font-size: 0.9em;"></div>
+                    <div style="margin-top: 10px;">
+                        <span id="gguf-progress-pill" class="status-badge" style="display: none;"></span>
+                    </div>
+                    <div id="gguf-error-message" style="display: none; margin-top: 10px; padding: 10px 14px; background: #f5f3ff; color: #6d28d9; border: 1px solid #c4b5fd; border-radius: 8px; font-size: 0.9em;"></div>
                 </div>
             </div>
         </div>

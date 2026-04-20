@@ -35,6 +35,7 @@ class JobRecord:
     wandb_url: Optional[str] = None
     stop_requested: bool = False
     upload_error: Optional[str] = None
+    gguf_error: Optional[str] = None
 
 
 class JobManager:
@@ -115,6 +116,10 @@ class JobManager:
             if 'upload_error' not in existing_columns:
                 cursor.execute("ALTER TABLE jobs ADD COLUMN upload_error TEXT")
                 logger.info("Added upload_error column to jobs table")
+
+            if 'gguf_error' not in existing_columns:
+                cursor.execute("ALTER TABLE jobs ADD COLUMN gguf_error TEXT")
+                logger.info("Added gguf_error column to jobs table")
 
             # Training metrics table (for time-series data)
             cursor.execute("""
@@ -217,7 +222,8 @@ class JobManager:
         metrics: Optional[Dict[str, Any]] = None,
         wandb_url: Optional[str] = None,
         stop_requested: Optional[bool] = None,
-        upload_error: Optional[str] = None
+        upload_error: Optional[str] = None,
+        gguf_error: Optional[str] = None,
     ) -> bool:
         """
         Update job fields.
@@ -283,6 +289,10 @@ class JobManager:
         if upload_error is not None:
             updates.append("upload_error = ?")
             params.append(upload_error)
+
+        if gguf_error is not None:
+            updates.append("gguf_error = ?")
+            params.append(gguf_error)
 
         if not updates:
             return False
@@ -534,5 +544,6 @@ class JobManager:
             metrics=json.loads(row["metrics"]) if row["metrics"] else None,
             wandb_url=row["wandb_url"] if "wandb_url" in row.keys() else None,
             stop_requested=bool(row["stop_requested"]) if "stop_requested" in row.keys() else False,
-            upload_error=row["upload_error"] if "upload_error" in row.keys() else None
+            upload_error=row["upload_error"] if "upload_error" in row.keys() else None,
+            gguf_error=row["gguf_error"] if "gguf_error" in row.keys() else None,
         )

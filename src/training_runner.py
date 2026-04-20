@@ -25,6 +25,7 @@ import logging
 import asyncio
 import threading
 from datetime import datetime
+from pathlib import Path
 from typing import Optional, Dict, Any, Callable
 
 from transformers import (
@@ -172,16 +173,17 @@ def _run_background_upload(
     job_id: str,
     job_manager: JobManager,
     event_loop=None,
-    is_vlm: bool = False
+    is_vlm: bool = False,
+    *,
+    merge_artifact: Optional["_MergeArtifact"] = None,
 ) -> None:
     """
     Run HuggingFace Hub upload in a background thread.
 
-    This allows the job queue worker to continue processing other jobs
-    while the upload (which can take a long time for large models) runs.
-
-    Uses upload_folder() to upload files directly without loading the model
-    into GPU memory, avoiding OOM errors when another training job is running.
+    The (heavy) LoRA merge now happens synchronously in the queue worker
+    via :func:`_perform_sync_merge`; this thread receives the merged dir
+    via ``merge_artifact`` and only does network I/O. If the sync merge
+    failed, falls back to uploading the LoRA adapter on its own.
 
     Args:
         config: Training configuration
@@ -191,6 +193,9 @@ def _run_background_upload(
         job_manager: JobManager for status updates
         event_loop: Event loop for WebSocket updates
         is_vlm: Whether the model is a vision-language model
+        merge_artifact: Pre-merged checkpoint produced by the sync merge
+            step. ``path=None`` indicates the merge failed and we should
+            fall back to adapter-only upload.
     """
     try:
         logger.info(f"🚀 Starting background upload for job {job_id}")
@@ -222,84 +227,27 @@ def _run_background_upload(
 
         # Handle upload based on whether LoRA was used and merge preference
         if config.use_lora and config.merge_lora_before_upload:
-            # For LoRA merge, we need to load the model - try CPU-only to avoid GPU conflicts
-            logger.info(f"🔄 Merging LoRA adapter with base model for upload (using CPU)...")
-
-            try:
-                # Force CPU-only loading to avoid GPU OOM when another job is training
-                model_type = getattr(config, 'model_type', 'auto')
-                reload_cls, _ = _get_auto_model_class(config.base_model, model_type)
-                base_model_reload = reload_cls.from_pretrained(
-                    config.base_model,
-                    low_cpu_mem_usage=True,
-                    dtype=torch.bfloat16,
-                    device_map="cpu",  # Force CPU to avoid GPU conflicts
-                    trust_remote_code=True,
-                )
-
-                model_merged = PeftModel.from_pretrained(
-                    base_model_reload,
-                    final_output_dir,
-                    device_map="cpu"
-                )
-                model_merged = model_merged.merge_and_unload()
-
-                # Save merged model to a temp directory, fix VLM key issues,
-                # then upload the corrected files.
-                import tempfile
-                merge_dir = tempfile.mkdtemp(prefix="merlina_merge_")
-                logger.info(f"Saving merged model to {merge_dir}...")
-                model_merged.save_pretrained(merge_dir)
-
-                # Save tokenizer into the same directory
-                tokenizer = AutoTokenizer.from_pretrained(final_output_dir)
-                tokenizer.save_pretrained(merge_dir)
-
-                # Copy processor files for VLMs
-                if is_vlm:
-                    try:
-                        processor = AutoProcessor.from_pretrained(final_output_dir, trust_remote_code=True)
-                        processor.save_pretrained(merge_dir)
-                    except Exception:
-                        try:
-                            processor = AutoProcessor.from_pretrained(config.base_model, trust_remote_code=True)
-                            processor.save_pretrained(merge_dir)
-                        except Exception as proc_err:
-                            logger.warning(f"Could not save processor: {proc_err}")
-
-                # Fix VLM state-dict key nesting and graft missing weights
-                if is_vlm:
-                    fixed = fix_vlm_state_dict_on_disk(
-                        merge_dir,
-                        base_model_name=config.base_model,
-                        is_vlm=True,
-                    )
-                    if fixed:
-                        logger.info("VLM state dict issues fixed before upload")
-
-                # Upload the corrected directory
-                logger.info(f"📤 Uploading merged model to HuggingFace Hub as {repo_visibility} repository...")
+            # The merge already happened synchronously upstream. Use the
+            # shared artifact dir directly. If the merge failed, drop
+            # back to adapter-only upload — same fallback as before, just
+            # signaled differently now.
+            if merge_artifact is not None and merge_artifact.path is not None:
+                merge_dir = merge_artifact.path
+                logger.info(f"📤 Uploading pre-merged model from {merge_dir} ({repo_visibility})")
                 logger.info(f"   Repository: {full_repo_id}")
                 api.upload_folder(
-                    folder_path=merge_dir,
+                    folder_path=str(merge_dir),
                     repo_id=full_repo_id,
                     token=config.hf_token,
                     commit_message=f"Upload merged model trained with Merlina ({training_mode})",
                 )
                 logger.info(f"✅ Merged model uploaded successfully!")
-
-                # Clean up
-                import shutil as _shutil
-                _shutil.rmtree(merge_dir, ignore_errors=True)
-                del model_merged, base_model_reload
-                gc.collect()
-
-            except Exception as merge_error:
-                # If CPU merge fails (e.g., not enough RAM), fall back to uploading adapter only
-                logger.warning(f"⚠️ Could not merge LoRA on CPU: {merge_error}")
-                logger.info("📤 Falling back to uploading LoRA adapter only...")
-
-                # Upload the saved model directory directly (contains adapter files)
+            else:
+                merge_err = (
+                    merge_artifact.error if merge_artifact and merge_artifact.error
+                    else "merge artifact unavailable"
+                )
+                logger.warning(f"⚠️ Sync merge unavailable ({merge_err}) — uploading LoRA adapter only")
                 api.upload_folder(
                     folder_path=final_output_dir,
                     repo_id=full_repo_id,
@@ -342,6 +290,30 @@ def _run_background_upload(
         readme_content = generate_model_readme(config, training_mode, is_vlm=is_vlm)
         upload_model_readme(full_repo_id, readme_content, config.hf_token)
 
+        # Record the upload in the per-model sidecar so the Export UI
+        # can show "already uploaded ✓" and surface history.
+        try:
+            from .upload_state import record_upload
+            artifact_labels = []
+            if config.use_lora and config.merge_lora_before_upload and merge_artifact and merge_artifact.path:
+                artifact_labels.append("merged")
+            elif config.use_lora:
+                artifact_labels.append("adapter")
+            else:
+                artifact_labels.append("full_model")
+            artifact_labels.append("readme")
+            record_upload(
+                Path(final_output_dir),
+                repo_id=full_repo_id,
+                repo_url=hub_url,
+                private=config.hf_hub_private,
+                commit_message=f"Upload via Merlina ({training_mode})",
+                artifacts=artifact_labels,
+                status="success",
+            )
+        except Exception as exc:
+            logger.warning("Could not persist upload_state.json: %s", exc)
+
         # Update job status after successful upload (clear any prior upload_error)
         logger.info(f"✅ Background upload completed for job {job_id}")
         job_manager.update_job(job_id, status="completed", progress=1.0, output_dir=final_output_dir, upload_error="")
@@ -359,6 +331,23 @@ def _run_background_upload(
         logger.error(f"❌ Background upload failed for job {job_id}: {error_msg}", exc_info=True)
         logger.warning("⚠️ Training completed successfully, but upload failed")
         logger.info(f"💾 Model saved locally at: {final_output_dir}")
+
+        # Record the failure too so the Export UI can show it.
+        try:
+            from .upload_state import record_upload
+            record_upload(
+                Path(final_output_dir),
+                repo_id=getattr(config, "output_name", ""),
+                repo_url="",
+                private=getattr(config, "hf_hub_private", True),
+                commit_message=f"Upload via Merlina ({training_mode})",
+                artifacts=[],
+                status="failed",
+                error=error_msg,
+            )
+        except Exception as exc:
+            logger.warning("Could not persist failed upload_state.json: %s", exc)
+
         # Mark as completed — training succeeded. Store the upload error separately
         # so the user can see what went wrong and retry.
         job_manager.update_job(
@@ -377,6 +366,206 @@ def _run_background_upload(
             ),
             event_loop
         )
+    finally:
+        # Always release our refcount on the shared merged dir so the
+        # last consumer (this thread or the GGUF thread) cleans it up.
+        if merge_artifact is not None:
+            merge_artifact.release()
+
+
+# Re-exported for backwards compatibility — the implementation lives in
+# src/merge_artifact.py so the test suite can exercise it without
+# importing the full training stack.
+from .merge_artifact import MergeArtifact as _MergeArtifact  # noqa: E402
+
+
+def _perform_sync_merge(
+    config: Any,
+    final_output_dir: str,
+    job_id: str,
+    job_manager: JobManager,
+    event_loop=None,
+    is_vlm: bool = False,
+    *,
+    num_consumers: int,
+) -> _MergeArtifact:
+    """
+    Merge LoRA → base model on the queue worker thread (NOT in background).
+
+    Runs synchronously so the queue worker does not release the slot
+    until the (RAM-heavy, ~14GB for 7B in bf16) merge is done. This
+    prevents the next training job from racing for system RAM and
+    crashing both. Pure-disk steps (HF upload, GGUF convert/quantize)
+    still run in background threads — those are lightweight enough that
+    they don't compete with active training.
+
+    Returns a :class:`_MergeArtifact` whose ``path`` is the merged dir on
+    success, or whose ``error`` is set on failure (consumers handle that
+    gracefully — uploads fall back to adapter-only, GGUF skips).
+    """
+    from .gguf_exporter import merge_lora_to_directory
+
+    merge_dir = tempfile.mkdtemp(prefix="merlina_merge_")
+    logger.info("🔀 Merging LoRA on CPU (sync, queue blocked) → %s", merge_dir)
+
+    # Cosmetic status update — frontend renders "merging" badge.
+    try:
+        job_manager.update_job(job_id, status="merging")
+    except Exception:
+        pass
+
+    if websocket_manager is not None:
+        send_websocket_update(
+            websocket_manager.send_status_update(
+                job_id=job_id,
+                status="merging",
+                progress=getattr(config, "_progress_at_save", 0.95),
+            ),
+            event_loop,
+        )
+
+    try:
+        merge_lora_to_directory(
+            base_model=config.base_model,
+            adapter_dir=Path(final_output_dir),
+            output_dir=Path(merge_dir),
+            model_type=getattr(config, "model_type", "auto"),
+            is_vlm=is_vlm,
+        )
+        logger.info("✅ Sync merge complete in %s", merge_dir)
+        return _MergeArtifact(Path(merge_dir), num_consumers=num_consumers)
+    except Exception as exc:
+        logger.warning("⚠️ Sync LoRA merge failed: %s", exc)
+        # Clean the partial dir immediately; consumers won't get a path.
+        shutil.rmtree(merge_dir, ignore_errors=True)
+        return _MergeArtifact(
+            None,
+            num_consumers=num_consumers,
+            error=f"LoRA merge failed: {exc}",
+        )
+
+
+def _run_background_gguf_export(
+    config: Any,
+    final_output_dir: str,
+    job_id: str,
+    job_manager: JobManager,
+    event_loop=None,
+    is_vlm: bool = False,
+    *,
+    merge_artifact: Optional["_MergeArtifact"] = None,
+) -> None:
+    """
+    Run llama.cpp convert + quantize in a background thread.
+
+    The (heavy) LoRA merge is now done synchronously by the queue worker
+    via :func:`_perform_sync_merge` and handed in via ``merge_artifact``,
+    so this thread only does the lightweight convert/quantize work that
+    won't compete with active training for VRAM/RAM.
+
+    Failures are attached to the job record via ``gguf_error`` and
+    surfaced as a non-fatal warning.
+    """
+    from .gguf_exporter import (
+        GGUFExportError,
+        ProgressEvent,
+        export_gguf_artifacts,
+    )
+    from .llama_cpp_resolver import resolve_llama_cpp
+
+    output_name = getattr(config, "output_name", "model")
+    gguf_dir = os.path.join(final_output_dir, "gguf")
+    os.makedirs(gguf_dir, exist_ok=True)
+
+    def _progress(event: ProgressEvent) -> None:
+        if websocket_manager is None:
+            return
+        send_websocket_update(
+            websocket_manager.send_gguf_progress(
+                job_id=job_id,
+                stage=event.stage,
+                message=event.message,
+                quant_type=event.quant_type,
+                current=event.current,
+                total=event.total,
+                artifact_path=event.artifact_path,
+                error=event.error,
+            ),
+            event_loop,
+        )
+
+    try:
+        resolution = resolve_llama_cpp()
+        if not resolution.available:
+            hint = resolution.warnings[0] if resolution.warnings else "llama.cpp not available"
+            logger.warning("Skipping GGUF export: %s", hint)
+            job_manager.update_job(job_id, gguf_error=hint)
+            _progress(ProgressEvent(stage="error", message=hint, error=hint))
+            return
+
+        # Pick the source dir: merged checkpoint for LoRA jobs, original
+        # output dir for full fine-tunes.
+        if getattr(config, "use_lora", True):
+            if merge_artifact is None or merge_artifact.path is None:
+                err = (
+                    merge_artifact.error if merge_artifact and merge_artifact.error
+                    else "no merged checkpoint available"
+                )
+                msg = f"GGUF export skipped: {err}"
+                logger.warning(msg)
+                job_manager.update_job(job_id, gguf_error=msg)
+                _progress(ProgressEvent(stage="error", message=msg, error=err))
+                return
+            source_dir = merge_artifact.path
+        else:
+            source_dir = Path(final_output_dir)
+
+        result = export_gguf_artifacts(
+            source_dir=source_dir,
+            output_dir=Path(gguf_dir),
+            output_name=output_name,
+            quant_types=getattr(config, "gguf_quant_types", ["Q4_K_M"]),
+            resolution=resolution,
+            keep_fp16=getattr(config, "keep_gguf_fp16", False),
+            base_model=getattr(config, "base_model", None),
+            callback=_progress,
+        )
+
+        if not result.artifacts:
+            msg = "GGUF export produced no artifacts"
+            logger.warning(msg)
+            job_manager.update_job(job_id, gguf_error=msg)
+            return
+
+        if result.failed_quants:
+            warn = (
+                f"GGUF export partial: produced {len(result.artifacts)} "
+                f"artifact(s); failed quants: {', '.join(result.failed_quants)}"
+            )
+            logger.warning(warn)
+            job_manager.update_job(job_id, gguf_error=warn)
+        else:
+            # Clear any prior error on full success
+            job_manager.update_job(job_id, gguf_error="")
+
+        logger.info(
+            "GGUF export finished for job %s: %d artifact(s) in %s",
+            job_id,
+            len(result.artifacts),
+            gguf_dir,
+        )
+
+    except GGUFExportError as exc:
+        logger.warning("GGUF export aborted for job %s: %s", job_id, exc)
+        job_manager.update_job(job_id, gguf_error=str(exc))
+        _progress(ProgressEvent(stage="error", message=str(exc), error=str(exc)))
+    except Exception as exc:
+        logger.exception("Unexpected error during GGUF export for job %s", job_id)
+        job_manager.update_job(job_id, gguf_error=f"unexpected error: {exc}")
+        _progress(ProgressEvent(stage="error", message=str(exc), error=str(exc)))
+    finally:
+        if merge_artifact is not None:
+            merge_artifact.release()
 
 
 def send_websocket_update(coro, loop=None):
@@ -1399,43 +1588,93 @@ def run_training_sync(
         torch.cuda.empty_cache()
         logger.info("✅ VRAM freed successfully")
 
-        # Optional: merge and upload (runs in background thread to not block queue)
-        # Wrapped in its own try/except so upload failures never mark the job as "failed"
-        # — training already succeeded at this point.
+        # ---- Decide which post-training pipelines run ----
+        is_distributed = torch.distributed.is_initialized()
+        is_main_process = (not is_distributed) or (torch.distributed.get_rank() == 0)
+
+        wants_upload = bool(config.push_to_hub) and is_main_process
+        wants_gguf = bool(getattr(config, "export_gguf", False)) and not was_stopped and is_main_process
+        if config.push_to_hub and not is_main_process:
+            logger.info("⏭️ Skipping HuggingFace upload (not main process in distributed training)")
+        if getattr(config, "export_gguf", False) and not is_main_process:
+            logger.info("⏭️ Skipping GGUF export (not main process in distributed training)")
+
+        if wants_upload and not config.hf_token:
+            logger.warning("⚠️ push_to_hub enabled but no HF token provided - skipping upload")
+            logger.info("💡 Provide HF_TOKEN in .env or via hf_token parameter to enable uploads")
+            wants_upload = False
+
+        # Compute who actually needs the merged checkpoint. Upload only
+        # needs it when merge_lora_before_upload=True; GGUF needs it
+        # whenever LoRA was used.
+        upload_needs_merge = wants_upload and config.use_lora and config.merge_lora_before_upload
+        gguf_needs_merge = wants_gguf and config.use_lora
+        consumers = (1 if upload_needs_merge else 0) + (1 if gguf_needs_merge else 0)
+
+        # ---- Sync merge step (queue blocks here on purpose) ----
+        # The merge can hold ~14GB of system RAM for a 7B model in bf16
+        # and briefly initialize CUDA for some custom architectures.
+        # Doing it synchronously stops the next queued job from racing
+        # for those resources. The downstream HF upload and llama.cpp
+        # convert/quantize stages stay in background threads — they're
+        # pure network or CPU/disk and don't compete with active training.
+        merge_artifact: Optional["_MergeArtifact"] = None
+        if consumers > 0:
+            merge_artifact = _perform_sync_merge(
+                config,
+                final_output_dir,
+                job_id,
+                job_manager,
+                event_loop=event_loop,
+                is_vlm=is_vlm,
+                num_consumers=consumers,
+            )
+
+        # ---- Background upload ----
         upload_thread_started = False
         try:
-            if config.push_to_hub:
-                # Check if we should upload (main process in distributed, or always in single GPU)
-                is_distributed = torch.distributed.is_initialized()
-                should_upload = (not is_distributed) or (torch.distributed.get_rank() == 0)
-
-                if should_upload:
-                    # Validate HF token is provided
-                    if not config.hf_token:
-                        logger.warning("⚠️ push_to_hub enabled but no HF token provided - skipping upload")
-                        logger.info("💡 Provide HF_TOKEN in .env or via hf_token parameter to enable uploads")
-                    else:
-                        # Start upload in a background thread
-                        # This allows the job queue worker to continue processing other jobs
-                        # while the upload (which can take a long time) runs in the background
-                        # Note: Using daemon=False so uploads can complete even during shutdown
-                        # The thread handles its own error cases gracefully
-                        logger.info("📤 Starting background upload thread...")
-                        upload_thread = threading.Thread(
-                            target=_run_background_upload,
-                            args=(config, final_output_dir, training_mode, job_id, job_manager, event_loop, is_vlm),
-                            name=f"UploadThread-{job_id}",
-                            daemon=False  # Non-daemon to allow upload completion
-                        )
-                        upload_thread.start()
-                        upload_thread_started = True
-                        logger.info(f"📤 Background upload thread started for job {job_id}")
-                else:
-                    logger.info("⏭️ Skipping HuggingFace upload (not main process in distributed training)")
+            if wants_upload:
+                logger.info("📤 Starting background upload thread...")
+                upload_thread = threading.Thread(
+                    target=_run_background_upload,
+                    args=(config, final_output_dir, training_mode, job_id, job_manager, event_loop, is_vlm),
+                    kwargs={"merge_artifact": merge_artifact if upload_needs_merge else None},
+                    name=f"UploadThread-{job_id}",
+                    daemon=False,  # Non-daemon to allow upload completion
+                )
+                upload_thread.start()
+                upload_thread_started = True
+                logger.info(f"📤 Background upload thread started for job {job_id}")
         except Exception as upload_setup_err:
             logger.error(f"❌ Failed to start upload for job {job_id}: {upload_setup_err}", exc_info=True)
             logger.warning("⚠️ Training completed successfully, but upload could not be started")
             job_manager.update_job(job_id, upload_error=str(upload_setup_err))
+            # The upload thread won't run — release its hold on the merge artifact.
+            if upload_needs_merge and merge_artifact is not None:
+                merge_artifact.release()
+
+        # ---- Background GGUF export ----
+        gguf_thread_started = False
+        try:
+            if wants_gguf:
+                logger.info("🔮 Starting background GGUF export thread...")
+                gguf_thread = threading.Thread(
+                    target=_run_background_gguf_export,
+                    args=(config, final_output_dir, job_id, job_manager, event_loop, is_vlm),
+                    kwargs={"merge_artifact": merge_artifact if gguf_needs_merge else None},
+                    name=f"GGUFExportThread-{job_id}",
+                    daemon=False,
+                )
+                gguf_thread.start()
+                gguf_thread_started = True
+        except Exception as gguf_setup_err:
+            logger.error(
+                f"❌ Failed to start GGUF export for job {job_id}: {gguf_setup_err}",
+                exc_info=True,
+            )
+            job_manager.update_job(job_id, gguf_error=str(gguf_setup_err))
+            if gguf_needs_merge and merge_artifact is not None:
+                merge_artifact.release()
 
         # Mark as completed or stopped (unless upload thread is running - it will handle final status)
         if upload_thread_started:

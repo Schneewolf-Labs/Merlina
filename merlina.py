@@ -10,9 +10,10 @@ import asyncio
 import torch
 import wandb
 import logging
+import json
 import threading
 from datetime import datetime
-from typing import Literal, Optional, Dict, Any
+from typing import Literal, Optional, Dict, Any, List
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
@@ -115,6 +116,7 @@ class JobsProxy:
             "loss": job.loss,
             "error": job.error,
             "upload_error": job.upload_error,
+            "gguf_error": job.gguf_error,
             "wandb_url": job.wandb_url
         }
 
@@ -319,6 +321,20 @@ class TrainingConfig(BaseModel):
     hf_token: Optional[str] = Field(None, description="HuggingFace token for pushing")
     wandb_key: Optional[str] = Field(None, description="Weights & Biases API key")
 
+    # GGUF export (llama.cpp)
+    export_gguf: bool = Field(
+        False,
+        description="After training, merge and export the model to one or more GGUF files via llama.cpp"
+    )
+    gguf_quant_types: list[str] = Field(
+        default_factory=lambda: ["Q4_K_M"],
+        description="GGUF quantization types to produce. Supported: F16, Q8_0, Q6_K, Q5_K_M, Q5_K_S, Q4_K_M, Q4_K_S, Q3_K_M, Q2_K"
+    )
+    keep_gguf_fp16: bool = Field(
+        False,
+        description="Retain the intermediate fp16 GGUF after quantization (also kept automatically if F16 is in gguf_quant_types)"
+    )
+
     # Priority 2 settings (advanced)
     shuffle_dataset: bool = Field(True, description="Shuffle training data")
     weight_decay: float = Field(0.01, ge=0.0, le=0.5, description="L2 regularization strength")
@@ -401,6 +417,23 @@ class TrainingConfig(BaseModel):
         self.wandb_key = resolve_wandb_key(self.wandb_key)
         return self
 
+    @model_validator(mode="after")
+    def _validate_gguf_quant_types(self):
+        """Normalize + validate requested GGUF quant types (uppercase, dedup)."""
+        if not self.export_gguf:
+            return self
+        from src.gguf_exporter import normalize_quant_types
+        try:
+            self.gguf_quant_types = normalize_quant_types(self.gguf_quant_types)
+        except ValueError as exc:
+            raise ValueError(str(exc)) from exc
+        if not self.gguf_quant_types:
+            raise ValueError(
+                "export_gguf is enabled but gguf_quant_types is empty — "
+                "pick at least one (e.g. 'Q4_K_M')."
+            )
+        return self
+
 class JobResponse(BaseModel):
     job_id: str
     status: str
@@ -415,6 +448,7 @@ class JobStatus(BaseModel):
     loss: Optional[float] = None
     error: Optional[str] = None
     upload_error: Optional[str] = None
+    gguf_error: Optional[str] = None
     wandb_url: Optional[str] = None
     queue_position: Optional[int] = None
     queue_state: Optional[str] = None
@@ -425,12 +459,54 @@ class JobStatus(BaseModel):
 class InferenceLoadRequest(BaseModel):
     """Request to load a model for inference"""
     model_name: str = Field(..., description="HuggingFace model ID, local path, or name of a trained model in models/ directory")
-    use_4bit: bool = Field(True, description="Load with 4-bit quantization")
+    use_4bit: bool = Field(True, description="Load with 4-bit quantization (transformers backend only)")
     hf_token: Optional[str] = Field(None, description="HuggingFace token for gated models")
+
+    # llama.cpp / GGUF backend
+    backend: str = Field(
+        "transformers",
+        description="Inference backend: 'transformers' (base + LoRA on GPU) or 'llama_cpp' (GGUF via llama-server)"
+    )
+    gguf_path: Optional[str] = Field(
+        None,
+        description="Absolute path to a GGUF file. Required when backend='llama_cpp'. If omitted, the resolver looks for a manifest under ./models/{model_name}/gguf/"
+    )
+    gguf_quant_type: Optional[str] = Field(
+        None,
+        description="Preferred GGUF quant type when the model has multiple manifest entries (e.g. 'Q4_K_M'). Ignored if gguf_path is set."
+    )
+    llama_server_port: int = Field(
+        8080,
+        ge=1024,
+        le=65535,
+        description="Port to bind llama-server on (llama_cpp backend only)"
+    )
+    n_gpu_layers: int = Field(
+        -1,
+        ge=-1,
+        le=999,
+        description="Layers to offload to GPU for llama-server. -1 = all layers (recommended if VRAM allows), 0 = CPU only."
+    )
+    context_size: int = Field(
+        4096,
+        ge=256,
+        le=131072,
+        description="Context window for llama-server"
+    )
 
     @model_validator(mode="after")
     def _fill_hf_token_from_env(self):
         self.hf_token = resolve_hf_token(self.hf_token)
+        return self
+
+    @model_validator(mode="after")
+    def _validate_backend(self):
+        self.backend = (self.backend or "transformers").lower()
+        if self.backend not in {"transformers", "llama_cpp"}:
+            raise ValueError(
+                f"Unknown inference backend '{self.backend}'. "
+                "Expected 'transformers' or 'llama_cpp'."
+            )
         return self
 
 class InferenceChatRequest(BaseModel):
@@ -442,6 +518,61 @@ class InferenceChatRequest(BaseModel):
     top_k: int = Field(50, ge=0, le=200)
     repetition_penalty: float = Field(1.1, ge=1.0, le=2.0)
     do_sample: bool = Field(True, description="Use sampling (False = greedy decoding)")
+
+
+# ===== Export / re-upload request models =====
+
+class ModelUploadRequest(BaseModel):
+    """Kick off a post-hoc HuggingFace Hub upload for an existing model."""
+    repo_id: Optional[str] = Field(
+        None,
+        description="Override the Hub repo ID. Defaults to the model directory name."
+    )
+    private: bool = Field(True, description="Create/update repo as private")
+    commit_message: Optional[str] = Field(None, description="Commit message")
+    hf_token: Optional[str] = Field(None, description="HuggingFace token; falls back to env")
+    include_adapter: bool = Field(True, description="Include LoRA adapter files if present")
+    include_merged: bool = Field(
+        False,
+        description="Include merged full model weights (will merge on the fly if LoRA)"
+    )
+    include_gguf: bool = Field(False, description="Include everything under gguf/")
+    include_readme: bool = Field(True, description="Include README.md if present")
+    base_model: Optional[str] = Field(
+        None,
+        description="Base model override (used for merge + model card if adapter_config missing)"
+    )
+    model_type: str = Field("auto", description="'auto' | 'causal_lm' | 'vlm'")
+    tags: Optional[List[str]] = Field(None, description="Extra tags for the generated README")
+    license: Optional[str] = Field(None, description="SPDX license identifier for the README")
+    description: Optional[str] = Field(None, description="Free-form description for the README")
+
+    @model_validator(mode="after")
+    def _fill_hf_token_from_env(self):
+        self.hf_token = resolve_hf_token(self.hf_token)
+        return self
+
+
+class ModelGgufExportRequest(BaseModel):
+    """Kick off a post-hoc GGUF export for an existing model."""
+    quant_types: List[str] = Field(
+        default_factory=lambda: ["Q4_K_M"],
+        description="GGUF quant types to produce (F16, Q8_0, Q6_K, Q5_K_M, Q5_K_S, Q4_K_M, Q4_K_S, Q3_K_M, Q2_K)"
+    )
+    keep_fp16: bool = Field(False, description="Keep intermediate fp16 GGUF")
+    base_model: Optional[str] = Field(
+        None,
+        description="Base model override (used when adapter_config.json is missing)"
+    )
+    model_type: str = Field("auto", description="'auto' | 'causal_lm' | 'vlm'")
+
+    @model_validator(mode="after")
+    def _normalize_quants(self):
+        from src.gguf_exporter import normalize_quant_types
+        self.quant_types = normalize_quant_types(self.quant_types)
+        if not self.quant_types:
+            raise ValueError("Pick at least one GGUF quant type (e.g. 'Q4_K_M').")
+        return self
 
 
 def _get_inference_device(model):
@@ -461,8 +592,52 @@ _inference_state = {
     "is_lora": False,
     "base_model_name": None,
     "use_4bit": False,
+    # llama.cpp / GGUF backend
+    "backend": "transformers",       # "transformers" | "llama_cpp"
+    "llama_server": None,            # Optional[LlamaServerProcess]
+    "gguf_path": None,               # Optional[str] — absolute path of active GGUF
+    "gguf_quant_type": None,         # Optional[str]
 }
 _inference_lock = threading.Lock()
+
+
+def _unload_current_inference() -> Optional[str]:
+    """
+    Tear down whichever inference backend is active. Caller must NOT hold
+    ``_inference_lock`` — this function acquires it. Returns the name of
+    the previously loaded model, or ``None`` if nothing was loaded.
+    """
+    with _inference_lock:
+        prev_backend = _inference_state.get("backend")
+        prev_name = _inference_state.get("model_name")
+        llama_server = _inference_state.get("llama_server")
+
+        if _inference_state.get("model") is not None:
+            _inference_state["model"] = None
+        _inference_state["tokenizer"] = None
+        _inference_state["model_name"] = None
+        _inference_state["is_lora"] = False
+        _inference_state["base_model_name"] = None
+        _inference_state["use_4bit"] = False
+        _inference_state["backend"] = "transformers"
+        _inference_state["llama_server"] = None
+        _inference_state["gguf_path"] = None
+        _inference_state["gguf_quant_type"] = None
+
+    # Stop subprocess outside the lock so a slow shutdown doesn't block
+    # concurrent status queries.
+    if llama_server is not None:
+        try:
+            llama_server.stop()
+        except Exception:
+            logger.exception("Error while stopping llama-server")
+
+    if prev_backend != "llama_cpp":
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+    return prev_name
 
 # Mount static files for frontend
 if FRONTEND_DIR.exists():
@@ -616,6 +791,24 @@ async def get_env_secrets_status():
     have to paste them into the UI.
     """
     return env_secret_status()
+
+
+@app.get("/llama-cpp/status")
+async def get_llama_cpp_status():
+    """
+    Report whether llama.cpp is resolvable so the UI can enable/disable
+    GGUF export controls without running the full preflight validator.
+
+    Returns the resolution dict (binaries list, source, warnings). Never
+    raises — a missing llama.cpp is not an error, just a disabled feature.
+    """
+    from src.llama_cpp_resolver import resolve_llama_cpp
+    from src.gguf_exporter import SUPPORTED_QUANT_TYPES, DEFAULT_QUANT_TYPES
+
+    resolution = resolve_llama_cpp().to_dict()
+    resolution["supported_quant_types"] = list(SUPPORTED_QUANT_TYPES)
+    resolution["default_quant_types"] = list(DEFAULT_QUANT_TYPES)
+    return resolution
 
 
 @app.get("/presets")
@@ -802,6 +995,7 @@ async def get_job_status(job_id: str):
         loss=job.get("loss"),
         error=job.get("error"),
         upload_error=job.get("upload_error"),
+        gguf_error=job.get("gguf_error"),
         wandb_url=job.get("wandb_url"),
         queue_position=queue_status.get("position"),
         queue_state=queue_status.get("state")
@@ -837,6 +1031,7 @@ async def get_job_history(limit: int = 50, offset: int = 0, status: Optional[str
                 "output_dir": job.output_dir,
                 "error": job.error,
                 "upload_error": job.upload_error,
+                "gguf_error": job.gguf_error,
                 "config_summary": {
                     "base_model": job.config.get("base_model", ""),
                     "output_name": job.config.get("output_name", ""),
@@ -2288,6 +2483,35 @@ async def list_inference_models():
                 model_info["is_lora"] = False
                 model_info["base_model"] = None
 
+            # Attach GGUF manifest if the training job produced any.
+            gguf_manifest_path = model_dir / "gguf" / "manifest.json"
+            if gguf_manifest_path.is_file():
+                import json as _json
+                try:
+                    with open(gguf_manifest_path) as f:
+                        manifest = _json.load(f)
+                    # Surface just what the UI needs; keep the absolute
+                    # file path so the client can round-trip it into
+                    # /inference/load without re-reading the manifest.
+                    gguf_entries = []
+                    for artifact in manifest.get("artifacts", []):
+                        filename = artifact.get("filename")
+                        gguf_entries.append({
+                            "quant_type": artifact.get("quant_type"),
+                            "filename": filename,
+                            "size_bytes": artifact.get("size_bytes"),
+                            "path": artifact.get("path") or (
+                                str(model_dir / "gguf" / filename) if filename else None
+                            ),
+                        })
+                    if gguf_entries:
+                        model_info["gguf"] = gguf_entries
+                except Exception as exc:
+                    logger.debug(
+                        "Could not read GGUF manifest for %s: %s",
+                        model_dir.name, exc,
+                    )
+
             local_models.append(model_info)
 
     return {"models": local_models}
@@ -2297,25 +2521,77 @@ async def list_inference_models():
 async def load_inference_model(request: InferenceLoadRequest):
     """Load a model for inference."""
 
-    with _inference_lock:
-        # Unload existing model first
-        if _inference_state["model"] is not None:
-            del _inference_state["model"]
-            _inference_state["model"] = None
-            _inference_state["tokenizer"] = None
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+    # Unload any currently-loaded model (either backend).
+    _unload_current_inference()
 
     model_name = request.model_name
-    is_lora = False
-    base_model_name = None
 
-    # Check if it's a trained model from models/ directory
+    # Resolve the local models directory once — both backends use it.
     if settings.models_dir.is_absolute():
         models_dir = settings.models_dir
     else:
         models_dir = SCRIPT_DIR / settings.models_dir
+
+    # ---------------- llama.cpp / GGUF backend ----------------
+    if request.backend == "llama_cpp":
+        from src.llama_server import (
+            LlamaServerError,
+            LlamaServerProcess,
+            resolve_gguf_for_model,
+        )
+
+        # Resolve the GGUF file. Precedence:
+        #   1. explicit absolute path
+        #   2. models/{model_name}/gguf/manifest.json (optionally filtered by quant_type)
+        if request.gguf_path:
+            gguf_path = Path(request.gguf_path).expanduser()
+        else:
+            gguf_path = resolve_gguf_for_model(
+                models_dir,
+                model_name,
+                preferred_quant=request.gguf_quant_type,
+            )
+        if not gguf_path or not Path(gguf_path).is_file():
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"No GGUF file found for '{model_name}'. Run the training "
+                    "job with export_gguf=True, or pass gguf_path explicitly."
+                ),
+            )
+
+        try:
+            server = LlamaServerProcess(
+                gguf_path=Path(gguf_path),
+                port=request.llama_server_port,
+                n_gpu_layers=request.n_gpu_layers,
+                context_size=request.context_size,
+            )
+            server.start()
+        except LlamaServerError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        with _inference_lock:
+            _inference_state["backend"] = "llama_cpp"
+            _inference_state["llama_server"] = server
+            _inference_state["model_name"] = model_name
+            _inference_state["gguf_path"] = str(gguf_path)
+            _inference_state["gguf_quant_type"] = request.gguf_quant_type
+
+        return {
+            "status": "loaded",
+            "backend": "llama_cpp",
+            "model_name": model_name,
+            "gguf_path": str(gguf_path),
+            "gguf_quant_type": request.gguf_quant_type,
+            "server_url": server.base_url,
+            "context_size": request.context_size,
+            "n_gpu_layers": request.n_gpu_layers,
+        }
+
+    # ---------------- transformers backend (existing path) ----------------
+    is_lora = False
+    base_model_name = None
     local_adapter_path = models_dir / model_name
 
     has_adapter = (
@@ -2411,6 +2687,7 @@ async def load_inference_model(request: InferenceLoadRequest):
             _inference_state["is_lora"] = is_lora
             _inference_state["base_model_name"] = base_model_name
             _inference_state["use_4bit"] = request.use_4bit
+            _inference_state["backend"] = "transformers"
 
         # Get memory usage
         gpu_mem = None
@@ -2419,6 +2696,7 @@ async def load_inference_model(request: InferenceLoadRequest):
 
         return {
             "status": "loaded",
+            "backend": "transformers",
             "model_name": model_name,
             "is_lora": is_lora,
             "base_model": base_model_name,
@@ -2442,25 +2720,15 @@ async def load_inference_model(request: InferenceLoadRequest):
 async def unload_inference_model():
     """Unload the current inference model to free VRAM"""
     with _inference_lock:
-        if _inference_state["model"] is None:
+        has_transformers_model = _inference_state.get("model") is not None
+        has_llama_server = _inference_state.get("llama_server") is not None
+        if not has_transformers_model and not has_llama_server:
             return {"status": "no_model", "message": "No model is currently loaded"}
 
-        model_name = _inference_state["model_name"]
-        del _inference_state["model"]
-        _inference_state["model"] = None
-        _inference_state["tokenizer"] = None
-        _inference_state["model_name"] = None
-        _inference_state["is_lora"] = False
-        _inference_state["base_model_name"] = None
-        _inference_state["use_4bit"] = False
-
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
+    prev_name = _unload_current_inference()
     return {
         "status": "unloaded",
-        "message": f"Model '{model_name}' unloaded",
+        "message": f"Model '{prev_name}' unloaded",
     }
 
 
@@ -2468,7 +2736,21 @@ async def unload_inference_model():
 async def inference_status():
     """Get the current inference model status"""
     with _inference_lock:
-        if _inference_state["model"] is None:
+        backend = _inference_state.get("backend", "transformers")
+        if backend == "llama_cpp":
+            server = _inference_state.get("llama_server")
+            if server is None or not server.is_running():
+                return {"loaded": False}
+            return {
+                "loaded": True,
+                "backend": "llama_cpp",
+                "model_name": _inference_state.get("model_name"),
+                "gguf_path": _inference_state.get("gguf_path"),
+                "gguf_quant_type": _inference_state.get("gguf_quant_type"),
+                "server_url": server.base_url,
+            }
+
+        if _inference_state.get("model") is None:
             return {"loaded": False}
 
         gpu_mem = None
@@ -2477,6 +2759,7 @@ async def inference_status():
 
         return {
             "loaded": True,
+            "backend": "transformers",
             "model_name": _inference_state["model_name"],
             "is_lora": _inference_state["is_lora"],
             "base_model": _inference_state["base_model_name"],
@@ -2489,8 +2772,41 @@ async def inference_status():
 async def inference_chat(request: InferenceChatRequest):
     """Generate a response from the loaded model"""
     with _inference_lock:
-        model = _inference_state["model"]
-        tokenizer = _inference_state["tokenizer"]
+        backend = _inference_state.get("backend", "transformers")
+        model = _inference_state.get("model")
+        tokenizer = _inference_state.get("tokenizer")
+        llama_server = _inference_state.get("llama_server")
+        active_name = _inference_state.get("model_name")
+
+    if backend == "llama_cpp":
+        from src.llama_server import LlamaServerError
+        if llama_server is None or not llama_server.is_running():
+            raise HTTPException(
+                status_code=400,
+                detail="No llama.cpp model loaded. Use /inference/load first",
+            )
+        try:
+            result = await asyncio.to_thread(
+                llama_server.chat,
+                request.messages,
+                max_tokens=request.max_new_tokens,
+                temperature=request.temperature,
+                top_p=request.top_p,
+                top_k=request.top_k,
+                repetition_penalty=request.repetition_penalty,
+                do_sample=request.do_sample,
+            )
+        except LlamaServerError as exc:
+            logger.error("llama-server chat failed: %s", exc)
+            raise HTTPException(status_code=500, detail=str(exc))
+
+        return {
+            "response": result["content"],
+            "tokens_generated": result.get("completion_tokens"),
+            "model_name": active_name,
+            "backend": "llama_cpp",
+            "finish_reason": result.get("finish_reason"),
+        }
 
     if model is None or tokenizer is None:
         raise HTTPException(
@@ -2544,7 +2860,8 @@ async def inference_chat(request: InferenceChatRequest):
         return {
             "response": response_text,
             "tokens_generated": n_tokens,
-            "model_name": _inference_state["model_name"],
+            "model_name": active_name,
+            "backend": "transformers",
         }
 
     except Exception as e:
@@ -2553,6 +2870,293 @@ async def inference_chat(request: InferenceChatRequest):
             status_code=500,
             detail=f"Generation failed: {str(e)}",
         )
+
+
+# ==================== Export / Artifacts Endpoints ====================
+
+def _resolve_models_dir() -> Path:
+    if settings.models_dir.is_absolute():
+        return settings.models_dir
+    return SCRIPT_DIR / settings.models_dir
+
+
+def _resolve_model_dir(name: str) -> Path:
+    """Resolve and validate a model name to an absolute dir under ./models/."""
+    models_dir = _resolve_models_dir().resolve()
+    candidate = (models_dir / name).resolve()
+    try:
+        candidate.relative_to(models_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid model name: {name}")
+    if not candidate.is_dir():
+        raise HTTPException(status_code=404, detail=f"Model '{name}' not found")
+    return candidate
+
+
+def _infer_base_model(model_dir: Path, override: Optional[str]) -> str:
+    """Pick a base model: explicit override → adapter_config.json → raise."""
+    if override:
+        return override
+    cfg_path = model_dir / "adapter_config.json"
+    if cfg_path.is_file():
+        try:
+            with cfg_path.open() as fh:
+                cfg = json.load(fh)
+            base = cfg.get("base_model_name_or_path")
+            if base:
+                return base
+        except Exception:
+            pass
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"Could not determine base_model for '{model_dir.name}'. "
+            "Provide it explicitly in the request body."
+        ),
+    )
+
+
+@app.get("/models/{name}/artifacts")
+async def get_model_artifacts(name: str):
+    """List categorized artifacts (files + sizes) for a local model."""
+    from src.model_artifacts import inventory_model
+    model_dir = _resolve_model_dir(name)
+    try:
+        inv = inventory_model(model_dir)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return inv.to_dict()
+
+
+@app.delete("/models/{name}/artifacts")
+async def delete_model_artifact(name: str, path: str):
+    """
+    Delete a single file inside ``./models/{name}/``.
+
+    Refuses paths that escape the model dir or match the protected
+    list (``config.json``, ``adapter_config.json``, tokenizer files).
+    Empty directories left behind after deletion are cleaned up when
+    they're under ``gguf/``.
+    """
+    from src.model_artifacts import resolve_artifact_path, is_protected
+    model_dir = _resolve_model_dir(name)
+
+    if is_protected(model_dir, path):
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{path}' is protected and cannot be deleted via the API.",
+        )
+
+    try:
+        target = resolve_artifact_path(model_dir, path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+    if not target.is_file():
+        raise HTTPException(status_code=400, detail=f"Not a regular file: {path}")
+
+    try:
+        target.unlink()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not delete: {exc}")
+
+    # Opportunistically tidy up empty gguf/ subdir.
+    gguf_dir = model_dir / "gguf"
+    if gguf_dir.is_dir() and not any(gguf_dir.iterdir()):
+        gguf_dir.rmdir()
+
+    return {"deleted": path, "model": name}
+
+
+@app.get("/models/{name}/upload-state")
+async def get_model_upload_state(name: str):
+    """Return upload history + freshness for the Export UI."""
+    from src.upload_state import summary_for_api
+    model_dir = _resolve_model_dir(name)
+    return summary_for_api(model_dir)
+
+
+@app.post("/models/{name}/upload")
+async def upload_existing_model(name: str, request: ModelUploadRequest):
+    """
+    Kick off a post-hoc HuggingFace Hub upload for an existing model dir.
+
+    Runs in a background thread with a synthetic job record so the
+    frontend can subscribe to existing WS progress events. Returns
+    ``{job_id}`` immediately.
+    """
+    from src.training_runner import _run_background_upload, _perform_sync_merge
+    from types import SimpleNamespace
+    import uuid as _uuid
+
+    model_dir = _resolve_model_dir(name)
+
+    if not request.hf_token:
+        raise HTTPException(
+            status_code=400,
+            detail="No HuggingFace token provided (request body or HF_TOKEN in .env).",
+        )
+
+    # Decide whether we need a merge. Merged upload requires LoRA +
+    # include_merged=True. Anything else uses the dir as-is.
+    has_adapter = (model_dir / "adapter_config.json").is_file()
+    needs_merge = has_adapter and request.include_merged
+
+    if not any([request.include_adapter, request.include_merged, request.include_gguf, request.include_readme]):
+        raise HTTPException(
+            status_code=400,
+            detail="Select at least one artifact category to upload.",
+        )
+
+    base_model = _infer_base_model(model_dir, request.base_model) if needs_merge else (request.base_model or "")
+    repo_id = request.repo_id or name
+    commit_message = request.commit_message or f"Upload via Merlina (post-hoc)"
+
+    # Build the allow_patterns for upload_folder based on the
+    # include_* flags. We share this with _run_background_upload by
+    # passing a config-like object with the fields it reads.
+    allow_patterns: List[str] = []
+    if request.include_adapter:
+        allow_patterns += ["adapter_*", "adapter_config.json"]
+    if request.include_gguf:
+        allow_patterns += ["gguf/**"]
+    if request.include_readme:
+        allow_patterns += ["README.md", "readme.md"]
+    # Tokenizer + config are near-free to include and are usually desired.
+    allow_patterns += [
+        "tokenizer*", "special_tokens_map.json", "chat_template.jinja",
+        "chat_template.json", "config.json", "generation_config.json",
+        "preprocessor_config.json", "processor_config.json", "vocab.json",
+        "merges.txt", "added_tokens.json",
+    ]
+
+    cfg = SimpleNamespace(
+        output_name=repo_id,
+        base_model=base_model,
+        hf_token=request.hf_token,
+        hf_hub_private=request.private,
+        use_lora=has_adapter,
+        merge_lora_before_upload=needs_merge,
+        model_type=request.model_type,
+        # Fields consumed by generate_model_readme — provide sane defaults.
+        training_mode="post_hoc_upload",
+        tags=request.tags or [],
+        license=request.license,
+        description=request.description,
+    )
+
+    job_id = f"upload-{_uuid.uuid4().hex[:8]}"
+    job_manager.create_job(job_id, {
+        "type": "post_hoc_upload",
+        "model_name": name,
+        "repo_id": repo_id,
+        "include_merged": request.include_merged,
+        "include_gguf": request.include_gguf,
+        "include_adapter": request.include_adapter,
+    })
+
+    # Capture the running loop here so the background thread can still
+    # schedule WS broadcasts after the handler returns.
+    try:
+        event_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        event_loop = None
+
+    def _runner():
+        merge_artifact = None
+        try:
+            if needs_merge:
+                merge_artifact = _perform_sync_merge(
+                    cfg, str(model_dir), job_id, job_manager,
+                    event_loop=event_loop,
+                    is_vlm=(request.model_type == "vlm"),
+                    num_consumers=1,
+                )
+            _run_background_upload(
+                config=cfg,
+                final_output_dir=str(model_dir),
+                training_mode="post_hoc_upload",
+                job_id=job_id,
+                job_manager=job_manager,
+                event_loop=event_loop,
+                is_vlm=(request.model_type == "vlm"),
+                merge_artifact=merge_artifact,
+            )
+        except Exception as exc:
+            logger.error(f"Post-hoc upload failed for {name}: {exc}", exc_info=True)
+            job_manager.update_job(job_id, status="failed", upload_error=str(exc))
+
+    threading.Thread(target=_runner, name=f"PostHocUpload-{job_id}", daemon=False).start()
+    return {"job_id": job_id, "model_name": name, "repo_id": repo_id, "started": True}
+
+
+@app.post("/models/{name}/export-gguf")
+async def export_gguf_for_existing_model(name: str, request: ModelGgufExportRequest):
+    """Kick off a post-hoc GGUF export for an existing model dir."""
+    from src.training_runner import _run_background_gguf_export, _perform_sync_merge
+    from src.llama_cpp_resolver import resolve_llama_cpp
+    from types import SimpleNamespace
+    import uuid as _uuid
+
+    resolution = resolve_llama_cpp()
+    if not resolution.available:
+        hint = resolution.warnings[0] if resolution.warnings else "llama.cpp not available"
+        raise HTTPException(status_code=400, detail=hint)
+
+    model_dir = _resolve_model_dir(name)
+    has_adapter = (model_dir / "adapter_config.json").is_file()
+    base_model = _infer_base_model(model_dir, request.base_model) if has_adapter else (request.base_model or "")
+
+    cfg = SimpleNamespace(
+        output_name=name,
+        base_model=base_model,
+        use_lora=has_adapter,
+        model_type=request.model_type,
+        gguf_quant_types=request.quant_types,
+        keep_gguf_fp16=request.keep_fp16,
+    )
+
+    job_id = f"gguf-{_uuid.uuid4().hex[:8]}"
+    job_manager.create_job(job_id, {
+        "type": "post_hoc_gguf",
+        "model_name": name,
+        "quant_types": request.quant_types,
+        "keep_fp16": request.keep_fp16,
+    })
+
+    try:
+        event_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        event_loop = None
+
+    def _runner():
+        merge_artifact = None
+        try:
+            if has_adapter:
+                merge_artifact = _perform_sync_merge(
+                    cfg, str(model_dir), job_id, job_manager,
+                    event_loop=event_loop,
+                    is_vlm=(request.model_type == "vlm"),
+                    num_consumers=1,
+                )
+            _run_background_gguf_export(
+                config=cfg,
+                final_output_dir=str(model_dir),
+                job_id=job_id,
+                job_manager=job_manager,
+                event_loop=event_loop,
+                is_vlm=(request.model_type == "vlm"),
+                merge_artifact=merge_artifact,
+            )
+            job_manager.update_job(job_id, status="completed", progress=1.0)
+        except Exception as exc:
+            logger.error(f"Post-hoc GGUF export failed for {name}: {exc}", exc_info=True)
+            job_manager.update_job(job_id, status="failed", gguf_error=str(exc))
+
+    threading.Thread(target=_runner, name=f"PostHocGguf-{job_id}", daemon=False).start()
+    return {"job_id": job_id, "model_name": name, "started": True}
 
 
 @app.websocket("/ws-inference")

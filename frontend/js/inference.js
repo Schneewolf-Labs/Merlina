@@ -97,11 +97,30 @@ class InferenceManager {
             }
 
             for (const model of this.localModels) {
+                // Primary option = transformers backend (base + LoRA or full model).
                 const opt = document.createElement('option');
                 opt.value = model.name;
+                opt.dataset.backend = 'transformers';
                 const suffix = model.is_lora ? ` (LoRA on ${model.base_model})` : '';
                 opt.textContent = model.name + suffix;
                 select.appendChild(opt);
+
+                // One entry per GGUF quant surfaced via the manifest.
+                if (Array.isArray(model.gguf) && model.gguf.length > 0) {
+                    for (const gguf of model.gguf) {
+                        const ggufOpt = document.createElement('option');
+                        // Encode backend + quant into the value so onTrainedModelChange
+                        // and getSelectedModelName can reconstruct the payload.
+                        ggufOpt.value = `${model.name}::gguf::${gguf.quant_type}`;
+                        ggufOpt.dataset.backend = 'llama_cpp';
+                        ggufOpt.dataset.modelName = model.name;
+                        ggufOpt.dataset.ggufPath = gguf.path;
+                        ggufOpt.dataset.ggufQuantType = gguf.quant_type;
+                        const sizeMb = gguf.size_bytes ? ` — ${(gguf.size_bytes / (1024**3)).toFixed(1)} GB` : '';
+                        ggufOpt.textContent = `  └─ ${gguf.quant_type} (GGUF)${sizeMb}`;
+                        select.appendChild(ggufOpt);
+                    }
+                }
             }
 
             this.onTrainedModelChange();
@@ -130,23 +149,20 @@ class InferenceManager {
     }
 
     async loadModel() {
-        const modelName = this.getSelectedModelName();
-        if (!modelName) {
+        const payload = this.buildLoadPayload();
+        if (!payload) {
             this.toast.error('Please select or enter a model name');
             return;
         }
 
         const loadBtn = document.getElementById('inference-load-btn');
         loadBtn.disabled = true;
-        loadBtn.textContent = '⏳ Loading model...';
+        loadBtn.textContent = payload.backend === 'llama_cpp'
+            ? '🔮 Spinning up llama-server...'
+            : '⏳ Loading model...';
 
         try {
-            const result = await MerlinaAPI.loadInferenceModel({
-                model_name: modelName,
-                use_4bit: document.getElementById('inference-4bit').checked,
-                hf_token: document.getElementById('inference-hf-token').value || null,
-            });
-
+            const result = await MerlinaAPI.loadInferenceModel(payload);
             this.showLoadedState(result);
             this.toast.success(`Model loaded: ${result.model_name}`);
         } catch (error) {
@@ -158,19 +174,76 @@ class InferenceManager {
         }
     }
 
+    /**
+     * Build the /inference/load payload based on the selected option.
+     * Detects GGUF entries by the data-backend attribute set in loadLocalModels().
+     */
+    buildLoadPayload() {
+        const source = document.getElementById('inference-source').value;
+        const hfToken = document.getElementById('inference-hf-token').value || null;
+
+        if (source === 'trained') {
+            const select = document.getElementById('inference-trained-model');
+            if (!select || !select.selectedOptions || select.selectedOptions.length === 0) {
+                return null;
+            }
+            const opt = select.selectedOptions[0];
+            const backend = opt.dataset.backend || 'transformers';
+
+            if (backend === 'llama_cpp') {
+                return {
+                    model_name: opt.dataset.modelName,
+                    backend: 'llama_cpp',
+                    gguf_path: opt.dataset.ggufPath || null,
+                    gguf_quant_type: opt.dataset.ggufQuantType || null,
+                    hf_token: hfToken,
+                };
+            }
+
+            return {
+                model_name: opt.value,
+                backend: 'transformers',
+                use_4bit: document.getElementById('inference-4bit').checked,
+                hf_token: hfToken,
+            };
+        }
+
+        // Free-form entry (HF model ID or local path) — always transformers.
+        const modelName = document.getElementById('inference-model-name').value.trim();
+        if (!modelName) return null;
+        return {
+            model_name: modelName,
+            backend: 'transformers',
+            use_4bit: document.getElementById('inference-4bit').checked,
+            hf_token: hfToken,
+        };
+    }
+
     showLoadedState(info) {
         // Show status badge
         const statusDiv = document.getElementById('inference-model-status');
-        const loraInfo = info.is_lora ? ` (LoRA on ${info.base_model})` : '';
-        const quantInfo = info.use_4bit ? '4-bit' : 'full precision';
-        const memInfo = info.gpu_memory ? ` — ${info.gpu_memory} VRAM` : '';
+        const backend = info.backend || 'transformers';
+
+        let subtitle;
+        if (backend === 'llama_cpp') {
+            const quant = info.gguf_quant_type ? ` — ${info.gguf_quant_type}` : '';
+            const server = info.server_url ? ` · ${info.server_url}` : '';
+            subtitle = `GGUF via llama-server${quant}${server}`;
+        } else {
+            const loraInfo = info.is_lora ? ` (LoRA on ${info.base_model})` : '';
+            const quantInfo = info.use_4bit ? '4-bit' : 'full precision';
+            const memInfo = info.gpu_memory ? ` — ${info.gpu_memory} VRAM` : '';
+            subtitle = `${quantInfo}${memInfo}${loraInfo}`;
+        }
 
         statusDiv.innerHTML = `
             <div style="padding: 15px; background: #e8f5e9; border-radius: 10px; border: 1px solid #4caf50;">
-                <div style="font-weight: bold; color: #2e7d32; margin-bottom: 5px;">✓ Model Loaded</div>
+                <div style="font-weight: bold; color: #2e7d32; margin-bottom: 5px;">
+                    ✓ Model Loaded ${backend === 'llama_cpp' ? '🔮' : ''}
+                </div>
                 <div style="font-size: 0.9em; color: #555;">
-                    <strong>${info.model_name}</strong>${loraInfo}<br>
-                    ${quantInfo}${memInfo}
+                    <strong>${info.model_name}</strong><br>
+                    ${subtitle}
                 </div>
             </div>`;
         statusDiv.style.display = 'block';

@@ -9,6 +9,7 @@ import { Toast, FormUI, Tooltip, createSparkle } from './ui.js';
 import { Validator, ValidationRules, debounce } from './validation.js';
 import { ThemeManager } from './theme.js';
 import { InferenceManager } from './inference.js';
+import { ExportManager } from './export.js';
 
 /**
  * Toggle visibility of optimizer-specific settings based on selected optimizer.
@@ -41,6 +42,7 @@ class MerlinaApp {
         this.gpuManager = new GPUManager();
         this.modelManager = new ModelManager();
         this.inferenceManager = new InferenceManager();
+        this.exportManager = new ExportManager();
 
         this.toast = new Toast();
 
@@ -52,6 +54,7 @@ class MerlinaApp {
         window.modelManager = this.modelManager;
         window.themeManager = this.themeManager;
         window.inferenceManager = this.inferenceManager;
+        window.exportManager = this.exportManager;
 
         // Initialize the app
         this.init();
@@ -113,6 +116,9 @@ class MerlinaApp {
 
         // Load server-side secret availability to hint which tokens can be omitted
         this.loadEnvSecretStatus();
+
+        // Initialize the Export section (GGUF / HF / Artifacts tabs)
+        this.exportManager.init();
 
         console.log('✨ Merlina initialized successfully!');
     }
@@ -312,6 +318,9 @@ class MerlinaApp {
             push_to_hub: document.getElementById('push-hub')?.checked ?? false,
             merge_lora_before_upload: document.getElementById('merge-lora-before-upload')?.checked ?? true,
             hf_hub_private: document.getElementById('hf-hub-private')?.checked ?? true,
+
+            // GGUF export is now driven from the dedicated Export section.
+            export_gguf: false,
 
             // API Keys
             wandb_key: document.getElementById('wandb-key')?.value || null,
@@ -923,6 +932,8 @@ class MerlinaApp {
                 hfHubConfig.style.display = 'block';
             }
         }
+
+        // (GGUF export controls live in the Export section now.)
     }
 
     /**

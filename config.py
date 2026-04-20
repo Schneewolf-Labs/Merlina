@@ -82,6 +82,16 @@ class Settings(BaseSettings):
     cors_origins: List[str] = ["*"]
     max_upload_size_mb: int = 500
 
+    # ==========================================
+    # llama.cpp Integration (Optional)
+    # ==========================================
+    # Used for GGUF export / quantization and synthetic-data generation via
+    # llama-server. Both are optional — features gracefully degrade when the
+    # binaries cannot be located. See src/llama_cpp_resolver.py for the full
+    # discovery precedence (explicit > env > PATH > vendored checkout).
+    llama_cpp_dir: Optional[Path] = None       # Repo root (contains convert_hf_to_gguf.py)
+    llama_cpp_bin_dir: Optional[Path] = None   # Directory of built binaries
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

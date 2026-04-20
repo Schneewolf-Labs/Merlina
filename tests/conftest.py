@@ -50,7 +50,7 @@ if 'transformers' not in sys.modules:
     sys.modules['transformers'] = mock_transformers
 
 # Mock other ML libraries and system dependencies if not already imported
-for module in ['trl', 'trl.experimental', 'trl.experimental.orpo', 'peft', 'accelerate', 'bitsandbytes', 'wandb', 'psutil', 'pynvml']:
+for module in ['trl', 'trl.experimental', 'trl.experimental.orpo', 'peft', 'accelerate', 'bitsandbytes', 'wandb', 'psutil', 'pynvml', 'grimoire']:
     if module not in sys.modules:
         sys.modules[module] = MagicMock()
 

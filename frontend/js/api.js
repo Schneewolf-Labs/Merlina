@@ -387,6 +387,7 @@ class WebSocketManager {
             onMetrics: null,
             onCompleted: null,
             onError: null,
+            onGgufProgress: null,
             onConnectionChange: null
         };
     }
@@ -533,6 +534,12 @@ class WebSocketManager {
             case 'error':
                 if (this.callbacks.onError) {
                     this.callbacks.onError(data.message || 'Unknown error');
+                }
+                break;
+
+            case 'gguf_progress':
+                if (this.callbacks.onGgufProgress) {
+                    this.callbacks.onGgufProgress(data);
                 }
                 break;
 
