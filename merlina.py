@@ -10,9 +10,10 @@ import asyncio
 import torch
 import wandb
 import logging
+import json
 import threading
 from datetime import datetime
-from typing import Literal, Optional, Dict, Any
+from typing import Literal, Optional, Dict, Any, List
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
@@ -517,6 +518,61 @@ class InferenceChatRequest(BaseModel):
     top_k: int = Field(50, ge=0, le=200)
     repetition_penalty: float = Field(1.1, ge=1.0, le=2.0)
     do_sample: bool = Field(True, description="Use sampling (False = greedy decoding)")
+
+
+# ===== Export / re-upload request models =====
+
+class ModelUploadRequest(BaseModel):
+    """Kick off a post-hoc HuggingFace Hub upload for an existing model."""
+    repo_id: Optional[str] = Field(
+        None,
+        description="Override the Hub repo ID. Defaults to the model directory name."
+    )
+    private: bool = Field(True, description="Create/update repo as private")
+    commit_message: Optional[str] = Field(None, description="Commit message")
+    hf_token: Optional[str] = Field(None, description="HuggingFace token; falls back to env")
+    include_adapter: bool = Field(True, description="Include LoRA adapter files if present")
+    include_merged: bool = Field(
+        False,
+        description="Include merged full model weights (will merge on the fly if LoRA)"
+    )
+    include_gguf: bool = Field(False, description="Include everything under gguf/")
+    include_readme: bool = Field(True, description="Include README.md if present")
+    base_model: Optional[str] = Field(
+        None,
+        description="Base model override (used for merge + model card if adapter_config missing)"
+    )
+    model_type: str = Field("auto", description="'auto' | 'causal_lm' | 'vlm'")
+    tags: Optional[List[str]] = Field(None, description="Extra tags for the generated README")
+    license: Optional[str] = Field(None, description="SPDX license identifier for the README")
+    description: Optional[str] = Field(None, description="Free-form description for the README")
+
+    @model_validator(mode="after")
+    def _fill_hf_token_from_env(self):
+        self.hf_token = resolve_hf_token(self.hf_token)
+        return self
+
+
+class ModelGgufExportRequest(BaseModel):
+    """Kick off a post-hoc GGUF export for an existing model."""
+    quant_types: List[str] = Field(
+        default_factory=lambda: ["Q4_K_M"],
+        description="GGUF quant types to produce (F16, Q8_0, Q6_K, Q5_K_M, Q5_K_S, Q4_K_M, Q4_K_S, Q3_K_M, Q2_K)"
+    )
+    keep_fp16: bool = Field(False, description="Keep intermediate fp16 GGUF")
+    base_model: Optional[str] = Field(
+        None,
+        description="Base model override (used when adapter_config.json is missing)"
+    )
+    model_type: str = Field("auto", description="'auto' | 'causal_lm' | 'vlm'")
+
+    @model_validator(mode="after")
+    def _normalize_quants(self):
+        from src.gguf_exporter import normalize_quant_types
+        self.quant_types = normalize_quant_types(self.quant_types)
+        if not self.quant_types:
+            raise ValueError("Pick at least one GGUF quant type (e.g. 'Q4_K_M').")
+        return self
 
 
 def _get_inference_device(model):
@@ -2814,6 +2870,293 @@ async def inference_chat(request: InferenceChatRequest):
             status_code=500,
             detail=f"Generation failed: {str(e)}",
         )
+
+
+# ==================== Export / Artifacts Endpoints ====================
+
+def _resolve_models_dir() -> Path:
+    if settings.models_dir.is_absolute():
+        return settings.models_dir
+    return SCRIPT_DIR / settings.models_dir
+
+
+def _resolve_model_dir(name: str) -> Path:
+    """Resolve and validate a model name to an absolute dir under ./models/."""
+    models_dir = _resolve_models_dir().resolve()
+    candidate = (models_dir / name).resolve()
+    try:
+        candidate.relative_to(models_dir)
+    except ValueError:
+        raise HTTPException(status_code=400, detail=f"Invalid model name: {name}")
+    if not candidate.is_dir():
+        raise HTTPException(status_code=404, detail=f"Model '{name}' not found")
+    return candidate
+
+
+def _infer_base_model(model_dir: Path, override: Optional[str]) -> str:
+    """Pick a base model: explicit override → adapter_config.json → raise."""
+    if override:
+        return override
+    cfg_path = model_dir / "adapter_config.json"
+    if cfg_path.is_file():
+        try:
+            with cfg_path.open() as fh:
+                cfg = json.load(fh)
+            base = cfg.get("base_model_name_or_path")
+            if base:
+                return base
+        except Exception:
+            pass
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"Could not determine base_model for '{model_dir.name}'. "
+            "Provide it explicitly in the request body."
+        ),
+    )
+
+
+@app.get("/models/{name}/artifacts")
+async def get_model_artifacts(name: str):
+    """List categorized artifacts (files + sizes) for a local model."""
+    from src.model_artifacts import inventory_model
+    model_dir = _resolve_model_dir(name)
+    try:
+        inv = inventory_model(model_dir)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    return inv.to_dict()
+
+
+@app.delete("/models/{name}/artifacts")
+async def delete_model_artifact(name: str, path: str):
+    """
+    Delete a single file inside ``./models/{name}/``.
+
+    Refuses paths that escape the model dir or match the protected
+    list (``config.json``, ``adapter_config.json``, tokenizer files).
+    Empty directories left behind after deletion are cleaned up when
+    they're under ``gguf/``.
+    """
+    from src.model_artifacts import resolve_artifact_path, is_protected
+    model_dir = _resolve_model_dir(name)
+
+    if is_protected(model_dir, path):
+        raise HTTPException(
+            status_code=400,
+            detail=f"'{path}' is protected and cannot be deleted via the API.",
+        )
+
+    try:
+        target = resolve_artifact_path(model_dir, path)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"File not found: {path}")
+    if not target.is_file():
+        raise HTTPException(status_code=400, detail=f"Not a regular file: {path}")
+
+    try:
+        target.unlink()
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not delete: {exc}")
+
+    # Opportunistically tidy up empty gguf/ subdir.
+    gguf_dir = model_dir / "gguf"
+    if gguf_dir.is_dir() and not any(gguf_dir.iterdir()):
+        gguf_dir.rmdir()
+
+    return {"deleted": path, "model": name}
+
+
+@app.get("/models/{name}/upload-state")
+async def get_model_upload_state(name: str):
+    """Return upload history + freshness for the Export UI."""
+    from src.upload_state import summary_for_api
+    model_dir = _resolve_model_dir(name)
+    return summary_for_api(model_dir)
+
+
+@app.post("/models/{name}/upload")
+async def upload_existing_model(name: str, request: ModelUploadRequest):
+    """
+    Kick off a post-hoc HuggingFace Hub upload for an existing model dir.
+
+    Runs in a background thread with a synthetic job record so the
+    frontend can subscribe to existing WS progress events. Returns
+    ``{job_id}`` immediately.
+    """
+    from src.training_runner import _run_background_upload, _perform_sync_merge
+    from types import SimpleNamespace
+    import uuid as _uuid
+
+    model_dir = _resolve_model_dir(name)
+
+    if not request.hf_token:
+        raise HTTPException(
+            status_code=400,
+            detail="No HuggingFace token provided (request body or HF_TOKEN in .env).",
+        )
+
+    # Decide whether we need a merge. Merged upload requires LoRA +
+    # include_merged=True. Anything else uses the dir as-is.
+    has_adapter = (model_dir / "adapter_config.json").is_file()
+    needs_merge = has_adapter and request.include_merged
+
+    if not any([request.include_adapter, request.include_merged, request.include_gguf, request.include_readme]):
+        raise HTTPException(
+            status_code=400,
+            detail="Select at least one artifact category to upload.",
+        )
+
+    base_model = _infer_base_model(model_dir, request.base_model) if needs_merge else (request.base_model or "")
+    repo_id = request.repo_id or name
+    commit_message = request.commit_message or f"Upload via Merlina (post-hoc)"
+
+    # Build the allow_patterns for upload_folder based on the
+    # include_* flags. We share this with _run_background_upload by
+    # passing a config-like object with the fields it reads.
+    allow_patterns: List[str] = []
+    if request.include_adapter:
+        allow_patterns += ["adapter_*", "adapter_config.json"]
+    if request.include_gguf:
+        allow_patterns += ["gguf/**"]
+    if request.include_readme:
+        allow_patterns += ["README.md", "readme.md"]
+    # Tokenizer + config are near-free to include and are usually desired.
+    allow_patterns += [
+        "tokenizer*", "special_tokens_map.json", "chat_template.jinja",
+        "chat_template.json", "config.json", "generation_config.json",
+        "preprocessor_config.json", "processor_config.json", "vocab.json",
+        "merges.txt", "added_tokens.json",
+    ]
+
+    cfg = SimpleNamespace(
+        output_name=repo_id,
+        base_model=base_model,
+        hf_token=request.hf_token,
+        hf_hub_private=request.private,
+        use_lora=has_adapter,
+        merge_lora_before_upload=needs_merge,
+        model_type=request.model_type,
+        # Fields consumed by generate_model_readme — provide sane defaults.
+        training_mode="post_hoc_upload",
+        tags=request.tags or [],
+        license=request.license,
+        description=request.description,
+    )
+
+    job_id = f"upload-{_uuid.uuid4().hex[:8]}"
+    job_manager.create_job(job_id, {
+        "type": "post_hoc_upload",
+        "model_name": name,
+        "repo_id": repo_id,
+        "include_merged": request.include_merged,
+        "include_gguf": request.include_gguf,
+        "include_adapter": request.include_adapter,
+    })
+
+    # Capture the running loop here so the background thread can still
+    # schedule WS broadcasts after the handler returns.
+    try:
+        event_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        event_loop = None
+
+    def _runner():
+        merge_artifact = None
+        try:
+            if needs_merge:
+                merge_artifact = _perform_sync_merge(
+                    cfg, str(model_dir), job_id, job_manager,
+                    event_loop=event_loop,
+                    is_vlm=(request.model_type == "vlm"),
+                    num_consumers=1,
+                )
+            _run_background_upload(
+                config=cfg,
+                final_output_dir=str(model_dir),
+                training_mode="post_hoc_upload",
+                job_id=job_id,
+                job_manager=job_manager,
+                event_loop=event_loop,
+                is_vlm=(request.model_type == "vlm"),
+                merge_artifact=merge_artifact,
+            )
+        except Exception as exc:
+            logger.error(f"Post-hoc upload failed for {name}: {exc}", exc_info=True)
+            job_manager.update_job(job_id, status="failed", upload_error=str(exc))
+
+    threading.Thread(target=_runner, name=f"PostHocUpload-{job_id}", daemon=False).start()
+    return {"job_id": job_id, "model_name": name, "repo_id": repo_id, "started": True}
+
+
+@app.post("/models/{name}/export-gguf")
+async def export_gguf_for_existing_model(name: str, request: ModelGgufExportRequest):
+    """Kick off a post-hoc GGUF export for an existing model dir."""
+    from src.training_runner import _run_background_gguf_export, _perform_sync_merge
+    from src.llama_cpp_resolver import resolve_llama_cpp
+    from types import SimpleNamespace
+    import uuid as _uuid
+
+    resolution = resolve_llama_cpp()
+    if not resolution.available:
+        hint = resolution.warnings[0] if resolution.warnings else "llama.cpp not available"
+        raise HTTPException(status_code=400, detail=hint)
+
+    model_dir = _resolve_model_dir(name)
+    has_adapter = (model_dir / "adapter_config.json").is_file()
+    base_model = _infer_base_model(model_dir, request.base_model) if has_adapter else (request.base_model or "")
+
+    cfg = SimpleNamespace(
+        output_name=name,
+        base_model=base_model,
+        use_lora=has_adapter,
+        model_type=request.model_type,
+        gguf_quant_types=request.quant_types,
+        keep_gguf_fp16=request.keep_fp16,
+    )
+
+    job_id = f"gguf-{_uuid.uuid4().hex[:8]}"
+    job_manager.create_job(job_id, {
+        "type": "post_hoc_gguf",
+        "model_name": name,
+        "quant_types": request.quant_types,
+        "keep_fp16": request.keep_fp16,
+    })
+
+    try:
+        event_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        event_loop = None
+
+    def _runner():
+        merge_artifact = None
+        try:
+            if has_adapter:
+                merge_artifact = _perform_sync_merge(
+                    cfg, str(model_dir), job_id, job_manager,
+                    event_loop=event_loop,
+                    is_vlm=(request.model_type == "vlm"),
+                    num_consumers=1,
+                )
+            _run_background_gguf_export(
+                config=cfg,
+                final_output_dir=str(model_dir),
+                job_id=job_id,
+                job_manager=job_manager,
+                event_loop=event_loop,
+                is_vlm=(request.model_type == "vlm"),
+                merge_artifact=merge_artifact,
+            )
+            job_manager.update_job(job_id, status="completed", progress=1.0)
+        except Exception as exc:
+            logger.error(f"Post-hoc GGUF export failed for {name}: {exc}", exc_info=True)
+            job_manager.update_job(job_id, status="failed", gguf_error=str(exc))
+
+    threading.Thread(target=_runner, name=f"PostHocGguf-{job_id}", daemon=False).start()
+    return {"job_id": job_id, "model_name": name, "started": True}
 
 
 @app.websocket("/ws-inference")

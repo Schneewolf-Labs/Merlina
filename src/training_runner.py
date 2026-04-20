@@ -290,6 +290,30 @@ def _run_background_upload(
         readme_content = generate_model_readme(config, training_mode, is_vlm=is_vlm)
         upload_model_readme(full_repo_id, readme_content, config.hf_token)
 
+        # Record the upload in the per-model sidecar so the Export UI
+        # can show "already uploaded ✓" and surface history.
+        try:
+            from .upload_state import record_upload
+            artifact_labels = []
+            if config.use_lora and config.merge_lora_before_upload and merge_artifact and merge_artifact.path:
+                artifact_labels.append("merged")
+            elif config.use_lora:
+                artifact_labels.append("adapter")
+            else:
+                artifact_labels.append("full_model")
+            artifact_labels.append("readme")
+            record_upload(
+                Path(final_output_dir),
+                repo_id=full_repo_id,
+                repo_url=hub_url,
+                private=config.hf_hub_private,
+                commit_message=f"Upload via Merlina ({training_mode})",
+                artifacts=artifact_labels,
+                status="success",
+            )
+        except Exception as exc:
+            logger.warning("Could not persist upload_state.json: %s", exc)
+
         # Update job status after successful upload (clear any prior upload_error)
         logger.info(f"✅ Background upload completed for job {job_id}")
         job_manager.update_job(job_id, status="completed", progress=1.0, output_dir=final_output_dir, upload_error="")
@@ -307,6 +331,23 @@ def _run_background_upload(
         logger.error(f"❌ Background upload failed for job {job_id}: {error_msg}", exc_info=True)
         logger.warning("⚠️ Training completed successfully, but upload failed")
         logger.info(f"💾 Model saved locally at: {final_output_dir}")
+
+        # Record the failure too so the Export UI can show it.
+        try:
+            from .upload_state import record_upload
+            record_upload(
+                Path(final_output_dir),
+                repo_id=getattr(config, "output_name", ""),
+                repo_url="",
+                private=getattr(config, "hf_hub_private", True),
+                commit_message=f"Upload via Merlina ({training_mode})",
+                artifacts=[],
+                status="failed",
+                error=error_msg,
+            )
+        except Exception as exc:
+            logger.warning("Could not persist failed upload_state.json: %s", exc)
+
         # Mark as completed — training succeeded. Store the upload error separately
         # so the user can see what went wrong and retry.
         job_manager.update_job(
