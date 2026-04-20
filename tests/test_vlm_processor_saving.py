@@ -134,11 +134,86 @@ class TestSaveProcessor:
 
 
 # ---------------------------------------------------------------------------
-# 2. Upload flow pushes processor for VLMs
+# 2. Merge flow saves the processor into the shared merged-model dir
 # ---------------------------------------------------------------------------
+#
+# Since the GGUF + upload refactor, the LoRA merge (and the artifact-saving
+# steps that ride along with it: tokenizer, VLM processor, generation config,
+# chat template, VLM state-dict fix) live in
+# ``src.gguf_exporter.merge_lora_to_directory``. ``_run_background_upload``
+# now only receives a pre-merged directory and uploads it; it no longer
+# touches the processor. So we verify the processor save at the new home.
+
+class TestMergeSavesProcessor:
+    """merge_lora_to_directory must save the VLM processor into the merge dir."""
+
+    def setup_method(self):
+        AutoProcessor.from_pretrained.reset_mock()
+        AutoProcessor.from_pretrained.side_effect = None
+        mock_AutoTokenizer.from_pretrained.reset_mock()
+        mock_AutoTokenizer.from_pretrained.side_effect = None
+
+    def _run_merge(self, *, is_vlm, tmp_path, processor_loads=True):
+        """Invoke merge_lora_to_directory with the standard mock stack.
+
+        ``peft.PeftModel`` and ``transformers.AutoTokenizer`` are imported
+        inside the function body (lazy), so we configure them on the
+        sys.modules stubs set up at the top of this file rather than
+        ``@patch``-ing non-existent module attributes.
+        """
+        from src.gguf_exporter import merge_lora_to_directory
+
+        adapter_dir = tmp_path / "adapter"
+        adapter_dir.mkdir()
+        output_dir = tmp_path / "merged"
+
+        mock_proc = MagicMock()
+        if processor_loads:
+            AutoProcessor.from_pretrained.return_value = mock_proc
+        else:
+            AutoProcessor.from_pretrained.side_effect = Exception("no processor")
+
+        mock_AutoTokenizer.from_pretrained.return_value = MagicMock()
+
+        # peft is MagicMock'd at module load time; seat the merge stub on it.
+        sys.modules["peft"].PeftModel.from_pretrained.return_value.merge_and_unload.return_value = MagicMock()
+
+        with patch("src.training_runner._get_auto_model_class") as mock_get_cls:
+            mock_model_cls = MagicMock()
+            mock_model_cls.from_pretrained.return_value = MagicMock()
+            mock_get_cls.return_value = (mock_model_cls, is_vlm)
+
+            merge_lora_to_directory(
+                base_model="Qwen/Qwen3.5-VL-7B",
+                adapter_dir=adapter_dir,
+                output_dir=output_dir,
+                model_type="vlm" if is_vlm else "auto",
+                is_vlm=is_vlm,
+            )
+        return mock_proc, output_dir
+
+    def test_merge_saves_vlm_processor(self, tmp_path):
+        """When is_vlm=True, the processor is loaded and save_pretrained is called."""
+        mock_proc, output_dir = self._run_merge(is_vlm=True, tmp_path=tmp_path)
+        mock_proc.save_pretrained.assert_called_once()
+        # First argument should be the merge output dir as a string.
+        assert mock_proc.save_pretrained.call_args.args[0] == str(output_dir)
+
+    def test_merge_skips_processor_for_non_vlm(self, tmp_path):
+        """Text-only merges must not even try to load a processor."""
+        mock_proc, _ = self._run_merge(is_vlm=False, tmp_path=tmp_path)
+        mock_proc.save_pretrained.assert_not_called()
+
+    def test_merge_tolerates_missing_processor(self, tmp_path):
+        """Processor load failure must not raise — merge still produces weights."""
+        # Should complete without raising. We don't assert on save_pretrained
+        # because the mock raised on from_pretrained; we just verify the
+        # pipeline didn't crash.
+        self._run_merge(is_vlm=True, tmp_path=tmp_path, processor_loads=False)
+
 
 class TestUploadProcessorPush:
-    """Test that _run_background_upload pushes processor for VLMs."""
+    """Upload thread no longer handles processor directly; verify it consumes a pre-merged dir."""
 
     def setup_method(self):
         AutoProcessor.from_pretrained.reset_mock()
@@ -157,102 +232,110 @@ class TestUploadProcessorPush:
         config.model_type = "vlm"
         return config
 
-    @patch("src.training_runner.fix_vlm_state_dict_on_disk")
     @patch("src.training_runner.upload_model_readme")
     @patch("src.training_runner.generate_model_readme")
     @patch("src.training_runner.websocket_manager")
     @patch("src.training_runner.HfApi")
-    @patch("src.training_runner.PeftModel")
-    @patch("src.training_runner._get_auto_model_class")
-    def test_merge_upload_saves_processor(
-        self, mock_get_cls, mock_peft, mock_hfapi, mock_ws, mock_readme, mock_upload_readme,
-        mock_fix_vlm
+    def test_upload_uses_pre_merged_directory(
+        self, mock_hfapi, mock_ws, mock_readme, mock_upload_readme, tmp_path,
     ):
-        """During LoRA merge upload, processor should be saved to merge dir."""
-        config = self._make_config()
+        """With a valid MergeArtifact, upload_folder points at the merged dir."""
+        from src.merge_artifact import MergeArtifact
+        from src.training_runner import _run_background_upload
 
-        # Setup model merge mocks
-        mock_model_cls = MagicMock()
-        mock_get_cls.return_value = (mock_model_cls, True)
-        mock_merged = MagicMock()
-        mock_peft.from_pretrained.return_value.merge_and_unload.return_value = mock_merged
+        merge_dir = tmp_path / "merged"
+        merge_dir.mkdir()
+        (merge_dir / "config.json").write_text("{}")
+        artifact = MergeArtifact(merge_dir, num_consumers=1)
 
-        # Setup tokenizer mock
-        mock_tokenizer = MagicMock()
-        mock_AutoTokenizer.from_pretrained.return_value = mock_tokenizer
-
-        # Setup processor mock
-        mock_proc = MagicMock()
-        AutoProcessor.from_pretrained.return_value = mock_proc
-
-        # Mock HfApi
         mock_api = MagicMock()
         mock_hfapi.return_value = mock_api
-
-        # Mock websocket
         mock_ws.send_status_update = MagicMock()
 
-        from src.training_runner import _run_background_upload
-        job_manager = MagicMock()
-
         _run_background_upload(
-            config=config,
+            config=self._make_config(),
             final_output_dir="./models/test-vlm",
             training_mode="orpo",
             job_id="test-job-1",
-            job_manager=job_manager,
+            job_manager=MagicMock(),
             event_loop=None,
             is_vlm=True,
+            merge_artifact=artifact,
         )
 
-        # Verify processor was saved to merge dir (not pushed individually)
-        mock_proc.save_pretrained.assert_called_once()
-        # Verify the whole directory was uploaded via upload_folder
         mock_api.upload_folder.assert_called_once()
+        # folder_path kwarg (or 1st positional) must be the merge dir.
+        call = mock_api.upload_folder.call_args
+        folder = call.kwargs.get("folder_path", call.args[0] if call.args else None)
+        assert folder == str(merge_dir)
 
-    @patch("src.training_runner.fix_vlm_state_dict_on_disk")
     @patch("src.training_runner.upload_model_readme")
     @patch("src.training_runner.generate_model_readme")
     @patch("src.training_runner.websocket_manager")
     @patch("src.training_runner.HfApi")
-    @patch("src.training_runner.PeftModel")
-    @patch("src.training_runner._get_auto_model_class")
-    def test_merge_upload_continues_if_no_processor(
-        self, mock_get_cls, mock_peft, mock_hfapi, mock_ws, mock_readme, mock_upload_readme,
-        mock_fix_vlm
+    def test_upload_falls_back_to_adapter_when_merge_failed(
+        self, mock_hfapi, mock_ws, mock_readme, mock_upload_readme, tmp_path,
     ):
-        """Upload should succeed even if processor save fails (text-only model)."""
-        config = self._make_config()
+        """A path-less MergeArtifact (merge failed) → adapter-only upload, no crash."""
+        from src.merge_artifact import MergeArtifact
+        from src.training_runner import _run_background_upload
 
-        mock_model_cls = MagicMock()
-        mock_get_cls.return_value = (mock_model_cls, False)
-        mock_merged = MagicMock()
-        mock_peft.from_pretrained.return_value.merge_and_unload.return_value = mock_merged
-
-        mock_tokenizer = MagicMock()
-        mock_AutoTokenizer.from_pretrained.return_value = mock_tokenizer
-
-        # Processor fails (text-only model)
-        AutoProcessor.from_pretrained.side_effect = Exception("No processor")
+        failed_artifact = MergeArtifact(None, num_consumers=1, error="OOM during merge")
 
         mock_api = MagicMock()
         mock_hfapi.return_value = mock_api
         mock_ws.send_status_update = MagicMock()
 
-        from src.training_runner import _run_background_upload
         job_manager = MagicMock()
-
-        # Should NOT raise despite processor failure
         _run_background_upload(
-            config=config,
-            final_output_dir="./models/test-model",
-            training_mode="sft",
+            config=self._make_config(),
+            final_output_dir="./models/test-vlm",
+            training_mode="orpo",
             job_id="test-job-2",
             job_manager=job_manager,
             event_loop=None,
+            is_vlm=True,
+            merge_artifact=failed_artifact,
         )
 
-        # Verify upload didn't crash - job_manager should have been called
+        # Adapter-only upload targets the adapter dir directly.
+        mock_api.upload_folder.assert_called_once()
+        call = mock_api.upload_folder.call_args
+        folder = call.kwargs.get("folder_path", call.args[0] if call.args else None)
+        assert folder == "./models/test-vlm"
+        # Job finalization still ran.
+        assert job_manager.update_job.called
+
+    @patch("src.training_runner.upload_model_readme")
+    @patch("src.training_runner.generate_model_readme")
+    @patch("src.training_runner.websocket_manager")
+    @patch("src.training_runner.HfApi")
+    def test_merge_upload_continues_if_no_processor(
+        self, mock_hfapi, mock_ws, mock_readme, mock_upload_readme, tmp_path,
+    ):
+        """Text-only model (is_vlm not set) should complete upload without crashing."""
+        from src.merge_artifact import MergeArtifact
+        from src.training_runner import _run_background_upload
+
+        merge_dir = tmp_path / "merged"
+        merge_dir.mkdir()
+        artifact = MergeArtifact(merge_dir, num_consumers=1)
+
+        mock_api = MagicMock()
+        mock_hfapi.return_value = mock_api
+        mock_ws.send_status_update = MagicMock()
+
+        job_manager = MagicMock()
+        _run_background_upload(
+            config=self._make_config(),
+            final_output_dir="./models/test-model",
+            training_mode="sft",
+            job_id="test-job-3",
+            job_manager=job_manager,
+            event_loop=None,
+            merge_artifact=artifact,
+        )
+
         assert job_manager.update_job.called
 
 
