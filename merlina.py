@@ -1470,6 +1470,32 @@ async def get_gpu_info(index: int):
 
 
 # Dataset management endpoints
+
+
+def _build_additional_loaders(config: DatasetConfig, hf_token=None):
+    """
+    Build the list of (loader, column_mapping, convert_messages_format) tuples
+    for DatasetPipeline.additional_loaders from a DatasetConfig's
+    additional_sources. Returns None when there are no extras, matching the
+    pipeline's default.
+    """
+    if not config.additional_sources:
+        return None
+    extras = []
+    for extra_source in config.additional_sources:
+        extra_loader = create_loader_from_config(
+            source_config=extra_source,
+            uploaded_datasets=uploaded_datasets,
+            hf_token=hf_token,
+        )
+        extras.append((
+            extra_loader,
+            extra_source.column_mapping,
+            config.convert_messages_format,
+        ))
+    return extras
+
+
 @app.post("/dataset/preview")
 async def preview_dataset(config: DatasetConfig, offset: int = 0, limit: int = 10):
     """Preview dataset without formatting"""
@@ -1499,7 +1525,7 @@ async def preview_dataset(config: DatasetConfig, offset: int = 0, limit: int = 1
             enable_thinking=config.format.enable_thinking
         )
 
-        # Create pipeline
+        # Create pipeline (includes any additional datasets the user added)
         pipeline = DatasetPipeline(
             loader=loader,
             formatter=formatter,
@@ -1510,6 +1536,7 @@ async def preview_dataset(config: DatasetConfig, offset: int = 0, limit: int = 1
             convert_messages_format=config.convert_messages_format,
             system_prompt=config.system_prompt,
             system_prompt_mode=config.system_prompt_mode,
+            additional_loaders=_build_additional_loaders(config, hf_token=resolve_hf_token(None)),
         )
 
         # Preview raw data with offset and limit
@@ -1577,7 +1604,7 @@ async def preview_formatted_dataset(config: DatasetConfig, offset: int = 0, limi
                 enable_thinking=config.format.enable_thinking
             )
 
-        # Create pipeline
+        # Create pipeline (includes any additional datasets the user added)
         pipeline = DatasetPipeline(
             loader=loader,
             formatter=formatter,
@@ -1588,6 +1615,7 @@ async def preview_formatted_dataset(config: DatasetConfig, offset: int = 0, limi
             convert_messages_format=config.convert_messages_format,
             system_prompt=config.system_prompt,
             system_prompt_mode=config.system_prompt_mode,
+            additional_loaders=_build_additional_loaders(config, hf_token=resolve_hf_token(None)),
         )
 
         # Preview formatted data with offset and limit
@@ -1641,6 +1669,7 @@ async def get_dataset_stats(config: DatasetConfig):
             convert_messages_format=config.convert_messages_format,
             system_prompt=config.system_prompt,
             system_prompt_mode=config.system_prompt_mode,
+            additional_loaders=_build_additional_loaders(config, hf_token=resolve_hf_token(None)),
         )
 
         stats = pipeline.compute_stats()

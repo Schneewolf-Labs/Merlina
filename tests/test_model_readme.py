@@ -18,10 +18,13 @@ from typing import Optional
 class MockDatasetSource(BaseModel):
     source_type: str = "huggingface"
     repo_id: Optional[str] = None
+    split: str = "train"
+    file_path: Optional[str] = None
 
 
 class MockDatasetConfig(BaseModel):
     source: MockDatasetSource = Field(default_factory=MockDatasetSource)
+    additional_sources: list[MockDatasetSource] = Field(default_factory=list)
 
 
 class MockTrainingConfig(BaseModel):
@@ -357,6 +360,74 @@ def test_readme_quantization():
     print()
 
 
+def test_readme_additional_sources_in_frontmatter():
+    """Every HuggingFace source (primary + additional) should list in frontmatter"""
+    print("=" * 70)
+    print("Test: Additional HuggingFace sources in frontmatter")
+    print("=" * 70)
+
+    config = MockTrainingConfig()
+    config.dataset = MockDatasetConfig(
+        source=MockDatasetSource(source_type="huggingface", repo_id="org/primary"),
+        additional_sources=[
+            MockDatasetSource(source_type="huggingface", repo_id="org/extra-1"),
+            MockDatasetSource(source_type="huggingface", repo_id="org/extra-2"),
+            MockDatasetSource(source_type="local_file", file_path="/data/x.json"),
+        ],
+    )
+    readme = generate_model_readme(config, "orpo")
+
+    assert "- org/primary" in readme, "Primary dataset missing from frontmatter"
+    assert "- org/extra-1" in readme, "Additional HF dataset 1 missing from frontmatter"
+    assert "- org/extra-2" in readme, "Additional HF dataset 2 missing from frontmatter"
+    assert "/data/x.json" not in readme.split('---')[1], "Local file should not be in YAML frontmatter"
+
+    print("  ✓ All HuggingFace sources listed in frontmatter")
+    print()
+
+
+def test_readme_datasets_body_section_for_multi():
+    """Body should have a Datasets section listing every source when there's more than one"""
+    print("=" * 70)
+    print("Test: Datasets body section lists every source")
+    print("=" * 70)
+
+    config = MockTrainingConfig()
+    config.dataset = MockDatasetConfig(
+        source=MockDatasetSource(source_type="huggingface", repo_id="org/primary"),
+        additional_sources=[
+            MockDatasetSource(source_type="huggingface", repo_id="org/extra"),
+            MockDatasetSource(source_type="local_file", file_path="/data/x.json"),
+        ],
+    )
+    readme = generate_model_readme(config, "orpo")
+
+    assert "## Datasets" in readme, "Should have a Datasets section"
+    assert "org/primary" in readme
+    assert "org/extra" in readme
+    assert "/data/x.json" in readme, "Local file should appear in body even though not in frontmatter"
+
+    print("  ✓ Datasets body section includes all sources")
+    print()
+
+
+def test_readme_no_datasets_body_section_for_single():
+    """Single-source README should NOT include a Datasets body section — frontmatter is enough"""
+    print("=" * 70)
+    print("Test: Datasets body section omitted for single source")
+    print("=" * 70)
+
+    config = MockTrainingConfig()
+    config.dataset = MockDatasetConfig(
+        source=MockDatasetSource(source_type="huggingface", repo_id="org/only"),
+    )
+    readme = generate_model_readme(config, "orpo")
+
+    assert "## Datasets" not in readme, "Single-source README should not have a Datasets section"
+    print("  ✓ Datasets body section correctly omitted")
+    print()
+
+
 def test_readme_gpu_info():
     """Test that GPU info is included when CUDA is available"""
     print("=" * 70)
@@ -420,6 +491,9 @@ if __name__ == "__main__":
         test_readme_keyword_tags_orpo()
         test_readme_keyword_tags_sft()
         test_readme_quantization()
+        test_readme_additional_sources_in_frontmatter()
+        test_readme_datasets_body_section_for_multi()
+        test_readme_no_datasets_body_section_for_single()
         test_readme_gpu_info()
 
         print("=" * 70)

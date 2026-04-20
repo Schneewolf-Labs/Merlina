@@ -1099,6 +1099,104 @@ textarea.magic-input {
     margin-top: var(--space-sm);
 }
 
+/* ===== Dataset Cards (additional-datasets) ===== */
+.dataset-card {
+    border: 1px solid var(--light-purple, #d5b8ff);
+    border-radius: var(--radius-lg);
+    background: var(--section-bg, #faf8ff);
+    margin-bottom: var(--space-md);
+    overflow: hidden;
+}
+
+.dataset-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    background: rgba(192, 66, 255, 0.06);
+    border-bottom: 1px solid var(--light-purple, #d5b8ff);
+}
+
+.dataset-card-title {
+    font-weight: 600;
+    color: var(--primary-purple);
+}
+
+.dataset-card-body {
+    padding: 14px;
+}
+
+.remove-dataset-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-size: 1.4em;
+    line-height: 1;
+    color: var(--text-muted, #888);
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    transition: all var(--transition-fast);
+}
+
+.remove-dataset-btn:hover {
+    background: var(--danger);
+    color: white;
+}
+
+/* ===== Column Mapping Badges ===== */
+.col-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    margin-left: 6px;
+    border-radius: 10px;
+    font-size: 0.7em;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    vertical-align: middle;
+}
+
+.col-badge.required {
+    background: #fde8e8;
+    color: #c53030;
+}
+
+.col-badge.optional {
+    background: #e6d0ff;
+    color: var(--dark-purple, #5a2e8a);
+}
+
+.col-badge.not-used {
+    background: #eee;
+    color: #888;
+}
+
+[data-theme="dark"] .col-badge.required {
+    background: rgba(197, 48, 48, 0.2);
+    color: #ff9b9b;
+}
+
+[data-theme="dark"] .col-badge.optional {
+    background: rgba(192, 66, 255, 0.15);
+    color: #d5b8ff;
+}
+
+[data-theme="dark"] .col-badge.not-used {
+    background: rgba(255, 255, 255, 0.08);
+    color: #888;
+}
+
+/* ===== Disabled form-group state ===== */
+.field-disabled {
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.field-disabled select,
+.field-disabled input {
+    cursor: not-allowed;
+}
+
 /* ===== Inference Chat ===== */
 
 .inference-chat-messages {
