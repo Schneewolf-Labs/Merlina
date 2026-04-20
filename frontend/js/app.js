@@ -306,6 +306,12 @@ class MerlinaApp {
             gpu_ids: this.gpuManager.getSelectedGPUs(),
             multi_gpu_strategy: document.getElementById('multi-gpu-strategy')?.value || 'auto',
 
+            // Training backend (local vs HuggingFace Jobs)
+            training_backend: document.getElementById('training-backend')?.value || 'local',
+            hf_jobs_flavor: document.getElementById('hf-jobs-flavor')?.value || 'a10g-large',
+            hf_jobs_image: document.getElementById('hf-jobs-image')?.value || 'ghcr.io/schneewolf-labs/merlina-hfjobs:latest',
+            hf_jobs_timeout: document.getElementById('hf-jobs-timeout')?.value || '6h',
+
             // Options
             use_4bit: document.getElementById('use-4bit')?.checked ?? true,
             use_wandb: document.getElementById('use-wandb')?.checked ?? false,
@@ -904,6 +910,17 @@ class MerlinaApp {
             if (pushHub.checked) {
                 hfHubConfig.style.display = 'block';
             }
+        }
+
+        // Training backend toggle (local vs HF Jobs)
+        const trainingBackend = document.getElementById('training-backend');
+        const hfJobsOptions = document.getElementById('hf-jobs-options');
+        if (trainingBackend && hfJobsOptions) {
+            const syncBackend = () => {
+                hfJobsOptions.style.display = trainingBackend.value === 'hf_jobs' ? 'block' : 'none';
+            };
+            trainingBackend.addEventListener('change', syncBackend);
+            syncBackend();
         }
     }
 

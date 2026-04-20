@@ -135,6 +135,51 @@
                         </small>
                     </div>
                 </div>
+
+                <!-- Training Backend -->
+                <div class="spell-section">
+                    <h3>☁️ Training Backend</h3>
+                    <div class="form-group">
+                        <label>Run Training On</label>
+                        <select id="training-backend" class="magic-select">
+                            <option value="local">Local GPUs (this server)</option>
+                            <option value="hf_jobs">HuggingFace Jobs (remote, HF Pro credits)</option>
+                        </select>
+                        <small style="color: #888; font-size: 0.85em;">
+                            <strong>HF Jobs</strong> runs training on HuggingFace infrastructure and consumes your HF Pro credits.
+                            Requires an <code>hf_token</code>, and the trained model must be pushed to the Hub
+                            (no persistent disk on remote jobs). Uploaded dataset files are not supported &mdash; use Hub or URL sources.
+                        </small>
+                    </div>
+
+                    <div id="hf-jobs-options" style="display: none; margin-top: 15px; padding: 15px; background: rgba(138, 43, 226, 0.05); border-radius: 8px;">
+                        <div class="form-group">
+                            <label>Hardware Flavor</label>
+                            <select id="hf-jobs-flavor" class="magic-select">
+                                <option value="t4-small">t4-small (budget, 16GB)</option>
+                                <option value="l4x1">l4x1 (24GB)</option>
+                                <option value="a10g-small">a10g-small (24GB)</option>
+                                <option value="a10g-large" selected>a10g-large (96GB, recommended)</option>
+                                <option value="a10g-largex2">a10g-largex2 (2×96GB)</option>
+                                <option value="a100-large">a100-large (80GB)</option>
+                                <option value="h200">h200 (141GB)</option>
+                            </select>
+                            <small style="color: #888; font-size: 0.85em;">Bigger flavors burn credits faster. Pro gives $2/mo in Jobs credits.</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Docker Image</label>
+                            <input type="text" id="hf-jobs-image" class="magic-input" value="ghcr.io/schneewolf-labs/merlina-hfjobs:latest" placeholder="ghcr.io/org/merlina-hfjobs:tag">
+                            <small style="color: #888; font-size: 0.85em;">Image with Merlina + deps baked in. See <code>Dockerfile.hfjobs</code>.</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label>Job Timeout</label>
+                            <input type="text" id="hf-jobs-timeout" class="magic-input" value="6h" placeholder="e.g. 30m, 2h, 12h">
+                            <small style="color: #888; font-size: 0.85em;">Max wall time before the remote job is killed.</small>
+                        </div>
+                    </div>
+                </div>
             </section>
 
             <!-- Dataset Configuration (STEP 2) -->
