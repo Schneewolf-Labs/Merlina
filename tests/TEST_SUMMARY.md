@@ -2,13 +2,14 @@
 
 ## Overview
 
-A comprehensive unit test suite covering **100% of Merlina API endpoints** with proper mocking and isolation.
+A comprehensive unit test suite covering the full REST API surface with proper mocking and isolation, plus a documented WebSocket testing limitation.
 
 ## Test Statistics
 
 - **Total Test Classes**: 9
 - **Total Test Functions**: 60+
-- **API Endpoints Covered**: 29/29 (100%)
+- **REST Endpoints Covered**: 29/29 (100%)
+- **WebSocket Endpoint**: 1 test currently skipped in unit mode (see note below)
 - **Test File Size**: ~1000 lines
 - **Mock Dependencies**: 6 major components
 
@@ -81,7 +82,7 @@ A single, well-organized test file containing:
    - ✅ GET /stats - Get statistics
 
 8. **TestWebSocket** (1 test)
-   - ✅ WebSocket /ws/{job_id} - Connection test
+   - ⚠️ WebSocket /ws/{job_id} unit test is currently skipped (TestClient hang); covered as an integration-testing follow-up item
 
 9. **TestErrorCases** (3 tests)
    - ✅ Invalid source type handling
@@ -187,7 +188,7 @@ make test-api
 
 ## Coverage Report
 
-### Endpoint Coverage: 100%
+### REST Endpoint Coverage: 100%
 
 | Category | Endpoints | Tested | Coverage |
 |----------|-----------|--------|----------|
@@ -200,6 +201,8 @@ make test-api
 | Stats & Misc | 1 | 1 | 100% |
 | WebSocket | 1 | 1 | 100% |
 | **Total** | **29** | **29** | **100%** |
+
+> **Note:** The WebSocket endpoint test exists but is intentionally skipped in the current unit test suite due to TestClient limitations; it should be validated via dedicated integration tests.
 
 ### Test Scenarios Covered
 
