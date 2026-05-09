@@ -10,6 +10,7 @@ import { Validator, ValidationRules, debounce } from './validation.js';
 import { ThemeManager } from './theme.js';
 import { InferenceManager } from './inference.js';
 import { ExportManager } from './export.js';
+import { buildTrainingConfig } from './form_config.js';
 
 /**
  * Toggle visibility of optimizer-specific settings based on selected optimizer.
@@ -223,22 +224,18 @@ class MerlinaApp {
     }
 
     /**
-     * Collect training configuration from form
+     * Collect training configuration from form.
+     *
+     * Delegates to the centralized builder in form_config.js so /train and
+     * /configs/save can never serialize different field sets. Validates the
+     * dataset block via DatasetManager (which throws on schema errors) and
+     * splices the validated dataset config back in so /train still gets the
+     * "ready-to-train" view (with mapping/validation applied).
      */
     collectTrainingConfig() {
-        // Parse target modules - check hidden field first, then manual input
-        let targetModulesStr = document.getElementById('target-modules')?.value || '';
-        // Fallback to manual input if hidden field is empty
-        if (!targetModulesStr) {
-            targetModulesStr = document.getElementById('target-modules-manual')?.value || '';
-        }
-        const targetModules = targetModulesStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
-
-        // Parse modules to save
-        const modulesToSaveStr = document.getElementById('modules-to-save')?.value || '';
-        const modulesToSave = modulesToSaveStr.split(',').map(s => s.trim()).filter(s => s.length > 0);
-
-        // Get dataset configuration
+        // Validate dataset config first — DatasetManager throws on missing
+        // required fields, which is the right behavior for /train (but not
+        // for /configs/save, which uses buildTrainingConfig directly).
         let datasetConfig;
         try {
             datasetConfig = this.datasetManager.getDatasetConfig();
@@ -247,93 +244,14 @@ class MerlinaApp {
             throw error;
         }
 
-        // Build configuration
-        const config = {
-            base_model: document.getElementById('base-model')?.value || '',
-            output_name: document.getElementById('output-name')?.value || '',
-            model_type: document.getElementById('model-type')?.value || 'auto',
+        const config = buildTrainingConfig({
+            gpuManager: this.gpuManager,
+            includeSecrets: true,
+        });
 
-            // Dataset
-            dataset: datasetConfig,
-
-            // LoRA
-            use_lora: document.getElementById('use-lora')?.checked ?? true,
-            lora_r: parseInt(document.getElementById('lora-r')?.value || 64),
-            lora_alpha: parseInt(document.getElementById('lora-alpha')?.value || 32),
-            lora_dropout: parseFloat(document.getElementById('lora-dropout')?.value || 0.05),
-            target_modules: targetModules,
-            modules_to_save: modulesToSave,
-
-            // Training
-            training_mode: document.getElementById('training-mode')?.value || 'orpo',
-            learning_rate: parseFloat(document.getElementById('learning-rate')?.value || 0.000005),
-            num_epochs: parseInt(document.getElementById('epochs')?.value || 2),
-            batch_size: parseInt(document.getElementById('batch-size')?.value || 1),
-            gradient_accumulation_steps: parseInt(document.getElementById('grad-accum')?.value || 16),
-            max_length: parseInt(document.getElementById('max-length')?.value || 2048),
-            max_prompt_length: parseInt(document.getElementById('max-prompt-length')?.value || 1024),
-            beta: parseFloat(document.getElementById('beta')?.value || 0.1),
-            gamma: parseFloat(document.getElementById('gamma')?.value || 0.5),
-            label_smoothing: parseFloat(document.getElementById('label-smoothing')?.value || 0.0),
-            seed: parseInt(document.getElementById('seed')?.value || 42),
-            max_grad_norm: parseFloat(document.getElementById('max-grad-norm')?.value || 0.3),
-            warmup_ratio: parseFloat(document.getElementById('warmup-ratio')?.value || 0.05),
-            eval_steps: parseFloat(document.getElementById('eval-steps')?.value || 0.2),
-            shuffle_dataset: document.getElementById('shuffle-dataset')?.checked ?? true,
-            weight_decay: parseFloat(document.getElementById('weight-decay')?.value || 0.01),
-            lr_scheduler_type: document.getElementById('lr-scheduler-type')?.value || 'cosine',
-            gradient_checkpointing: document.getElementById('gradient-checkpointing')?.checked ?? false,
-            logging_steps: parseInt(document.getElementById('logging-steps')?.value || 1),
-
-            // Optimizer
-            optimizer_type: document.getElementById('optimizer-type')?.value || 'paged_adamw_8bit',
-            adam_beta1: parseFloat(document.getElementById('adam-beta1')?.value || 0.9),
-            adam_beta2: parseFloat(document.getElementById('adam-beta2')?.value || 0.999),
-            adam_epsilon: parseFloat(document.getElementById('adam-epsilon')?.value || 1e-8),
-            adafactor_relative_step: document.getElementById('adafactor-relative-step')?.checked ?? false,
-            adafactor_scale_parameter: document.getElementById('adafactor-scale-parameter')?.checked ?? false,
-            adafactor_warmup_init: document.getElementById('adafactor-warmup-init')?.checked ?? false,
-            adafactor_decay_rate: parseFloat(document.getElementById('adafactor-decay-rate')?.value || -0.8),
-            adafactor_beta1: document.getElementById('adafactor-beta1')?.value ? parseFloat(document.getElementById('adafactor-beta1').value) : null,
-            adafactor_clip_threshold: parseFloat(document.getElementById('adafactor-clip-threshold')?.value || 1.0),
-
-            // Attention
-            attn_implementation: document.getElementById('attn-implementation')?.value || 'auto',
-
-            // Grimoire kernel/regularization features
-            use_liger: document.getElementById('use-liger')?.checked ?? false,
-            torch_compile: document.getElementById('torch-compile')?.checked ?? false,
-            neftune_alpha: document.getElementById('neftune-alpha')?.value
-                ? parseFloat(document.getElementById('neftune-alpha').value)
-                : null,
-            eval_on_start: document.getElementById('eval-on-start')?.checked ?? false,
-
-            // GPU
-            gpu_ids: this.gpuManager.getSelectedGPUs(),
-            multi_gpu_strategy: document.getElementById('multi-gpu-strategy')?.value || 'auto',
-
-            // Options
-            use_4bit: document.getElementById('use-4bit')?.checked ?? true,
-            use_wandb: document.getElementById('use-wandb')?.checked ?? false,
-            push_to_hub: document.getElementById('push-hub')?.checked ?? false,
-            merge_lora_before_upload: document.getElementById('merge-lora-before-upload')?.checked ?? true,
-            hf_hub_private: document.getElementById('hf-hub-private')?.checked ?? true,
-
-            // GGUF export is now driven from the dedicated Export section.
-            export_gguf: false,
-
-            // API Keys
-            wandb_key: document.getElementById('wandb-key')?.value || null,
-            hf_token: document.getElementById('hf-token')?.value || document.getElementById('hf-token-preload')?.value || null,
-
-            // W&B settings
-            wandb_project: document.getElementById('wandb-project')?.value || null,
-            wandb_run_name: document.getElementById('wandb-run-name')?.value || null,
-            wandb_tags: document.getElementById('wandb-tags')?.value ?
-                document.getElementById('wandb-tags').value.split(',').map(tag => tag.trim()).filter(tag => tag) :
-                null,
-            wandb_notes: document.getElementById('wandb-notes')?.value || null
-        };
+        // Use the validated dataset config from DatasetManager so /train
+        // benefits from its checks (and the validated training_mode).
+        config.dataset = datasetConfig;
 
         return config;
     }

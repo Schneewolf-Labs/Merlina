@@ -406,6 +406,16 @@ class TrainingConfig(BaseModel):
     wandb_tags: Optional[list[str]] = Field(None, description="W&B tags for organizing runs")
     wandb_notes: Optional[str] = Field(None, description="Notes about this training run")
 
+    # Config sharing
+    share_config: bool = Field(
+        True,
+        description=(
+            "Embed the (secret-stripped) training config in the uploaded "
+            "model's README so others can reproduce the training run. "
+            "Disable to keep your hyperparameters private."
+        ),
+    )
+
     @model_validator(mode="after")
     def _fill_secrets_from_env(self):
         """
@@ -2042,6 +2052,15 @@ class SaveConfigRequest(BaseModel):
     config: dict = Field(..., description="Training configuration to save")
     description: str = Field("", description="Optional description of the configuration")
     tags: list[str] = Field(default_factory=list, description="Optional tags for categorization")
+    validate_schema: bool = Field(
+        True,
+        description=(
+            "Validate the config against the TrainingConfig Pydantic model "
+            "before saving. Catches typo'd field names and produces a "
+            "normalized payload that's safe to import on any Merlina "
+            "instance running the same major version."
+        ),
+    )
 
 
 @app.post("/configs/save")
@@ -2050,13 +2069,17 @@ async def save_config(request: SaveConfigRequest):
     Save a training configuration for later reuse.
 
     The configuration is saved as a JSON file in data/configs/ directory.
+    By default the payload is validated against ``TrainingConfig`` so the
+    saved file is importable by any Merlina instance — fields are
+    normalized, defaults filled in, and credentials stripped.
     """
     try:
         filepath = config_manager.save_config(
             name=request.name,
             config=request.config,
             description=request.description,
-            tags=request.tags
+            tags=request.tags,
+            validate=request.validate_schema,
         )
 
         logger.info(f"Saved configuration: {request.name}")

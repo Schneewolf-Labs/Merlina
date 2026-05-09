@@ -262,19 +262,42 @@ class TestFrontendModelType:
         return js_path.read_text()
 
     @pytest.fixture
+    def form_config_js(self):
+        # Centralized config builder — both /train (app.js) and
+        # /configs/save (config.js) read fields from this file.
+        js_path = Path(__file__).parent.parent / "frontend" / "js" / "form_config.js"
+        if not js_path.exists():
+            pytest.skip("frontend/js/form_config.js not found")
+        return js_path.read_text()
+
+    @pytest.fixture
     def index_html(self):
         html_path = Path(__file__).parent.parent / "frontend" / "index.html"
         if not html_path.exists():
             pytest.skip("frontend/index.html not found")
         return html_path.read_text()
 
-    def test_app_js_sends_model_type(self, app_js):
-        """app.js must include model_type in the config object."""
-        assert "model_type" in app_js, "app.js should send model_type in config"
+    def test_form_config_js_sends_model_type(self, form_config_js):
+        """The centralized builder must include model_type in the
+        config object — /train and /configs/save both delegate here."""
+        assert "model_type" in form_config_js, (
+            "form_config.js should send model_type in config"
+        )
 
-    def test_config_js_saves_model_type(self, config_js):
-        """config.js must include model_type when saving config."""
-        assert "model_type" in config_js, "config.js should save model_type"
+    def test_app_js_uses_form_config(self, app_js):
+        """app.js must delegate to the centralized buildTrainingConfig."""
+        assert "buildTrainingConfig" in app_js, (
+            "app.js should call buildTrainingConfig() instead of building "
+            "the config inline (to keep parity with /configs/save)"
+        )
+
+    def test_config_js_uses_form_config(self, config_js):
+        """config.js must delegate to the centralized buildTrainingConfig
+        so saved presets cover every TrainingConfig field."""
+        assert "buildTrainingConfig" in config_js, (
+            "config.js should call buildTrainingConfig() instead of "
+            "building the config inline"
+        )
 
     def test_index_html_has_model_type_select(self, index_html):
         """index.html must have a model-type select element."""
