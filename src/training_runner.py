@@ -138,11 +138,22 @@ def _save_processor(base_model: str, output_dir: str) -> bool:
     """
     try:
         processor = AutoProcessor.from_pretrained(base_model, trust_remote_code=True)
+        # AutoProcessor falls back to bare tokenizers when no preprocessor_config
+        # is present. We only want to claim success when we got a real
+        # multi-modal processor (image and/or video processor attached).
+        has_image_processor = getattr(processor, "image_processor", None) is not None
+        has_video_processor = getattr(processor, "video_processor", None) is not None
+        if not (has_image_processor or has_video_processor):
+            logger.warning(
+                f"AutoProcessor for {base_model} returned {type(processor).__name__} "
+                "with no image/video processor — skipping save (VLM inputs may not work)."
+            )
+            return False
         processor.save_pretrained(output_dir)
-        logger.info(f"✅ Processor saved to {output_dir}")
+        logger.info(f"✅ Processor saved to {output_dir} ({type(processor).__name__})")
         return True
     except Exception as e:
-        logger.debug(f"No processor to save for {base_model}: {e}")
+        logger.warning(f"Failed to save processor for {base_model}: {e}")
         return False
 
 

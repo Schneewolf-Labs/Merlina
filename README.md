@@ -50,6 +50,12 @@ pip install -r requirements.txt
 > pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 > pip install -r requirements.txt
 > ```
+>
+> **Training a VLM (Qwen-VL, LLaVA, etc.)?** The image processor pipeline needs
+> `Pillow` (listed in `requirements.txt`) and `torchvision` (part of the torch
+> install above). Without them the model still trains, but Merlina silently
+> skips saving `preprocessor_config.json` and image-processor files, leaving
+> the uploaded checkpoint missing the vision side of the processor.
 
 ### 2. Configure (Optional)
 

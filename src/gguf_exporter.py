@@ -575,8 +575,24 @@ def merge_lora_to_directory(
         for source in (str(adapter_dir), base_model):
             try:
                 processor = AutoProcessor.from_pretrained(source, trust_remote_code=True)
+                # AutoProcessor will happily return a bare tokenizer when the
+                # source has tokenizer files but no preprocessor_config.json —
+                # the adapter dir is exactly this case. Skip it so we fall
+                # through to the base model where the real image processor lives.
+                has_image_processor = getattr(processor, "image_processor", None) is not None
+                has_video_processor = getattr(processor, "video_processor", None) is not None
+                if not (has_image_processor or has_video_processor):
+                    logger.debug(
+                        "Processor loaded from %s lacks image/video processor (got %s) "
+                        "— trying next source",
+                        source, type(processor).__name__,
+                    )
+                    continue
                 processor.save_pretrained(str(output_dir))
-                logger.info("Saved VLM processor from %s to %s", source, output_dir)
+                logger.info(
+                    "Saved VLM processor (%s) from %s to %s",
+                    type(processor).__name__, source, output_dir,
+                )
                 processor_saved = True
                 break
             except Exception as exc:

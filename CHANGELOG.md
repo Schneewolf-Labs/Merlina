@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-05-15
+
+### Fixed
+- **VLM processor save no longer silently writes a bare tokenizer**: `AutoProcessor.from_pretrained` on an adapter directory (no `preprocessor_config.json`) returns just the tokenizer wrapped as a "processor". The merge fallback chain in `gguf_exporter.merge_lora_to_directory` and `training_runner._save_processor` now rejects results that lack an `image_processor`/`video_processor` and falls through to the base model, so VLM uploads actually contain processor config.
+- **Post-hoc upload + GGUF export endpoints auto-detect VLMs**: `/models/{name}/upload` and `/models/{name}/export-gguf` previously used a strict `request.model_type == "vlm"` check, which silently treated `model_type="auto"` (the UI default) as text-only — skipping the VLM processor save and the visual-weight grafting in the merge. They now share the training-time `_get_auto_model_class` detection via a new `_resolve_is_vlm()` helper.
+- **`generate_model_readme` no longer crashes on post-hoc uploads**: the function used to access training-only fields (`batch_size`, `learning_rate`, etc.) directly, which raised `AttributeError` on the minimal `SimpleNamespace` built by post-hoc endpoints. Each config row is now guarded with `getattr` and skipped when absent, so post-hoc readmes contain just the fields we know.
+- **Silent failures are now visible**: `_save_processor` failures (e.g., missing `Pillow`/`torchvision`) log at WARNING instead of DEBUG.
+
+### Added
+- **`Pillow` listed in `requirements.txt`** and `torchvision` called out as a VLM requirement in `README.md`. Without these, image processors fail to load.
+- **Post-hoc upload enriches READMEs from `adapter_config.json`**: LoRA rank, alpha, dropout, and target modules are pulled from the adapter config when generating the model card for a re-uploaded LoRA checkpoint.
+
+
+
 ## [1.5.0] - 2026-04-18 "Liger Familiar"
 
 ### Added

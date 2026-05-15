@@ -85,48 +85,78 @@ def generate_model_readme(config: Any, training_mode: str, is_vlm: bool = False)
 
     frontmatter_lines.append("---")
 
-    # Build configuration section
-    effective_batch = calculate_effective_batch_size(config.batch_size, config.gradient_accumulation_steps)
+    # Build configuration section. Each field is read via getattr so post-hoc
+    # uploads (which build a minimal SimpleNamespace) produce a partial table
+    # rather than crashing.
+    _MISSING = object()
+
+    def _row(label: str, value: Any) -> str | None:
+        if value is _MISSING or value is None:
+            return None
+        return f"| {label} | {value} |"
+
+    batch_size = getattr(config, "batch_size", _MISSING)
+    grad_accum = getattr(config, "gradient_accumulation_steps", _MISSING)
+    if batch_size is not _MISSING and grad_accum is not _MISSING:
+        effective_batch: Any = calculate_effective_batch_size(batch_size, grad_accum)
+    else:
+        effective_batch = _MISSING
 
     config_lines = [
-        f"| Parameter | Value |",
-        f"|-----------|-------|",
+        "| Parameter | Value |",
+        "|-----------|-------|",
         f"| Training Mode | {training_mode.upper()} |",
         f"| Base Model | `{base_model_display}` |",
-        f"| Learning Rate | {config.learning_rate} |",
-        f"| Epochs | {config.num_epochs} |",
-        f"| Batch Size | {config.batch_size} |",
-        f"| Gradient Accumulation | {config.gradient_accumulation_steps} |",
-        f"| Effective Batch Size | {effective_batch} |",
-        f"| Max Sequence Length | {config.max_length} |",
-        f"| Optimizer | {config.optimizer_type} |",
-        f"| LR Scheduler | {config.lr_scheduler_type} |",
-        f"| Warmup Ratio | {config.warmup_ratio} |",
-        f"| Weight Decay | {config.weight_decay} |",
-        f"| Max Grad Norm | {config.max_grad_norm} |",
-        f"| Seed | {config.seed} |",
     ]
+    optional_rows = [
+        _row("Learning Rate", getattr(config, "learning_rate", _MISSING)),
+        _row("Epochs", getattr(config, "num_epochs", _MISSING)),
+        _row("Batch Size", batch_size),
+        _row("Gradient Accumulation", grad_accum),
+        _row("Effective Batch Size", effective_batch),
+        _row("Max Sequence Length", getattr(config, "max_length", _MISSING)),
+        _row("Optimizer", getattr(config, "optimizer_type", _MISSING)),
+        _row("LR Scheduler", getattr(config, "lr_scheduler_type", _MISSING)),
+        _row("Warmup Ratio", getattr(config, "warmup_ratio", _MISSING)),
+        _row("Weight Decay", getattr(config, "weight_decay", _MISSING)),
+        _row("Max Grad Norm", getattr(config, "max_grad_norm", _MISSING)),
+        _row("Seed", getattr(config, "seed", _MISSING)),
+    ]
+    config_lines.extend(r for r in optional_rows if r is not None)
 
-    # Add preference-specific params
+    # Add preference-specific params (best-effort)
     preference_modes = {"orpo", "dpo", "simpo", "cpo", "ipo", "kto"}
     if training_mode.lower() in preference_modes:
-        config_lines.append(f"| Beta | {config.beta} |")
-        config_lines.append(f"| Max Prompt Length | {config.max_prompt_length} |")
+        for label, attr in (("Beta", "beta"), ("Max Prompt Length", "max_prompt_length")):
+            row = _row(label, getattr(config, attr, _MISSING))
+            if row:
+                config_lines.append(row)
     if training_mode.lower() == "simpo":
-        config_lines.append(f"| SimPO Gamma | {config.gamma} |")
+        row = _row("SimPO Gamma", getattr(config, "gamma", _MISSING))
+        if row:
+            config_lines.append(row)
     if training_mode.lower() in ("dpo", "cpo"):
-        config_lines.append(f"| Label Smoothing | {config.label_smoothing} |")
+        row = _row("Label Smoothing", getattr(config, "label_smoothing", _MISSING))
+        if row:
+            config_lines.append(row)
 
     # Add LoRA params if enabled
-    if config.use_lora:
-        config_lines.append(f"| LoRA Rank (r) | {config.lora_r} |")
-        config_lines.append(f"| LoRA Alpha | {config.lora_alpha} |")
-        config_lines.append(f"| LoRA Dropout | {config.lora_dropout} |")
-        config_lines.append(f"| Target Modules | {', '.join(config.target_modules)} |")
+    if getattr(config, "use_lora", False):
+        for label, attr in (
+            ("LoRA Rank (r)", "lora_r"),
+            ("LoRA Alpha", "lora_alpha"),
+            ("LoRA Dropout", "lora_dropout"),
+        ):
+            row = _row(label, getattr(config, attr, _MISSING))
+            if row:
+                config_lines.append(row)
+        target_modules = getattr(config, "target_modules", _MISSING)
+        if target_modules is not _MISSING and target_modules:
+            config_lines.append(f"| Target Modules | {', '.join(target_modules)} |")
 
     # Add quantization info
-    if config.use_4bit:
-        config_lines.append(f"| Quantization | 4-bit (NF4) |")
+    if getattr(config, "use_4bit", False):
+        config_lines.append("| Quantization | 4-bit (NF4) |")
 
     # Add GPU info (torch may not be available in test/CI)
     try:

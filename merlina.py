@@ -2916,6 +2916,23 @@ def _infer_base_model(model_dir: Path, override: Optional[str]) -> str:
     )
 
 
+def _resolve_is_vlm(model_type: str, base_model: str) -> bool:
+    """Mirror the training path's VLM detection for the post-hoc endpoints.
+
+    ``model_type`` may be "vlm", "causal_lm", or "auto". Auto mode needs a
+    ``base_model`` to inspect its config; without one we fall back to text-only.
+    """
+    if model_type == "vlm":
+        return True
+    if model_type == "causal_lm":
+        return False
+    if not base_model:
+        return False
+    from src.training_runner import _get_auto_model_class
+    _, is_vlm = _get_auto_model_class(base_model, "auto")
+    return is_vlm
+
+
 @app.get("/models/{name}/artifacts")
 async def get_model_artifacts(name: str):
     """List categorized artifacts (files + sizes) for a local model."""
@@ -3011,6 +3028,15 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
         )
 
     base_model = _infer_base_model(model_dir, request.base_model) if needs_merge else (request.base_model or "")
+    if not base_model and request.model_type == "auto":
+        # Auto-detection needs a base model. If the caller didn't provide one
+        # and we're not merging (so we didn't try to infer above), look it up
+        # from adapter_config.json best-effort — failures fall back to text-only.
+        try:
+            base_model = _infer_base_model(model_dir, None)
+        except HTTPException:
+            pass
+    is_vlm = _resolve_is_vlm(request.model_type, base_model)
     repo_id = request.repo_id or name
     commit_message = request.commit_message or f"Upload via Merlina (post-hoc)"
 
@@ -3047,6 +3073,23 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
         description=request.description,
     )
 
+    # Pull what we can from adapter_config.json so the README shows the LoRA
+    # setup the model was trained with. Training-time hyperparameters
+    # (learning rate, batch size, etc.) aren't available in the adapter dir;
+    # the README simply omits those rows.
+    if has_adapter:
+        try:
+            with (model_dir / "adapter_config.json").open() as fh:
+                adapter_cfg = json.load(fh)
+            cfg.lora_r = adapter_cfg.get("r")
+            cfg.lora_alpha = adapter_cfg.get("lora_alpha")
+            cfg.lora_dropout = adapter_cfg.get("lora_dropout")
+            tm = adapter_cfg.get("target_modules")
+            if isinstance(tm, list):
+                cfg.target_modules = tm
+        except Exception as exc:
+            logger.debug(f"Could not read adapter_config.json for README enrichment: {exc}")
+
     job_id = f"upload-{_uuid.uuid4().hex[:8]}"
     job_manager.create_job(job_id, {
         "type": "post_hoc_upload",
@@ -3071,7 +3114,7 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
                 merge_artifact = _perform_sync_merge(
                     cfg, str(model_dir), job_id, job_manager,
                     event_loop=event_loop,
-                    is_vlm=(request.model_type == "vlm"),
+                    is_vlm=is_vlm,
                     num_consumers=1,
                 )
             _run_background_upload(
@@ -3081,7 +3124,7 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
                 job_id=job_id,
                 job_manager=job_manager,
                 event_loop=event_loop,
-                is_vlm=(request.model_type == "vlm"),
+                is_vlm=is_vlm,
                 merge_artifact=merge_artifact,
             )
         except Exception as exc:
@@ -3108,6 +3151,7 @@ async def export_gguf_for_existing_model(name: str, request: ModelGgufExportRequ
     model_dir = _resolve_model_dir(name)
     has_adapter = (model_dir / "adapter_config.json").is_file()
     base_model = _infer_base_model(model_dir, request.base_model) if has_adapter else (request.base_model or "")
+    is_vlm = _resolve_is_vlm(request.model_type, base_model)
 
     cfg = SimpleNamespace(
         output_name=name,
@@ -3138,7 +3182,7 @@ async def export_gguf_for_existing_model(name: str, request: ModelGgufExportRequ
                 merge_artifact = _perform_sync_merge(
                     cfg, str(model_dir), job_id, job_manager,
                     event_loop=event_loop,
-                    is_vlm=(request.model_type == "vlm"),
+                    is_vlm=is_vlm,
                     num_consumers=1,
                 )
             _run_background_gguf_export(
@@ -3147,7 +3191,7 @@ async def export_gguf_for_existing_model(name: str, request: ModelGgufExportRequ
                 job_id=job_id,
                 job_manager=job_manager,
                 event_loop=event_loop,
-                is_vlm=(request.model_type == "vlm"),
+                is_vlm=is_vlm,
                 merge_artifact=merge_artifact,
             )
             job_manager.update_job(job_id, status="completed", progress=1.0)

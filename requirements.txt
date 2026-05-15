@@ -12,6 +12,8 @@ python-multipart>=0.0.6
 # torchvision. Use whatever torch is pre-installed, or install manually first:
 #   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 # Requires torch >= 2.5.0 (for transformers 5.x compatibility).
+# torchvision IS required for VLM training (image processors need it) — make sure
+# your pre-installed torch stack includes a matching torchvision build.
 transformers>=5.0.0
 accelerate>=0.24.0
 grimoire-rl @ git+https://github.com/Schneewolf-Labs/grimoire.git
@@ -26,6 +28,7 @@ sentencepiece>=0.1.99
 protobuf>=3.20.0
 scipy>=1.10.0
 einops>=0.7.0
+Pillow>=10.0.0    # Required for VLM image processors (Qwen-VL, LLaVA, etc.)
 
 # Optional but recommended
 # xformers is tightly coupled to torch+CUDA. Install manually after torch:
