@@ -310,16 +310,25 @@ class TokenizerFormatter(DatasetFormatter):
         """
         Format row using tokenizer's chat template.
 
-        Expected input columns: system (optional), prompt, chosen, rejected
+        Expected input columns: system (optional), prompt, chosen, rejected, reasoning (optional)
         Output columns: prompt, chosen, rejected
         """
         system = _safe_str(row.get('system'))
         prompt = _safe_str(row.get('prompt'))
         chosen = _safe_str(row.get('chosen'))
         rejected = _safe_str(row.get('rejected'))
+        reasoning = _safe_str(row.get('reasoning'))
+
+        # If reasoning is provided, prepend <think> tags to responses so the
+        # tokenizer template sees the thinking content inline (used by Qwen3
+        # and similar models that support reasoning traces).
+        if reasoning.strip():
+            thinking_block = f"<think>\n{reasoning}\n</think>\n\n"
+            chosen = f"{thinking_block}{chosen}"
+            rejected = f"{thinking_block}{rejected}"
 
         if not self.has_chat_template:
-            # Fallback: simple concatenation
+            # Fallback: simple concatenation (reasoning already prepended above)
             system_prefix = f"{system}\n\n" if system.strip() else ""
             return {
                 "prompt": f"{system_prefix}{prompt}\n",
