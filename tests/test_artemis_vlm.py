@@ -8,6 +8,15 @@ unmodified A2 decoder.
 Run: python tests/test_artemis_vlm.py
 """
 import sys
+
+if "pytest" in sys.modules:
+    import pytest
+    pytest.skip(
+        "Hardware smoke script — requires real A2 checkpoint + ML stack; "
+        "run via 'python tests/test_artemis_vlm.py'",
+        allow_module_level=True,
+    )
+
 import torch
 
 sys.path.insert(0, "/home/jupyter/Merlina")

@@ -5,6 +5,15 @@ that `generate()` works with an image (image injected only at step 0, then
 text-only autoregression). Run: python tests/test_artemis_stage_gen.py
 """
 import sys
+
+if "pytest" in sys.modules:
+    import pytest
+    pytest.skip(
+        "Hardware smoke script — requires real A2 checkpoint + ML stack; "
+        "run via 'python tests/test_artemis_stage_gen.py'",
+        allow_module_level=True,
+    )
+
 import numpy as np
 import torch
 from PIL import Image

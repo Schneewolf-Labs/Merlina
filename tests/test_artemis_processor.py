@@ -8,6 +8,15 @@ exactly equals the model's merged feature count, end to end on a real image.
 Run: python tests/test_artemis_processor.py
 """
 import sys
+
+if "pytest" in sys.modules:
+    import pytest
+    pytest.skip(
+        "Hardware smoke script — requires real A2 checkpoint + ML stack; "
+        "run via 'python tests/test_artemis_processor.py'",
+        allow_module_level=True,
+    )
+
 import numpy as np
 import torch
 from PIL import Image
