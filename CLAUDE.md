@@ -445,6 +445,43 @@ When `use_4bit=True`:
 
 Automatically enabled for GPUs with compute capability >= 8 (Ampere and newer). Falls back to "eager" attention for older GPUs.
 
+### LoRA Merge with `modules_to_save` (embeddings / repurposed tokens)
+
+Findings from a real run (A0i-12B finetune that repurposed reserved tokenizer
+slots for `<think>`/`</think>` instead of resizing the vocab):
+
+- The merge path is `gguf_exporter.merge_lora_to_directory()` (also used by
+  `_run_background_upload` when `merge_lora_before_upload=True`): it reloads the
+  base on CPU in bf16 and calls
+  `PeftModel.from_pretrained(base, adapter).merge_and_unload()`.
+- With `modules_to_save=["embed_tokens","lm_head"]`, `merge_and_unload()`
+  correctly **replaces** both matrices with the trained copies (not just folds
+  LoRA deltas). Verified by row-level diff against the adapter's saved
+  `base_model.model.model.embed_tokens.weight` /
+  `base_model.model.lm_head.weight`.
+- **Benign warning:** PEFT ≥0.19 emits `Model has tie_word_embeddings=True and a
+  tied layer is part of the adapter ... ensure_weight_tying not set` whenever
+  both `embed_tokens` and `lm_head` are in `modules_to_save`. For an **untied**
+  base (`config.tie_word_embeddings=false`, e.g. Mistral-Nemo / A0i) this is a
+  false alarm: post-merge `embed_tokens.weight != lm_head.weight`
+  (cosine ≈ 0.01) and both keep their independently-trained values. Do **not**
+  set `ensure_weight_tying=True` for untied models — that would corrupt
+  `lm_head` by tying it back to `embed_tokens`.
+- For a **tied** base, having both layers in `modules_to_save` is ambiguous on
+  merge — add the tied embedding only once, or verify tying explicitly.
+- Repurposed special tokens + a custom `chat_template.jinja` survive the merge
+  (tokenizer is saved from the adapter dir, falling back to base). Repurposing
+  reserved slots in place keeps token IDs fixed, so the embedding matrix is
+  **not** resized.
+
+**Gap / recommendation:** there is no post-merge sanity check before upload.
+Add a lightweight guard in `merge_lora_to_directory()` after
+`merge_and_unload()`:
+- if the base's `tie_word_embeddings` is false, assert input-embedding weights
+  are not byte-identical to output-embedding weights (catches accidental tying
+  before it reaches the Hub);
+- optionally a 1-prompt greedy generation smoke (non-empty, terminates).
+
 ### HuggingFace Hub Privacy Control
 
 When pushing models to HuggingFace Hub (`push_to_hub=True`):
@@ -459,6 +496,44 @@ When pushing models to HuggingFace Hub (`push_to_hub=True`):
 - Use public repositories for open-source contributions
 - Never commit HF tokens to version control
 - Use tokens with appropriate write permissions
+
+## Artemis VLM (Project Artemis — multimodal extension)
+
+Schneewolf Labs' multimodal A-series line lives in `src/artemis_vlm.py` — a LLaVA-style graft that adds vision-language capability to any A-series (or any `MistralForCausalLM`-class) decoder.
+
+### Architecture (Path B — vision around the decoder, not surgery on it)
+
+- `Qwen3VLVisionModel` (SigLIP-2-based ViT + its patch merger) → fresh 2-layer MLP projector (`vision out_hidden_size → text hidden_size`) → features spliced at `<|image_pad|>` (id 22 in the A-series tokenizer) → the language decoder **byte-for-byte unchanged** (vanilla 1-D RoPE, no MRoPE/DeepStack).
+- Deliberately *not* Qwen3-VL's decoder mods — this is the LLaVA chassis with Qwen3-VL's vision tower, sized to A-series dims. The whole point is that the text capabilities (reasoning, tool calling, persona) are preserved by construction: the decoder doesn't change.
+
+### Public API (`src/artemis_vlm.py`)
+
+- `ArtemisVLMConfig(vision_config, text_config, image_token_id=22, video_token_id=23, projector_hidden_act="gelu")` — composite config.
+- `ArtemisVLMForConditionalGeneration`
+  - `from_a2_and_vision(a2_path, vision_model=, vision_config=, image_token_id=22, video_token_id=23, torch_dtype=bf16)` — assembly helper that loads the 12B decoder exactly once and lets you inject a pretrained vision module.
+  - `get_image_features(pixel_values, image_grid_thw)` — mirrors `transformers.Qwen3VLModel.get_image_features` but uses only the **merged** `pooler_output` (DeepStack ignored), then projects to text hidden.
+  - `forward(input_ids, attention_mask, pixel_values, image_grid_thw, labels, ...)` — splices projected vision at `input_ids == image_token_id` then calls the language model on `inputs_embeds`. Enforces the splice contract (`#image_pad == #image_features`).
+  - `set_training_stage("stage1" | "stage2", unfreeze_vision_top_n=0)` — toggles `requires_grad` for the two-stage recipe; returns `(trainable, total)`.
+  - `prepare_inputs_for_generation` — injects the image only on step 0 so `generate()` works through standard `GenerationMixin`.
+- `ArtemisVLMProcessor(tokenizer, vision_config, max_pixels=512*512)` — wraps `Qwen2VLImageProcessor` with `patch/temporal/merge` sourced from `vision_config` (prevents Qwen2-VL `patch=14` vs Qwen3-VL `patch=16` per-patch-dim drift). Each `<|image_pad|>` expands to `grid_thw.prod() // merge_size**2` copies — matches the model's merged feature count by construction.
+- `ArtemisDataCollator(processor)` — multimodal batching with prefix-trick label masking (prompt + every `<|image_pad|>` → -100), flat `pixel_values` concat across the batch, per-image `image_grid_thw` stack.
+- `artemis_loss_fn(model, batch, training)` — grimoire-compatible `(loss, metrics)` adapter; the collator's `labels` drive the standard CausalLM loss.
+
+### Two-stage training recipe
+
+- **Stage-1 — projector alignment**: `set_training_stage("stage1")` → ViT + decoder frozen, only the ~37M projector trains. LLaVA-style hyperparams: `lr ~1e-3`, plain AdamW, cosine, no weight decay, `gradient_checkpointing=True` (essential — backprop through the frozen decoder otherwise blows activation memory).
+- **Stage-2 — multimodal instruction FFT**: `set_training_stage("stage2")` → projector + decoder trainable, ViT frozen. `paged_adamw_8bit`, `lr ~5e-6` (lower than text-only FFT — protects more capability axes), single epoch, **with heavy text rehearsal** mixed in via `additional_sources` to keep reasoning / tools / identity alive (same durability recipe that protected A2's identity through tool training).
+
+### Tests (`tests/test_artemis_*.py`, standalone-runnable)
+
+- `test_artemis_vlm.py` — assemble + merged-vision-path shape + forward + splice-contract guard
+- `test_artemis_processor.py` — chat-template ↔ `<|image_pad|>` expansion round-trip on a real image
+- `test_artemis_collator.py` — batched multimodal training step with finite loss
+- `test_artemis_stage_gen.py` — staged-freeze param counts + multimodal `generate()` + loss adapter
+
+### Not yet in this module (intentionally)
+
+- `training_runner` multimodal switch (selecting `ArtemisVLM` + `ArtemisDataCollator` + `artemis_loss_fn` + `set_training_stage` when a multimodal config is set) and image loading in `dataset_handlers`. These are data-coupled — they ship alongside the first real Stage-1/Stage-2 runs.
 
 ## Testing Strategy
 

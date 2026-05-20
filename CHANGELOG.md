@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-05-20 "Project Artemis"
+
+### Added
+- **Project Artemis — multimodal VLM scaffolding** (`src/artemis_vlm.py`): a LLaVA-style graft adding vision-language capability to A-series (or any `MistralForCausalLM`-class) decoders. Path B by design — vision is composed *around* the decoder rather than modifying it, so the underlying text capabilities (reasoning, tools, identity) are preserved by construction.
+  - `ArtemisVLMConfig` — composite config (`Qwen3VLVisionConfig` + text config + `image_token_id`/`video_token_id`).
+  - `ArtemisVLMForConditionalGeneration` — composes Qwen3-VL's vision tower + a fresh 2-layer MLP projector (`vision out_hidden → text hidden`) + an unmodified language model. `from_a2_and_vision(a2_path, vision_model=...)` helper assembles without double-instantiating the decoder. `set_training_stage("stage1"|"stage2", unfreeze_vision_top_n=0)` toggles requires_grad for the two-stage recipe. `prepare_inputs_for_generation` injects the image only at step 0 so `generate()` works through standard `GenerationMixin`.
+  - `ArtemisVLMProcessor` — wraps `Qwen2VLImageProcessor` with `patch/temporal/merge` sourced from the model's `vision_config` (prevents the Qwen2-VL `patch=14` vs Qwen3-VL `patch=16` per-patch-dim drift). Mirrors `Qwen3VLProcessor.__call__` expansion: each `<|image_pad|>` is replaced with `grid_thw.prod() // merge_size**2` copies, matching the model's merged feature count. `max_pixels` caps dynamic-resolution token blow-up on large images.
+  - `ArtemisDataCollator` — multimodal batching: per-example processor run, prefix-trick label masking (prompt + every `<|image_pad|>` → -100), batch padding, flat `pixel_values` concat, per-image `image_grid_thw` stack. Produces a dict ready for `model(**batch)` with `labels`.
+  - `artemis_loss_fn(model, batch, training)` — grimoire-compatible `(loss, metrics)` adapter; the collator's labels drive the standard CausalLM loss.
+- **Four standalone tests** in `tests/test_artemis_*.py` validate (1) model assembly + merged vision-path shape + forward, (2) chat-template ↔ `<|image_pad|>` expansion round-trip on a real image, (3) batched multimodal training step with finite loss, (4) staged-freeze param counts + multimodal `generate()` + the loss adapter.
+- **`CLAUDE.md`** gains an Artemis VLM section documenting the Path-B architecture, public API, and two-stage training recipe, plus a LoRA-merge / `modules_to_save` / repurposed-tokens note in *Important Implementation Notes* (lessons surfaced during the v1.5.x VLM-fix line of work).
+
+### Notes
+- The `training_runner` multimodal switch (selecting `ArtemisVLM` + `ArtemisDataCollator` + `artemis_loss_fn` + `set_training_stage` in the live training path) and image loading in `dataset_handlers` are intentionally **not in this PR** — they are data-coupled and will ship alongside the first real Stage-1/Stage-2 runs.
+
 ## [1.5.1] - 2026-05-15
 
 ### Fixed
