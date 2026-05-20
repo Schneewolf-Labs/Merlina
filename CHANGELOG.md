@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-05-20 "Artemis Runner"
+
+### Added
+- **Artemis VLM training is now wired through Merlina's `/train` API**: two new training modes — `vlm_stage1` (projector-only alignment on image-caption corpora) and `vlm_stage2` (full multimodal instruction FFT) — accepted by the existing `TrainingConfig` and dispatched to a new `src/training_runner_vlm.py` runner. The text-mode `run_training_sync` is unchanged; VLM modes are handled by an early-dispatch branch that delegates to `run_vlm_training_sync(...)`.
+- **`src/training_runner_vlm.py`**: parallel narrow path mirroring `run_training_sync`'s contracts (WebSocketCallback, JobManager status updates, GPU cleanup in all exit paths) but the body is multimodal-specific. Assembles `ArtemisVLMForConditionalGeneration.from_a2_and_vision(...)`, builds `ArtemisVLMProcessor`, lazy-decodes images through an internal `_ArtemisImageCaptionAdapter` (so BLIP3o-scale corpora don't have to fit in RAM), hands a custom `ArtemisDataCollator` to `GrimoireTrainer`, and uses `artemis_loss_fn` so the model's internal CE drives training. `set_training_stage()` is honored via grimoire's `requires_grad`-filtered optimizer — no manual param-group plumbing.
+- **`TrainingConfig` (Pydantic, API layer) gains Artemis fields** — all `Optional` with sensible defaults so text-mode requests are unaffected:
+  - `vision_model_id` (default `Qwen/Qwen3-VL-2B-Instruct`)
+  - `stage` (`stage1` | `stage2`, default `stage1`)
+  - `unfreeze_vision_top_n` (default 0)
+  - `image_token_id` (default 22, matching A1/A2's repurposed-reserved-token layout)
+  - `min_pixels` / `max_pixels` (dynamic-resolution caps)
+  - `image_column` / `caption_column` (dataset column overrides)
+  - `instruction` (user-side prompt paired with each image)
+- **`tests/test_artemis_runner.py`** — end-to-end smoke for the runner glue: a synthetic 16-row image+caption set, the full `run_vlm_training_sync` path, asserts finite decreasing loss + `models/<name>/` checkpoint + terminal `status=completed`. Same `pytest`-collection skip pattern as the other Artemis tests; meant to be run as `python tests/test_artemis_runner.py` on the GB10.
+
+### Notes
+- Stage-1/Stage-2 are full-FT runs (no LoRA), so the post-training LoRA-merge / GGUF-export / HF-upload pipelines from the text runner are intentionally NOT wired into the VLM path yet — the saved checkpoint at `./models/<output_name>/` is the final artifact and can be uploaded with the existing post-hoc `/models/{name}/upload` endpoint. Wiring the full upload pipeline into the VLM runner is a follow-up after a real Stage-1 / Stage-2 pair has been shipped.
+
 ## [1.6.0] - 2026-05-20 "Project Artemis"
 
 ### Added

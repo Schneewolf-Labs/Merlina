@@ -292,13 +292,57 @@ class TrainingConfig(BaseModel):
     # Training mode
     training_mode: str = Field(
         "orpo",
-        description="Training mode: 'sft', 'orpo', 'dpo', 'simpo', 'cpo', 'ipo', or 'kto'"
+        description=(
+            "Training mode: 'sft', 'orpo', 'dpo', 'simpo', 'cpo', 'ipo', 'kto', "
+            "'vlm_stage1' (Artemis projector-only alignment), or 'vlm_stage2' "
+            "(Artemis full multimodal instruction FFT)"
+        )
     )
 
     # Preference optimization parameters
     beta: float = Field(0.1, ge=0.01, le=10.0, description="Beta parameter for preference optimization (ORPO, DPO, SimPO, CPO, IPO, KTO)")
     label_smoothing: float = Field(0.0, ge=0.0, le=0.5, description="Label smoothing for DPO/CPO loss")
     gamma: float = Field(0.5, ge=0.0, le=5.0, description="SimPO reward margin between chosen and rejected")
+
+    # Artemis VLM (Project Artemis multimodal) — used when training_mode starts
+    # with 'vlm_'. All fields are Optional with sensible defaults; text-mode
+    # requests can ignore this block entirely.
+    vision_model_id: Optional[str] = Field(
+        None,
+        description="HF id of the source VLM whose vision tower is grafted (default: Qwen/Qwen3-VL-2B-Instruct)"
+    )
+    stage: Optional[str] = Field(
+        None,
+        description="Artemis training stage: 'stage1' (projector-only alignment) or 'stage2' (full multimodal FFT). Defaults to 'stage1'."
+    )
+    unfreeze_vision_top_n: Optional[int] = Field(
+        None, ge=0, le=48,
+        description="During stage1, additionally unfreeze the top N vision blocks (0 keeps the entire ViT frozen)"
+    )
+    image_token_id: Optional[int] = Field(
+        None,
+        description="Token id of <|image_pad|> in the A-series tokenizer (default 22 for A1/A2's repurposed reserved-token layout)"
+    )
+    min_pixels: Optional[int] = Field(
+        None, ge=64,
+        description="Image processor lower bound on H*W pixels after resize (default 32*32)"
+    )
+    max_pixels: Optional[int] = Field(
+        None, ge=4096,
+        description="Image processor upper bound on H*W pixels after resize (default 512*512)"
+    )
+    image_column: Optional[str] = Field(
+        None,
+        description="Dataset column holding the PIL image (default 'image')"
+    )
+    caption_column: Optional[str] = Field(
+        None,
+        description="Dataset column holding the caption/target string (default 'caption')"
+    )
+    instruction: Optional[str] = Field(
+        None,
+        description="User-side instruction paired with each image (default 'Describe this image.')"
+    )
 
     # Dataset configuration
     dataset: DatasetConfig = Field(

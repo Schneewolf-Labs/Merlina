@@ -1084,6 +1084,20 @@ def run_training_sync(
         This function handles cleanup of GPU resources in all cases (success,
         failure, or interruption) to prevent OOM errors in subsequent jobs.
     """
+    # Delegate Artemis VLM modes (vlm_stage1, vlm_stage2) to the parallel
+    # multimodal runner. The VLM path builds its own model/tokenizer/
+    # dataset/collator and has its own lifecycle (no LoRA, no chat-template
+    # grafting), so dispatch happens before the text-mode setup begins.
+    if getattr(config, "training_mode", "").lower().startswith("vlm_"):
+        from src.training_runner_vlm import run_vlm_training_sync
+        return run_vlm_training_sync(
+            job_id=job_id,
+            config=config,
+            job_manager=job_manager,
+            uploaded_datasets=uploaded_datasets,
+            event_loop=event_loop,
+        )
+
     # Initialize resources to None for proper cleanup tracking
     model = None
     trainer = None
