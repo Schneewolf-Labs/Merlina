@@ -343,6 +343,16 @@ class TrainingConfig(BaseModel):
         None,
         description="User-side instruction paired with each image (default 'Describe this image.')"
     )
+    streaming: Optional[bool] = Field(
+        None,
+        description=(
+            "Stream the source HF dataset and materialize only `dataset.max_samples` rows. "
+            "Essential for huge sharded webdataset corpora (BLIP3o-Pretrain-Long-Caption has "
+            "2891 shards; without streaming the entire corpus downloads before any "
+            "max_samples cap takes effect). Images are stored once as JPEG bytes; PIL decode "
+            "stays lazy at training time."
+        )
+    )
 
     # Dataset configuration
     dataset: DatasetConfig = Field(

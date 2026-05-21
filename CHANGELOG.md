@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-05-20
+
+### Added
+- **Streaming support in the VLM dataset loader** (`_load_image_caption_dataset`): new `streaming: Optional[bool]` field on the Pydantic `TrainingConfig`. When set with a bounded `dataset.max_samples`, the runner uses `load_dataset(..., streaming=True).take(N)` and materializes only those N rows into an Arrow-backed `Dataset` via `from_generator`, with image bytes stored once through the `Image()` feature so PIL decode stays lazy at training time. The whole-corpus shard download is bypassed entirely.
+
+### Fixed
+- **Huge sharded webdataset corpora are now actually usable**: previously, pointing `vlm_stage1` at `BLIP3o/BLIP3o-Pretrain-Long-Caption` (2,891 webdataset shards) caused `load_dataset()` to download every shard before `.select(range(max_samples))` could take effect — projected ~7 hours of download for 25k usable samples, with ~1TB of disk burned on shards we'd never see. With `streaming: true`, that same 25k materializes in ~36 seconds. The non-streaming path is unchanged (still the right choice for small, single-file datasets).
+
 ## [1.7.0] - 2026-05-20 "Artemis Runner"
 
 ### Added

@@ -100,20 +100,64 @@ def _load_image_caption_dataset(config: Any) -> Tuple[Dataset, Optional[Dataset]
     Returns (train, eval-or-None). Uses HF Hub by default; honors the
     same `dataset.repo_id` / `dataset.split` config layout as text modes.
     Train/eval split derived from `test_size` like the text path.
+
+    For huge sharded webdataset corpora (e.g. BLIP3o-Pretrain-Long-Caption
+    with 2891 shards), non-streaming `load_dataset()` downloads every shard
+    before any `.select()` can take effect — set `config.streaming=True`
+    with a bounded `dataset.max_samples` to pull only the shards needed
+    for the first N samples and materialize them to an Arrow-backed
+    Dataset (image bytes stored once, PIL decode stays lazy at train time).
     """
     dataset_cfg = config.dataset
     repo_id = getattr(dataset_cfg.source, "repo_id", None) or dataset_cfg.source.path
     split = getattr(dataset_cfg.source, "split", None) or "train"
     token = config.hf_token or os.environ.get("HF_TOKEN")
-
-    logger.info(f"Loading image-caption dataset: {repo_id} split={split}")
-    raw = load_dataset(repo_id, split=split, token=token)
-
-    # Optional sample cap (useful for Stage-1 ramp-ups)
     max_samples = getattr(dataset_cfg, "max_samples", None)
-    if max_samples and max_samples < len(raw):
-        raw = raw.select(range(max_samples))
-        logger.info(f"  capped to {max_samples} samples")
+    streaming = bool(getattr(config, "streaming", False))
+    image_column = config.image_column or "image"
+    caption_column = config.caption_column or "caption"
+
+    logger.info(
+        f"Loading image-caption dataset: {repo_id} split={split} "
+        f"streaming={streaming} max_samples={max_samples}"
+    )
+
+    if streaming and max_samples:
+        # Stream the corpus, materialize first N samples to Arrow.
+        # Only the shards that hold those N samples get downloaded.
+        # JPEG bytes are stored once via the Image() feature so PIL
+        # decode stays lazy at training time — RAM footprint stays at
+        # ~jpeg_bytes × N (a few GB for 50k).
+        import io
+        from datasets import Features, Image as ImageFeature, Value
+        stream = load_dataset(repo_id, split=split, streaming=True, token=token)
+        stream = stream.take(max_samples)
+
+        def _gen():
+            n = 0
+            for row in stream:
+                pil = row[image_column]
+                buf = io.BytesIO()
+                pil.save(buf, format="JPEG", quality=92)
+                yield {
+                    image_column: {"bytes": buf.getvalue(), "path": None},
+                    caption_column: row[caption_column],
+                }
+                n += 1
+                if n % 1000 == 0:
+                    logger.info(f"  streamed {n}/{max_samples} samples")
+
+        features = Features({
+            image_column: ImageFeature(),
+            caption_column: Value("string"),
+        })
+        raw = Dataset.from_generator(_gen, features=features)
+        logger.info(f"  streaming materialized {len(raw)} samples")
+    else:
+        raw = load_dataset(repo_id, split=split, token=token)
+        if max_samples and max_samples < len(raw):
+            raw = raw.select(range(max_samples))
+            logger.info(f"  capped to {max_samples} samples")
 
     # Train/eval split
     test_size = getattr(dataset_cfg, "test_size", 0.01) or 0.01
