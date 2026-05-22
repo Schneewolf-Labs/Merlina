@@ -10,6 +10,15 @@ Train LLMs with ORPO, DPO, SimPO, CPO, IPO, KTO, and SFT using a delightful web 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](tests/TEST_SUMMARY.md)
 
+## Companion projects
+
+Part of the Schneewolf Labs **train → deploy → eval** chain:
+
+- 🧙‍♀️ **Merlina** (this) — train
+- 🔌 **[Witchgrid](https://github.com/Schneewolf-Labs/Witchgrid)** — orchestrate self-hosted llama.cpp inference across your GPU fleet
+- 🌠 **[Artemis](https://github.com/Schneewolf-Labs/Artemis)** — Path-B VLM library for grafting vision onto any Mistral-class decoder (`pip install artemis-vlm`; pairs with Merlina's `vlm_stage1` / `vlm_stage2` training modes)
+- 🔮 **[Scry](https://github.com/Schneewolf-Labs/Scry)** — eval orchestrator (foundation only)
+
 ## Features
 
 - 🎨 **Beautiful Web Interface** - Cute wizard-themed UI with animations
