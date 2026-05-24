@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-05-24 "Artemis Extract"
+
+### Changed
+- **Artemis VLM module extracted to a standalone package**: the model classes (`ArtemisVLMConfig`, `ArtemisVLMForConditionalGeneration`, `ArtemisVLMProjector`, `ArtemisVLMProcessor`, `ArtemisDataCollator`, `artemis_loss_fn`) now live in the dedicated [`Schneewolf-Labs/Artemis`](https://github.com/Schneewolf-Labs/Artemis) repo (package name `artemis-vlm`, apache-2.0). Merlina's `src/artemis_vlm.py` is deleted; `src/training_runner_vlm.py` now imports from the external package (`from artemis_vlm import ...`).
+- **Merlina's `requirements.txt` gains `artemis-vlm @ git+https://github.com/Schneewolf-Labs/Artemis.git`** as a dependency. The package is only loaded when `training_mode` starts with `vlm_`, so text-mode users pay no runtime cost beyond the install.
+- **Tests reorganized**: the four model-class hardware-smoke tests (`test_artemis_vlm.py`, `test_artemis_processor.py`, `test_artemis_collator.py`, `test_artemis_stage_gen.py`) moved to the Artemis repo's `tests/`. The Merlina-side runner-glue smoke (`tests/test_artemis_runner.py`) stays here — it tests `src/training_runner_vlm.py`, which is Merlina-specific orchestration.
+- **`CLAUDE.md` Artemis section** updated to point at the external repo for model/architecture documentation, and now describes only the Merlina-side integration surface (`run_vlm_training_sync`, dispatch hook, Pydantic fields, runner glue).
+
+### Why
+Merlina is training infrastructure (FastAPI app, job queue, WebSocket); the VLM model classes are a library others should be able to consume without depending on Merlina. The original consolidation in v1.6.0 was the fastest path to a working pipeline, but it bound the model definitions to internal infra. Spinning them out is the right long-term shape: `flammenai/Mahou-2-VLM` (planned) can `pip install artemis-vlm` and graft onto Mahou-1.5 without pulling in Merlina's FastAPI app.
+
+### Migration notes
+- No API-level change: `POST /train` with `training_mode: "vlm_stage1"` or `"vlm_stage2"` works exactly the same. All Artemis Pydantic fields (`vision_model_id`, `stage`, `image_column`, `streaming`, etc.) are unchanged.
+- The currently-running Stage-1 process (started under v1.7.1) is unaffected — `src.artemis_vlm` was already loaded into its Python memory before this refactor. Future restarts pick up the external package automatically via the new requirement.
+- Users with a local clone should `pip install -r requirements.txt` after pulling to install the `artemis-vlm` dependency.
+
 ## [1.7.1] - 2026-05-20
 
 ### Added

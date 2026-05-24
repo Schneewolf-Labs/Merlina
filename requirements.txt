@@ -17,6 +17,7 @@ python-multipart>=0.0.6
 transformers>=5.0.0
 accelerate>=0.24.0
 grimoire-rl @ git+https://github.com/Schneewolf-Labs/grimoire.git
+artemis-vlm @ git+https://github.com/Schneewolf-Labs/Artemis.git@v0.1.0    # ArtemisVLM model classes (Project Artemis); only loaded when training_mode starts with "vlm_"
 peft>=0.6.0
 bitsandbytes>=0.41.0
 datasets>=2.14.0
