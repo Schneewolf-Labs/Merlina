@@ -283,6 +283,19 @@ export function buildTrainingConfig({ gpuManager = null, includeSecrets = true }
         // uploaded model's README so others can reproduce the training run.
         share_config: bool('share-config', true),
 
+        // Diffusion / image-LoRA fields. All Optional in the backend
+        // Pydantic schema so text/VLM jobs ignore them entirely. Read
+        // unconditionally; saved presets still capture them so a
+        // diffusion-trained preset round-trips.
+        // model_name is not collected here — diffusion runs reuse
+        // base_model (runner falls back when model_name is unset).
+        image_resolution:    numOrNull('diffusion-image-resolution', parseInt),
+        lora_rank:           numOrNull('diffusion-lora-rank', parseInt),
+        lora_target_modules: (strList('diffusion-lora-target-modules').length
+                              ? strList('diffusion-lora-target-modules') : null),
+        dataset_jsonl_path:  str('diffusion-dataset-jsonl', '') || null,
+        dataset_name:        str('diffusion-dataset-name', '') || null,
+
         // Secrets — always present in the dict so the contract is
         // deterministic. The values come from the form (or null) when
         // includeSecrets=true; saved presets force them to null and the

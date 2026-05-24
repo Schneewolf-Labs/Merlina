@@ -286,7 +286,10 @@ class TrainingConfig(BaseModel):
     # Model type
     model_type: str = Field(
         "auto",
-        description="Model type: 'auto' (detect from config), 'causal_lm' (text-only LLM), or 'vlm' (vision-language model)"
+        description=(
+            "Model type: 'auto' (detect from config), 'causal_lm' (text-only LLM), "
+            "'vlm' (vision-language model), or 'diffusion' (image LoRA via Atelier)"
+        )
     )
 
     # Training mode
@@ -294,8 +297,10 @@ class TrainingConfig(BaseModel):
         "orpo",
         description=(
             "Training mode: 'sft', 'orpo', 'dpo', 'simpo', 'cpo', 'ipo', 'kto', "
-            "'vlm_stage1' (Artemis projector-only alignment), or 'vlm_stage2' "
-            "(Artemis full multimodal instruction FFT)"
+            "'vlm_stage1' (Artemis projector-only alignment), 'vlm_stage2' "
+            "(Artemis full multimodal instruction FFT), 'diffusion_qwen_image' "
+            "(Qwen-Image T2I LoRA), 'diffusion_qwen_edit' (Qwen-Image-Edit LoRA), "
+            "or 'diffusion_sdxl' (SDXL LoRA)"
         )
     )
 
@@ -352,6 +357,38 @@ class TrainingConfig(BaseModel):
             "max_samples cap takes effect). Images are stored once as JPEG bytes; PIL decode "
             "stays lazy at training time."
         )
+    )
+
+    # Atelier diffusion fields (Qwen-Image / Qwen-Image-Edit / SDXL) — used
+    # when training_mode starts with 'diffusion_'. All fields are Optional
+    # so text-mode / VLM-mode requests can ignore this block entirely.
+    model_name: Optional[str] = Field(
+        None,
+        description="HF repo id of the diffusion model to fine-tune (e.g. 'Qwen/Qwen-Image'). Falls back to base_model if unset."
+    )
+    image_resolution: Optional[int] = Field(
+        None, ge=256, le=2048,
+        description="Square resolution (px) at which images are cached + trained. Default 1024."
+    )
+    lora_rank: Optional[int] = Field(
+        None, ge=4, le=256,
+        description="LoRA rank for diffusion training (defaults to lora_r if unset)."
+    )
+    lora_target_modules: Optional[list[str]] = Field(
+        None,
+        description="LoRA target modules; defaults are adapter-specific (typically [to_k,to_q,to_v,to_out.0])."
+    )
+    dataset_jsonl_path: Optional[str] = Field(
+        None,
+        description="Absolute path to a local JSONL of {prompt, image} (or {prompt, chosen, rejected}) rows for diffusion training."
+    )
+    dataset_name: Optional[str] = Field(
+        None,
+        description="HF Hub dataset id for diffusion training (alternative to dataset_jsonl_path / uploads)."
+    )
+    dataset_split: Optional[str] = Field(
+        None,
+        description="HF split when dataset_name is used (default 'train')."
     )
 
     # Dataset configuration

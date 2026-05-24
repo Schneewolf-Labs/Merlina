@@ -78,8 +78,9 @@
                             <option value="auto" selected>Auto-detect</option>
                             <option value="causal_lm">Text LLM (CausalLM)</option>
                             <option value="vlm">Vision-Language Model (VLM)</option>
+                            <option value="diffusion">Diffusion / Image LoRA ✨ new</option>
                         </select>
-                        <small style="color: #888; font-size: 0.85em;">Auto-detect works for most models. Select VLM for vision models like Qwen-VL to preserve vision capabilities.</small>
+                        <small style="color: #888; font-size: 0.85em;">Auto-detect works for most models. Pick VLM for vision-language models (Qwen-VL etc.) or Diffusion to train an image LoRA on Qwen-Image / SDXL.</small>
                     </div>
                 </div>
 
@@ -154,13 +155,20 @@
                     <div class="form-group">
                         <label>Training Method</label>
                         <select id="training-mode" class="magic-select">
-                            <option value="sft">SFT - Supervised Fine-Tuning</option>
-                            <option value="orpo" selected>ORPO - Odds Ratio Preference Optimization</option>
-                            <option value="dpo">DPO - Direct Preference Optimization</option>
-                            <option value="simpo">SimPO - Simple Preference Optimization</option>
-                            <option value="kto">KTO - Kahneman-Tversky Optimization</option>
-                            <option value="cpo">CPO - Contrastive Preference Optimization</option>
-                            <option value="ipo">IPO - Identity Preference Optimization</option>
+                            <optgroup label="Text LLM">
+                                <option value="sft">SFT - Supervised Fine-Tuning</option>
+                                <option value="orpo" selected>ORPO - Odds Ratio Preference Optimization</option>
+                                <option value="dpo">DPO - Direct Preference Optimization</option>
+                                <option value="simpo">SimPO - Simple Preference Optimization</option>
+                                <option value="kto">KTO - Kahneman-Tversky Optimization</option>
+                                <option value="cpo">CPO - Contrastive Preference Optimization</option>
+                                <option value="ipo">IPO - Identity Preference Optimization</option>
+                            </optgroup>
+                            <optgroup label="Diffusion / Image LoRA">
+                                <option value="diffusion_qwen_image">Qwen-Image LoRA (text-to-image)</option>
+                                <option value="diffusion_qwen_edit">Qwen-Image-Edit LoRA (image-to-image)</option>
+                                <option value="diffusion_sdxl">SDXL LoRA</option>
+                            </optgroup>
                         </select>
                         <small id="training-mode-description" style="color: #888; font-size: 0.85em; display: block; margin-top: 8px;"></small>
                     </div>
@@ -428,15 +436,52 @@
                     <div class="form-group">
                         <label>🎯 Training Method</label>
                         <select id="training-mode-config" class="magic-select">
-                            <option value="sft">SFT - Supervised Fine-Tuning</option>
-                            <option value="orpo" selected>ORPO - Odds Ratio Preference Optimization</option>
-                            <option value="dpo">DPO - Direct Preference Optimization</option>
-                            <option value="simpo">SimPO - Simple Preference Optimization</option>
-                            <option value="kto">KTO - Kahneman-Tversky Optimization</option>
-                            <option value="cpo">CPO - Contrastive Preference Optimization</option>
-                            <option value="ipo">IPO - Identity Preference Optimization</option>
+                            <optgroup label="Text LLM">
+                                <option value="sft">SFT - Supervised Fine-Tuning</option>
+                                <option value="orpo" selected>ORPO - Odds Ratio Preference Optimization</option>
+                                <option value="dpo">DPO - Direct Preference Optimization</option>
+                                <option value="simpo">SimPO - Simple Preference Optimization</option>
+                                <option value="kto">KTO - Kahneman-Tversky Optimization</option>
+                                <option value="cpo">CPO - Contrastive Preference Optimization</option>
+                                <option value="ipo">IPO - Identity Preference Optimization</option>
+                            </optgroup>
+                            <optgroup label="Diffusion / Image LoRA">
+                                <option value="diffusion_qwen_image">Qwen-Image LoRA</option>
+                                <option value="diffusion_qwen_edit">Qwen-Image-Edit LoRA</option>
+                                <option value="diffusion_sdxl">SDXL LoRA</option>
+                            </optgroup>
                         </select>
                         <small style="color: #888; font-size: 0.85em;">Same setting as "What are you training?" on Step 2 — kept in sync.</small>
+                    </div>
+
+                    <!-- Diffusion-only fields (hidden unless training_mode starts with diffusion_) -->
+                    <div class="spell-section" id="diffusion-fields-section" style="display: none; background: linear-gradient(135deg, #fce4ec 0%, #f3e5f5 100%); border-left: 4px solid var(--primary-purple);">
+                        <h3>🎨 Diffusion Settings</h3>
+                        <div class="form-group">
+                            <label>🖼️ Image Resolution (px)</label>
+                            <input type="number" id="diffusion-image-resolution" value="1024" min="256" max="2048" step="64" class="magic-input">
+                            <small style="color: #888; font-size: 0.85em;">Square crop at this size for both VAE encoding + training. 1024 is Qwen-Image native.</small>
+                        </div>
+                        <div class="form-group">
+                            <label>🎚️ LoRA Rank (overrides "LoRA r" below)</label>
+                            <input type="number" id="diffusion-lora-rank" value="32" min="4" max="256" class="magic-input">
+                            <small style="color: #888; font-size: 0.85em;">32 is a safe default for diffusion. Higher rank = more capacity but more overfit risk on small datasets.</small>
+                        </div>
+                        <div class="form-group">
+                            <label>🎯 LoRA Target Modules (comma-separated, blank = adapter defaults)</label>
+                            <input type="text" id="diffusion-lora-target-modules" placeholder="to_k, to_q, to_v, to_out.0" class="magic-input">
+                            <small style="color: #888; font-size: 0.85em;">Attention modules. Default targets attention only; add ff.net.0.proj / ff.net.2 for higher-capacity finetunes.</small>
+                        </div>
+                        <div class="form-group">
+                            <label>📂 Dataset JSONL Path (optional)</label>
+                            <input type="text" id="diffusion-dataset-jsonl" placeholder="/path/to/train.jsonl" class="magic-input">
+                            <small style="color: #888; font-size: 0.85em;">Local JSONL with {prompt, image} (or {prompt, chosen, rejected}) rows. Otherwise upload above or use a HF dataset name.</small>
+                        </div>
+                        <div class="form-group">
+                            <label>🤗 HF Dataset Name (optional)</label>
+                            <input type="text" id="diffusion-dataset-name" placeholder="user/image-caption-dataset" class="magic-input">
+                            <small style="color: #888; font-size: 0.85em;">Alternative to uploads / JSONL path. Dataset must have an `image` + `prompt` (or `caption`) column.</small>
+                        </div>
                     </div>
 
                     <!-- Output Name -->

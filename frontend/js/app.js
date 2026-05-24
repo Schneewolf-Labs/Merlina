@@ -251,6 +251,7 @@ class MerlinaApp {
 
         // Use the validated dataset config from DatasetManager so /train
         // benefits from its checks (and the validated training_mode).
+        // Diffusion-specific fields are read by buildTrainingConfig() itself.
         config.dataset = datasetConfig;
 
         return config;
@@ -606,6 +607,7 @@ class MerlinaApp {
         if (!trainingMode) return;
 
         const PREFERENCE_MODES = ['orpo', 'dpo', 'simpo', 'cpo', 'ipo', 'kto'];
+        const diffusionFieldsSection = document.getElementById('diffusion-fields-section');
 
         const MODE_DESCRIPTIONS = {
             sft: '<strong>SFT:</strong> Learn from good examples. Uses only the "chosen" response for each prompt — great for teaching your model a new style or task. No rejected responses needed.',
@@ -615,16 +617,22 @@ class MerlinaApp {
             cpo: '<strong>CPO:</strong> Reference-free contrastive learning on preference pairs. Similar to DPO but simpler — directly contrasts chosen vs. rejected without needing a frozen copy of the model.',
             kto: '<strong>KTO:</strong> Uses prospect theory to align models with binary feedback (good/bad) instead of paired preferences. Works with unpaired data — if you have rejected responses they\'re split into separate negative examples. Great when you only have thumbs-up/thumbs-down signals.',
             ipo: '<strong>IPO:</strong> A squared-loss variant of DPO that avoids overfitting to noisy preferences. More robust when your chosen/rejected labels may not be perfectly clean.',
+            diffusion_qwen_image: '<strong>Qwen-Image LoRA:</strong> Train a text-to-image aesthetic LoRA on Qwen-Image (20B-param DiT). Dataset is (image, caption) pairs. Cross-applies to Qwen-Image-Edit at inference.',
+            diffusion_qwen_edit:  '<strong>Qwen-Image-Edit LoRA:</strong> Train an image editing LoRA on Qwen-Image-Edit. Dataset is (source image, target image, edit instruction) triples.',
+            diffusion_sdxl:       '<strong>SDXL LoRA:</strong> Train an aesthetic / style LoRA on SDXL (UNet + dual CLIP). Dataset is (image, caption) pairs.',
         };
 
         const updateFields = (mode) => {
             const isPreference = PREFERENCE_MODES.includes(mode);
+            const isDiffusion = (mode || '').startsWith('diffusion_');
             // Beta: shown for all preference methods
             if (betaField) betaField.style.display = isPreference ? 'block' : 'none';
             // Gamma: SimPO only
             if (gammaField) gammaField.style.display = mode === 'simpo' ? 'block' : 'none';
             // Label smoothing: DPO and CPO
             if (labelSmoothingField) labelSmoothingField.style.display = (mode === 'dpo' || mode === 'cpo') ? 'block' : 'none';
+            // Diffusion-only fields: image resolution, lora rank override, dataset paths
+            if (diffusionFieldsSection) diffusionFieldsSection.style.display = isDiffusion ? 'block' : 'none';
             // Description
             if (descriptionEl) descriptionEl.innerHTML = MODE_DESCRIPTIONS[mode] || '';
         };

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-05-24 "Workshop"
+
+### Added
+- **Diffusion training is now a first-class Merlina backend** via [Atelier](https://github.com/Schneewolf-Labs/atelier). Three new training modes — `diffusion_qwen_image` (Qwen-Image text-to-image LoRA), `diffusion_qwen_edit` (Qwen-Image-Edit image-to-image LoRA), `diffusion_sdxl` (SDXL LoRA) — accepted by the existing `TrainingConfig` and dispatched to a new `src/training_runner_diffusion.py` runner. Same job lifecycle / WebSocket / preflight surface as the text + VLM paths.
+- **`src/training_runner_diffusion.py`**: parallel narrow path mirroring `run_vlm_training_sync`'s contract but the body is Atelier-driven — loads an Atelier `ModelAdapter` (`QwenImageAdapter` / `QwenEditAdapter` / `SDXLAdapter`), runs `cache_embeddings` to pre-compute text + image embeddings (with the staged-load pattern so encoders + transformer don't have to coexist in VRAM during the cache pass), frees encoders, moves the transformer onto the GPU, then drives `AtelierTrainer` with `FlowMatchingLoss` + LoRA. Reuses the existing `WebSocketCallback` unchanged — Atelier's callback fire loop is duck-typed so the same callback object works across both engines.
+- **Generalized dispatch**: the `training_mode.startswith("vlm_")` if-statement in `run_training_sync` is now a `_resolve_sibling_runner(config)` helper that picks a parallel runner by (a) explicit `model_type` (new `'diffusion'` value joins `'vlm'`) or (b) legacy `training_mode` prefix sniffing for backward compatibility. Easy to extend further: add a new `model_type` value and a `training_runner_<x>.py`, register both in the helper.
+- **`TrainingConfig` (Pydantic) gains diffusion fields** — all `Optional` so text-mode / VLM-mode requests are unaffected:
+  - `model_name` (HF repo id of the diffusion model; falls back to `base_model` if unset)
+  - `image_resolution` (square cache + train resolution, default 1024)
+  - `lora_rank` (overrides `lora_r` for diffusion runs)
+  - `lora_target_modules` (DiT/UNet target list, e.g. `["to_k","to_q","to_v","to_out.0"]`)
+  - `dataset_jsonl_path` / `dataset_name` / `dataset_split` (three ways to source the image+caption corpus)
+- **Frontend: diffusion picker + form**: `🧠 Model Type` gains a `Diffusion / Image LoRA` option, the `Training Method` dropdown groups text vs diffusion modes under `<optgroup>`s, and a new `🎨 Diffusion Settings` panel (image resolution, LoRA rank override, target modules, dataset JSONL path, HF dataset name) shows when a `diffusion_*` mode is selected.
+- **`atelier` + `diffusers>=0.34` added to `requirements.txt`** — pulled via git URL the same way `grimoire-rl` is.
+- **`tests/test_diffusion_dispatch.py`** — lightweight unit tests for the `_resolve_sibling_runner` routing, the diffusion mode registry shape, and the new Pydantic field surface. No model weights needed (heavy end-to-end tests live elsewhere and skip under pytest, mirroring `test_artemis_runner.py`).
+
+### Changed
+- **Major version bump (1.8.0 → 2.0.0)**. The job dispatcher now reads `model_type` as a first-class engine selector (was: `training_mode` prefix only). Existing text-mode + VLM jobs (no `model_type` set, or `model_type='auto'`/`'causal_lm'`/`'vlm'`) continue to dispatch to the correct runner unchanged — no breaking change for stored configs or external API consumers using the v1 surface. The prefix-sniff fallback (`vlm_*`, `diffusion_*`) means in-flight VLM configs keep working.
+
+### Notes
+- Diffusion training currently produces a LoRA at `./models/<output_name>/` in diffusers `pytorch_lora_weights.safetensors` format — directly loadable by `pipeline.load_lora_weights(...)` for inference, drag-droppable into ComfyUI / A1111. GGUF export and HF Hub upload for diffusion LoRAs are out-of-scope for 2.0 (the existing post-hoc upload endpoint can ship the saved directory manually).
+- The Atelier QwenImage adapter loads the 38 GiB Qwen-Image transformer to CPU first by default (`defer_transformer=True`) and only moves it to GPU after `free_encoders()` reclaims the ~14 GiB Qwen-VL text encoder. This keeps peak VRAM = max(encoders, transformer) instead of their sum — important on 48 GB cards. Merlina's diffusion runner honors this dance.
+
 ## [1.8.0] - 2026-05-24 "Artemis Extract"
 
 ### Changed

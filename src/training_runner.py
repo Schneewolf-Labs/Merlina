@@ -1060,6 +1060,36 @@ async def run_training_async(
     await loop.run_in_executor(None, run_training_sync, job_id, config, job_manager, uploaded_datasets)
 
 
+def _resolve_sibling_runner(config: Any):
+    """Pick the right model-family runner for this job, or None for the
+    default in-line text path.
+
+    Two dispatch signals (in order of precedence):
+      1. ``config.model_type`` — explicit family selector. Values: 'auto',
+         'causal_lm', 'vlm', 'diffusion'. 'auto' / 'causal_lm' fall
+         through to the text path; 'vlm' / 'diffusion' dispatch to the
+         sibling runner.
+      2. ``config.training_mode`` — legacy prefix sniff for backward
+         compatibility. 'vlm_*' → VLM, 'diffusion_*' → diffusion.
+
+    Imports are lazy so jobs that don't need a heavy backend don't pay
+    the import cost (diffusers + atelier alone is ~1.5s and a fair bit of
+    VRAM-side state).
+    """
+    model_type = (getattr(config, "model_type", None) or "auto").lower()
+    training_mode = (getattr(config, "training_mode", "") or "").lower()
+
+    if model_type == "vlm" or training_mode.startswith("vlm_"):
+        from src.training_runner_vlm import run_vlm_training_sync
+        return run_vlm_training_sync
+
+    if model_type == "diffusion" or training_mode.startswith("diffusion_"):
+        from src.training_runner_diffusion import run_diffusion_training_sync
+        return run_diffusion_training_sync
+
+    return None
+
+
 def run_training_sync(
     job_id: str,
     config: Any,
@@ -1084,13 +1114,12 @@ def run_training_sync(
         This function handles cleanup of GPU resources in all cases (success,
         failure, or interruption) to prevent OOM errors in subsequent jobs.
     """
-    # Delegate Artemis VLM modes (vlm_stage1, vlm_stage2) to the parallel
-    # multimodal runner. The VLM path builds its own model/tokenizer/
-    # dataset/collator and has its own lifecycle (no LoRA, no chat-template
-    # grafting), so dispatch happens before the text-mode setup begins.
-    if getattr(config, "training_mode", "").lower().startswith("vlm_"):
-        from src.training_runner_vlm import run_vlm_training_sync
-        return run_vlm_training_sync(
+    # Dispatch to a parallel runner if this job belongs to a different
+    # model family (VLM / diffusion / future engines). The text-mode
+    # path below is the default if nothing matches.
+    sibling_runner = _resolve_sibling_runner(config)
+    if sibling_runner is not None:
+        return sibling_runner(
             job_id=job_id,
             config=config,
             job_manager=job_manager,
