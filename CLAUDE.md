@@ -499,41 +499,42 @@ When pushing models to HuggingFace Hub (`push_to_hub=True`):
 
 ## Artemis VLM (Project Artemis — multimodal extension)
 
-Schneewolf Labs' multimodal A-series line lives in `src/artemis_vlm.py` — a LLaVA-style graft that adds vision-language capability to any A-series (or any `MistralForCausalLM`-class) decoder.
+The ArtemisVLM model classes live in the **standalone `artemis-vlm` package** ([Schneewolf-Labs/Artemis](https://github.com/Schneewolf-Labs/Artemis)) — a LLaVA-style graft that adds vision-language capability to any A-series (or any `MistralForCausalLM`-class) decoder. The package is `pip install`-ed via `requirements.txt` and imported as `from artemis_vlm import ...`.
+
+Architecture and API documentation is in the Artemis repo's README; this section covers the Merlina-side integration only.
 
 ### Architecture (Path B — vision around the decoder, not surgery on it)
 
 - `Qwen3VLVisionModel` (SigLIP-2-based ViT + its patch merger) → fresh 2-layer MLP projector (`vision out_hidden_size → text hidden_size`) → features spliced at `<|image_pad|>` (id 22 in the A-series tokenizer) → the language decoder **byte-for-byte unchanged** (vanilla 1-D RoPE, no MRoPE/DeepStack).
 - Deliberately *not* Qwen3-VL's decoder mods — this is the LLaVA chassis with Qwen3-VL's vision tower, sized to A-series dims. The whole point is that the text capabilities (reasoning, tool calling, persona) are preserved by construction: the decoder doesn't change.
 
-### Public API (`src/artemis_vlm.py`)
+### Merlina-side integration (`src/training_runner_vlm.py`)
 
-- `ArtemisVLMConfig(vision_config, text_config, image_token_id=22, video_token_id=23, projector_hidden_act="gelu")` — composite config.
-- `ArtemisVLMForConditionalGeneration`
-  - `from_a2_and_vision(a2_path, vision_model=, vision_config=, image_token_id=22, video_token_id=23, torch_dtype=bf16)` — assembly helper that loads the 12B decoder exactly once and lets you inject a pretrained vision module.
-  - `get_image_features(pixel_values, image_grid_thw)` — mirrors `transformers.Qwen3VLModel.get_image_features` but uses only the **merged** `pooler_output` (DeepStack ignored), then projects to text hidden.
-  - `forward(input_ids, attention_mask, pixel_values, image_grid_thw, labels, ...)` — splices projected vision at `input_ids == image_token_id` then calls the language model on `inputs_embeds`. Enforces the splice contract (`#image_pad == #image_features`).
-  - `set_training_stage("stage1" | "stage2", unfreeze_vision_top_n=0)` — toggles `requires_grad` for the two-stage recipe; returns `(trainable, total)`.
-  - `prepare_inputs_for_generation` — injects the image only on step 0 so `generate()` works through standard `GenerationMixin`.
-- `ArtemisVLMProcessor(tokenizer, vision_config, max_pixels=512*512)` — wraps `Qwen2VLImageProcessor` with `patch/temporal/merge` sourced from `vision_config` (prevents Qwen2-VL `patch=14` vs Qwen3-VL `patch=16` per-patch-dim drift). Each `<|image_pad|>` expands to `grid_thw.prod() // merge_size**2` copies — matches the model's merged feature count by construction.
-- `ArtemisDataCollator(processor)` — multimodal batching with prefix-trick label masking (prompt + every `<|image_pad|>` → -100), flat `pixel_values` concat across the batch, per-image `image_grid_thw` stack.
-- `artemis_loss_fn(model, batch, training)` — grimoire-compatible `(loss, metrics)` adapter; the collator's `labels` drive the standard CausalLM loss.
+- `run_vlm_training_sync(job_id, config, ...)` — parallel narrow path to `run_training_sync`. Mirrors the WebSocket / JobManager / GPU-cleanup lifecycle but assembles the VLM from `artemis_vlm.ArtemisVLMForConditionalGeneration.from_a2_and_vision(...)` and uses `artemis_vlm.ArtemisDataCollator` + `artemis_vlm.artemis_loss_fn` with grimoire.
+- Early dispatch in `run_training_sync` (`if config.training_mode.lower().startswith("vlm_"): return run_vlm_training_sync(...)`) routes `vlm_stage1` / `vlm_stage2` modes to the VLM runner. Text-mode branches are untouched.
+- `_ArtemisImageCaptionAdapter` lazy-decodes HF image-caption datasets. Together with the `streaming: true` option on `TrainingConfig`, it materializes only `dataset.max_samples` rows from the source — essential for huge sharded webdataset corpora like `BLIP3o-Pretrain-Long-Caption` (2891 shards).
+
+### API surface (`merlina.py` Pydantic `TrainingConfig`)
+
+The following fields are accepted when `training_mode` starts with `vlm_`:
+
+- `vision_model_id` (HF id of the source VLM, default `Qwen/Qwen3-VL-2B-Instruct`)
+- `stage` (`stage1` | `stage2`)
+- `unfreeze_vision_top_n` (default 0)
+- `image_token_id` (default 22, matching the A-series repurposed-reserved-token layout)
+- `min_pixels` / `max_pixels` (dynamic-resolution caps)
+- `image_column` / `caption_column` (override dataset columns)
+- `instruction` (user-side prompt paired with each image)
+- `streaming` (essential for sharded webdataset corpora — see above)
 
 ### Two-stage training recipe
 
-- **Stage-1 — projector alignment**: `set_training_stage("stage1")` → ViT + decoder frozen, only the ~37M projector trains. LLaVA-style hyperparams: `lr ~1e-3`, plain AdamW, cosine, no weight decay, `gradient_checkpointing=True` (essential — backprop through the frozen decoder otherwise blows activation memory).
-- **Stage-2 — multimodal instruction FFT**: `set_training_stage("stage2")` → projector + decoder trainable, ViT frozen. `paged_adamw_8bit`, `lr ~5e-6` (lower than text-only FFT — protects more capability axes), single epoch, **with heavy text rehearsal** mixed in via `additional_sources` to keep reasoning / tools / identity alive (same durability recipe that protected A2's identity through tool training).
+- **Stage-1 — projector alignment**: `set_training_stage("stage1")` → ViT + decoder frozen, only the ~45M projector trains. LLaVA-style hyperparams: `lr ~1e-3`, plain AdamW, cosine, no weight decay, `gradient_checkpointing=False` (Stage-1 doesn't need it — the decoder is frozen so activations are cheaper than you'd think).
+- **Stage-2 — multimodal instruction FFT**: `set_training_stage("stage2")` → projector + decoder trainable, ViT frozen. `paged_adamw_8bit`, `gradient_checkpointing=True`, `lr ~5e-6` (lower than text-only FFT — protects more capability axes), single epoch, **with heavy text rehearsal** mixed in via `additional_sources` to keep reasoning / tools / identity alive (same durability recipe that protected A2's identity through tool training).
 
-### Tests (`tests/test_artemis_*.py`, standalone-runnable)
+### Smoke test (`tests/test_artemis_runner.py`)
 
-- `test_artemis_vlm.py` — assemble + merged-vision-path shape + forward + splice-contract guard
-- `test_artemis_processor.py` — chat-template ↔ `<|image_pad|>` expansion round-trip on a real image
-- `test_artemis_collator.py` — batched multimodal training step with finite loss
-- `test_artemis_stage_gen.py` — staged-freeze param counts + multimodal `generate()` + loss adapter
-
-### Not yet in this module (intentionally)
-
-- `training_runner` multimodal switch (selecting `ArtemisVLM` + `ArtemisDataCollator` + `artemis_loss_fn` + `set_training_stage` when a multimodal config is set) and image loading in `dataset_handlers`. These are data-coupled — they ship alongside the first real Stage-1/Stage-2 runs.
+End-to-end smoke for the Merlina runner glue (synthetic 16-row image+caption set, drives `run_vlm_training_sync`, asserts finite loss + saved checkpoint + terminal `status=completed`). The model-class smoke tests (model assembly, processor, collator, staged-freeze + generate) live in the Artemis repo (`tests/test_artemis_*.py` there) and are run from there. Same `pytest`-collection-skip pattern is used in both.
 
 ## Testing Strategy
 

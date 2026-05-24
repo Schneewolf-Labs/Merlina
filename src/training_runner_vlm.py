@@ -2,7 +2,8 @@
 
 Parallel narrow path to `run_training_sync` for Artemis VLM training:
 the Qwen3-VL ViT + learned projector + A-series text decoder graft built
-in `src.artemis_vlm`. Two modes:
+in the standalone `artemis_vlm` package
+(https://github.com/Schneewolf-Labs/Artemis). Two modes:
 
   - **vlm_stage1** — projector-only alignment on image-caption corpora
     (vision tower + decoder frozen). The big upstream win is that
@@ -33,7 +34,7 @@ from transformers import AutoTokenizer
 
 from grimoire import GrimoireTrainer
 
-from src.artemis_vlm import (
+from artemis_vlm import (
     ArtemisVLMForConditionalGeneration,
     ArtemisVLMProcessor,
     ArtemisDataCollator,
