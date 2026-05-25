@@ -158,9 +158,21 @@ def _materialize_image_dataset(config: Any, uploaded_datasets: dict, job_id: str
 
     if getattr(config, "dataset_jsonl_path", None):
         rows = []
-        with open(os.path.expanduser(config.dataset_jsonl_path)) as f:
+        jsonl_path = Path(os.path.expanduser(config.dataset_jsonl_path)).resolve()
+        # Resolve relative `image` / `chosen` / `rejected` paths against the
+        # JSONL's parent directory, not Merlina's cwd. Lets the training
+        # manifest stay portable (drop the whole dataset dir + JSONL
+        # anywhere, training reads it from there).
+        jsonl_dir = jsonl_path.parent
+        with open(jsonl_path) as f:
             for line in f:
-                rows.append(json.loads(line))
+                row = json.loads(line)
+                for key in ("image", "chosen", "rejected"):
+                    if key in row and isinstance(row[key], str):
+                        p = Path(row[key])
+                        if not p.is_absolute():
+                            row[key] = str((jsonl_dir / p).resolve())
+                rows.append(row)
     elif uploaded_datasets:
         # Materialize whichever upload is the dataset (mirrors text path).
         first_id = next(iter(uploaded_datasets))
@@ -442,9 +454,11 @@ def run_diffusion_training_sync(
     except Exception as e:
         logger.exception(f"Diffusion training failed: {e}")
         job_manager.update_job(job_id, status="failed", error=str(e))
+        # progress is a required positional on send_status_update; without
+        # it the failure-path itself raises and masks the original error.
         send_websocket_update(
             websocket_manager.send_status_update(
-                job_id=job_id, status="failed", message=str(e),
+                job_id=job_id, status="failed", progress=0.0, message=str(e),
             ),
             event_loop,
         )

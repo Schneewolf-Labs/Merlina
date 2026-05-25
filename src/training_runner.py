@@ -656,7 +656,13 @@ class WebSocketCallback(TrainerCallback):
             update_data["progress"] = min(progress, 0.9)
 
         if update_data:
-            self.job_manager.update_job(self.job_id, **update_data)
+            # Mirror status into the JobManager DB so HTTP /jobs reads it.
+            # The websocket already announces status="training" below, but
+            # the polled GET endpoint reads from the DB which never gets
+            # the status update otherwise — leaves jobs stuck at whatever
+            # the previous status was (e.g. "caching_embeddings" for the
+            # diffusion path) for the entire training run.
+            self.job_manager.update_job(self.job_id, status="training", **update_data)
 
             if trainer.global_step and "loss" in update_data:
                 self.job_manager.add_metric(
