@@ -170,6 +170,12 @@ class JobManager {
         // Load historical metrics for the chart
         this.loadJobMetrics(jobId);
 
+        // Render diffusion sample gallery (no-op for text/VLM runs and
+        // for diffusion runs that haven't finished training yet).
+        if (window.merlinaRenderJobSamples) {
+            window.merlinaRenderJobSamples(jobId).catch(() => {});
+        }
+
         // Try WebSocket first
         if (this.useWebSocket) {
             this.startWebSocketMonitoring(jobId);
@@ -352,6 +358,13 @@ class JobManager {
             if (status.status === 'completed') {
                 stopButton.disabled = true;
                 this.toast.success('Training completed successfully!');
+                // Re-fetch the diffusion sample gallery — samples are
+                // emitted after training finishes, so the initial render
+                // on modal open may have missed them.
+                if (window.merlinaRenderJobSamples) {
+                    window.merlinaRenderJobSamples(status.job_id || this.currentJobId)
+                        .catch(() => {});
+                }
             } else if (status.status === 'failed') {
                 stopButton.disabled = true;
                 this.toast.error(`Training failed: ${status.error || 'Unknown error'}`);

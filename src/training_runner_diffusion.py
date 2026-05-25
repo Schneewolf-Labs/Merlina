@@ -69,6 +69,79 @@ def _resolve_adapter_and_loss(training_mode: str):
     return adapter_cls, loss_cls, spec[2]
 
 
+def _adapter_family_short_name(adapter_class_name: str) -> str:
+    """QwenImageAdapter → qwen_image, QwenEditAdapter → qwen_edit, etc."""
+    if adapter_class_name == "QwenImageAdapter":
+        return "qwen_image"
+    if adapter_class_name == "QwenEditAdapter":
+        return "qwen_edit"
+    if adapter_class_name == "SDXLAdapter":
+        return "sdxl"
+    return "qwen_image"  # safe fallback
+
+
+def _generate_post_training_samples(
+    *,
+    job_id: str,
+    config: Any,
+    lora_dir: str,
+    base_model: str,
+    adapter_family: str,
+    job_manager: JobManager,
+    event_loop: Optional[Any] = None,
+) -> None:
+    """Run scripts/generate_diffusion_samples.py as a subprocess.
+
+    Loads a fresh diffusers pipeline (the training process having released
+    its 38 GiB transformer means there's room for sampling now), generates
+    a small batch of preview images against a default prompt set, writes
+    them to ``<lora_dir>/samples/`` with a manifest. UI fetches them via
+    ``/jobs/{job_id}/samples``.
+    """
+    import subprocess
+    import sys
+
+    samples_dir = Path(lora_dir) / "samples"
+    samples_dir.mkdir(parents=True, exist_ok=True)
+
+    job_manager.update_job(job_id, status="generating_samples", progress=0.97)
+    send_websocket_update(
+        websocket_manager.send_status_update(
+            job_id=job_id, status="generating_samples", progress=0.97,
+            message="Rendering sample images from the freshly-trained LoRA",
+        ),
+        event_loop,
+    )
+
+    script_path = Path(__file__).resolve().parent.parent / "scripts" / "generate_diffusion_samples.py"
+    if not script_path.exists():
+        logger.warning(f"sample generator script not found at {script_path}; skipping")
+        return
+
+    cmd = [
+        sys.executable, str(script_path),
+        "--base-model", base_model,
+        "--lora-dir", str(lora_dir),
+        "--out-dir", str(samples_dir),
+        "--adapter", _adapter_family_short_name(adapter_family),
+        "--num-steps", str(int(getattr(config, "sample_num_steps", None) or 25)),
+        "--width", str(int(getattr(config, "image_resolution", None) or 1024)),
+        "--height", str(int(getattr(config, "image_resolution", None) or 1024)),
+    ]
+    # Optional prompt override (Pydantic field added in 2.0 for power users)
+    sample_prompts = getattr(config, "sample_prompts", None)
+    if sample_prompts:
+        cmd += ["--prompts", json.dumps(sample_prompts)]
+
+    logger.info(f"[samples] launching subprocess: {' '.join(cmd)}")
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=30 * 60)
+    if res.returncode != 0:
+        logger.warning(f"[samples] subprocess exit {res.returncode}\n"
+                       f"stdout: {res.stdout[-500:]}\nstderr: {res.stderr[-500:]}")
+        return
+    logger.info(f"[samples] generated {samples_dir}: {res.stdout.strip().splitlines()[-1] if res.stdout else 'ok'}")
+
+
 def _materialize_image_dataset(config: Any, uploaded_datasets: dict, job_id: str):
     """Build an HF Dataset of (prompt, image) rows.
 
@@ -331,6 +404,22 @@ def run_diffusion_training_sync(
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         logger.info("✅ VRAM freed")
+
+        # Post-training sample generation — fresh process, fresh pipeline.
+        # Non-fatal: the LoRA itself is the deliverable, samples are sugar.
+        if not was_stopped:
+            try:
+                _generate_post_training_samples(
+                    job_id=job_id,
+                    config=config,
+                    lora_dir=final_output_dir,
+                    base_model=model_path,
+                    adapter_family=adapter_cls.__name__,
+                    job_manager=job_manager,
+                    event_loop=event_loop,
+                )
+            except Exception as e:
+                logger.warning(f"Sample generation failed (non-fatal): {e}")
 
         job_manager.update_job(
             job_id,

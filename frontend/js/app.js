@@ -11,6 +11,7 @@ import { ThemeManager } from './theme.js';
 import { InferenceManager } from './inference.js';
 import { ExportManager } from './export.js';
 import { buildTrainingConfig } from './form_config.js';
+import { initDiffusionDropzone, initDiffusionPlayground } from './diffusion.js';
 
 /**
  * Toggle visibility of optimizer-specific settings based on selected optimizer.
@@ -120,6 +121,12 @@ class MerlinaApp {
 
         // Initialize the Export section (GGUF / HF / Artifacts tabs)
         this.exportManager.init();
+
+        // Initialize the diffusion image-dataset drag-drop UI.
+        // Safe no-op when the diffusion fields aren't on this page.
+        initDiffusionDropzone();
+        // Diffusion playground (Playground section in the nav).
+        initDiffusionPlayground();
 
         console.log('✨ Merlina initialized successfully!');
     }
