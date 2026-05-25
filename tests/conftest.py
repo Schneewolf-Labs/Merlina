@@ -49,8 +49,30 @@ if 'transformers' not in sys.modules:
     mock_transformers.PreTrainedTokenizerBase = FakeTokenizerBase
     sys.modules['transformers'] = mock_transformers
 
-# Mock other ML libraries and system dependencies if not already imported
-for module in ['trl', 'trl.experimental', 'trl.experimental.orpo', 'peft', 'accelerate', 'bitsandbytes', 'wandb', 'psutil', 'pynvml', 'grimoire']:
+# Mock other ML libraries and system dependencies if not already imported.
+# Submodules need their own entries — Python's import machinery treats
+# `from x.y import z` as a real submodule lookup, which a MagicMock at the
+# parent level alone doesn't satisfy ("'x' is not a package").
+for module in [
+    'trl', 'trl.experimental', 'trl.experimental.orpo',
+    'peft',
+    'accelerate',
+    'bitsandbytes',
+    'wandb',
+    'psutil',
+    'pynvml',
+    # Grimoire (LLM training engine) + its submodules used by training_runner
+    'grimoire', 'grimoire.losses', 'grimoire.data',
+    # Artemis VLM (external package as of v1.8.0; used by
+    # training_runner_vlm). Mocking is enough for dispatch + import tests.
+    'artemis_vlm',
+    # Atelier (diffusion training engine) + submodules used by
+    # training_runner_diffusion. All atelier imports are lazy inside the
+    # runner functions, so a flat MagicMock per submodule name is enough
+    # for the dispatch + module-load tests to run unit-test-side.
+    'atelier', 'atelier.adapters', 'atelier.losses', 'atelier.data',
+    'diffusers',
+]:
     if module not in sys.modules:
         sys.modules[module] = MagicMock()
 
