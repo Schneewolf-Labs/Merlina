@@ -90,7 +90,17 @@ def main():
     print(f"[samples] loading base pipeline: {args.base_model} ({args.adapter})")
     pipe = _pipeline_for(args.base_model, args.adapter)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    pipe.to(device)
+    # Qwen-Image's full pipeline is ~54 GB (38 GB transformer + 14 GB text
+    # encoder + 2 GB VAE). Doesn't fit on a 48 GB card with pipe.to("cuda"),
+    # and even when it does fit there's no headroom for activations.
+    # enable_model_cpu_offload parks each component on CPU and migrates the
+    # active one to GPU per pipeline stage — adds a few seconds of transfer
+    # per generation but is stable. Use this for Qwen-* pipelines; SDXL
+    # fits eagerly and can use .to(device) directly.
+    if args.adapter.startswith("qwen") and torch.cuda.is_available():
+        pipe.enable_model_cpu_offload()
+    else:
+        pipe.to(device)
 
     lora_weights = Path(args.lora_dir) / "pytorch_lora_weights.safetensors"
     if not lora_weights.exists():

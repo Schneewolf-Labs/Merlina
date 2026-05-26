@@ -53,12 +53,8 @@
                 <span class="nav-step">5</span>
                 <span class="nav-label">Inference</span>
             </button>
-            <button class="section-nav-btn" data-section="diffusion-playground-section">
-                <span class="nav-step">6</span>
-                <span class="nav-label">🎨 Playground</span>
-            </button>
             <button class="section-nav-btn" data-section="export-section">
-                <span class="nav-step">7</span>
+                <span class="nav-step">6</span>
                 <span class="nav-label">Export</span>
             </button>
         </nav>
@@ -1089,9 +1085,27 @@
                 <div id="jobs-container"></div>
             </section>
 
-            <!-- Inference (STEP 5) -->
+            <!-- Inference (STEP 5) — unified for text LLM + diffusion -->
             <section id="inference-section" class="card nav-section" style="display: none;">
                 <h2>🔮 Step 5: Test Your Model</h2>
+
+                <!-- Mode selector — toggles between the chat UI (LLM) and the
+                     conjure UI (diffusion). Both use the same nav entry; they're
+                     the same intent ("test what you trained") for different
+                     model families. -->
+                <div class="spell-section" style="background: linear-gradient(135deg, #f3e8ff 0%, #fce4f0 100%);">
+                    <div class="form-group" style="margin: 0;">
+                        <label>🎭 Model kind</label>
+                        <select id="inference-mode" class="magic-select">
+                            <option value="text" selected>Text LLM (chat)</option>
+                            <option value="diffusion">Diffusion / Image LoRA</option>
+                        </select>
+                        <small style="color: #888; font-size: 0.85em;">Pick chat for any text model, or diffusion to render images from a trained image LoRA.</small>
+                    </div>
+                </div>
+
+                <!-- ═══ Text LLM mode (existing chat path) ═══ -->
+                <div id="inference-llm-mode">
 
                 <!-- Model Loading -->
                 <div class="spell-section">
@@ -1205,85 +1219,84 @@
                         <label for="inference-stream" style="margin: 0; cursor: pointer; font-size: 0.9em; color: #888;">Stream tokens (real-time output)</label>
                     </div>
                 </div>
-            </section>
 
-            <!-- ═══════════════════════════════════════════════════════════ -->
-            <!-- Diffusion Playground — test trained image LoRAs              -->
-            <!-- ═══════════════════════════════════════════════════════════ -->
-            <section id="diffusion-playground-section" class="card nav-section" style="display: none;">
-                <h2>🎨 Diffusion Playground</h2>
-                <p style="color: #888; margin-top: -10px;">
-                    Pick a base diffusion model + one of your trained LoRAs, type a prompt, hit conjure. Runs in a fresh subprocess so it won't fight your live training jobs for VRAM.
-                </p>
+                </div><!-- /#inference-llm-mode -->
 
-                <div class="spell-section">
-                    <h3>🪄 Conjure</h3>
+                <!-- ═══ Diffusion mode (moved from old standalone Playground section) ═══ -->
+                <div id="inference-diffusion-mode" style="display: none;">
+                    <p style="color: #888; margin-top: 0;">
+                        Pick a base diffusion model + one of your trained LoRAs, type a prompt, hit conjure. Runs in a fresh subprocess so it won't fight live training jobs for VRAM.
+                    </p>
 
-                    <div class="form-group">
-                        <label>🖼️ Base Diffusion Model</label>
-                        <input type="text" id="dplay-base-model" value="Qwen/Qwen-Image" class="magic-input">
-                        <small style="color: #888; font-size: 0.85em;">HF repo id or local path. Defaults to Qwen-Image.</small>
-                    </div>
+                    <div class="spell-section">
+                        <h3>🪄 Conjure</h3>
 
-                    <div class="form-group">
-                        <label>🎨 Adapter Family</label>
-                        <select id="dplay-adapter" class="magic-select">
-                            <option value="qwen_image" selected>Qwen-Image (text-to-image)</option>
-                            <option value="qwen_edit">Qwen-Image-Edit</option>
-                            <option value="sdxl">SDXL</option>
-                        </select>
-                        <small style="color: #888; font-size: 0.85em;">Match the family the LoRA was trained against.</small>
-                    </div>
-
-                    <div class="form-group">
-                        <label>📁 Trained LoRA</label>
-                        <select id="dplay-lora" class="magic-select">
-                            <option value="">Loading…</option>
-                        </select>
-                        <small style="color: #888; font-size: 0.85em;">Picked from <code>./models/</code>. Refresh after training new ones.</small>
-                        <button type="button" id="dplay-refresh-loras" style="margin-top: 6px; background: transparent; color: var(--primary-purple); border: 1px solid var(--primary-purple); border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: 0.85em;">
-                            🔄 Refresh list
-                        </button>
-                    </div>
-
-                    <div class="form-group">
-                        <label>💬 Prompt</label>
-                        <textarea id="dplay-prompt" rows="3" class="magic-input" placeholder="a portrait of a young person with auburn hair, soft lighting"></textarea>
-                    </div>
-
-                    <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px;">
                         <div class="form-group">
-                            <label>Width</label>
-                            <input type="number" id="dplay-width" value="1024" min="256" max="2048" step="64" class="magic-input">
+                            <label>🖼️ Base Diffusion Model</label>
+                            <input type="text" id="dplay-base-model" value="Qwen/Qwen-Image" class="magic-input">
+                            <small style="color: #888; font-size: 0.85em;">HF repo id or local path. Defaults to Qwen-Image.</small>
                         </div>
+
                         <div class="form-group">
-                            <label>Height</label>
-                            <input type="number" id="dplay-height" value="1024" min="256" max="2048" step="64" class="magic-input">
+                            <label>🎨 Adapter Family</label>
+                            <select id="dplay-adapter" class="magic-select">
+                                <option value="qwen_image" selected>Qwen-Image (text-to-image)</option>
+                                <option value="qwen_edit">Qwen-Image-Edit</option>
+                                <option value="sdxl">SDXL</option>
+                            </select>
+                            <small style="color: #888; font-size: 0.85em;">Match the family the LoRA was trained against.</small>
                         </div>
+
                         <div class="form-group">
-                            <label>Steps</label>
-                            <input type="number" id="dplay-steps" value="25" min="4" max="100" class="magic-input">
+                            <label>📁 Trained LoRA</label>
+                            <select id="dplay-lora" class="magic-select">
+                                <option value="">Loading…</option>
+                            </select>
+                            <small style="color: #888; font-size: 0.85em;">Picked from <code>./models/</code>. Refresh after training new ones.</small>
+                            <button type="button" id="dplay-refresh-loras" style="margin-top: 6px; background: transparent; color: var(--primary-purple); border: 1px solid var(--primary-purple); border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: 0.85em;">
+                                🔄 Refresh list
+                            </button>
                         </div>
-                    </div>
 
-                    <button type="button" id="dplay-conjure" class="action-button" style="
-                        width: 100%; background: linear-gradient(135deg, #7c4dff 0%, #ff4dc4 100%);
-                        color: white; font-weight: bold; padding: 14px; margin-top: 8px;
-                    ">
-                        ✨ Conjure Image
-                    </button>
+                        <div class="form-group">
+                            <label>💬 Prompt</label>
+                            <textarea id="dplay-prompt" rows="3" class="magic-input" placeholder="a portrait of a young person with auburn hair, soft lighting"></textarea>
+                        </div>
 
-                    <div id="dplay-status" style="margin-top: 12px; font-size: 0.9em;"></div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px;">
+                            <div class="form-group">
+                                <label>Width</label>
+                                <input type="number" id="dplay-width" value="1024" min="256" max="2048" step="64" class="magic-input">
+                            </div>
+                            <div class="form-group">
+                                <label>Height</label>
+                                <input type="number" id="dplay-height" value="1024" min="256" max="2048" step="64" class="magic-input">
+                            </div>
+                            <div class="form-group">
+                                <label>Steps</label>
+                                <input type="number" id="dplay-steps" value="25" min="4" max="100" class="magic-input">
+                            </div>
+                        </div>
 
-                    <div id="dplay-result" style="margin-top: 16px; display: none;">
-                        <h4 style="color: var(--primary-purple);">Result</h4>
-                        <img id="dplay-result-image" alt="generated" style="
-                            width: 100%; max-width: 768px; border-radius: 12px;
-                            box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+                        <button type="button" id="dplay-conjure" class="action-button" style="
+                            width: 100%; background: linear-gradient(135deg, #7c4dff 0%, #ff4dc4 100%);
+                            color: white; font-weight: bold; padding: 14px; margin-top: 8px;
                         ">
-                        <div id="dplay-result-prompt" style="margin-top: 8px; color: #666; font-size: 0.9em;"></div>
+                            ✨ Conjure Image
+                        </button>
+
+                        <div id="dplay-status" style="margin-top: 12px; font-size: 0.9em;"></div>
+
+                        <div id="dplay-result" style="margin-top: 16px; display: none;">
+                            <h4 style="color: var(--primary-purple);">Result</h4>
+                            <img id="dplay-result-image" alt="generated" style="
+                                width: 100%; max-width: 768px; border-radius: 12px;
+                                box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+                            ">
+                            <div id="dplay-result-prompt" style="margin-top: 8px; color: #666; font-size: 0.9em;"></div>
+                        </div>
                     </div>
-                </div>
+                </div><!-- /#inference-diffusion-mode -->
             </section>
 
             <!-- ═══════════════════════════════════════════════════════════ -->

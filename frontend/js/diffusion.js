@@ -351,6 +351,23 @@ export function initDiffusionPlayground() {
     conjure.addEventListener('click', conjureImage);
     if (refresh) refresh.addEventListener('click', refreshPlaygroundLoraList);
     refreshPlaygroundLoraList();  // populate initial list
+
+    // Inference mode toggle — text-chat vs diffusion-image. Both live
+    // under #inference-section in 2.0+ (was a separate Playground nav
+    // entry pre-merge). The mode select swaps which sub-pane is shown.
+    const modeSelect = document.getElementById('inference-mode');
+    const llmPane = document.getElementById('inference-llm-mode');
+    const diffPane = document.getElementById('inference-diffusion-mode');
+    if (modeSelect && llmPane && diffPane) {
+        const apply = (mode) => {
+            const isDiff = mode === 'diffusion';
+            llmPane.style.display  = isDiff ? 'none' : '';
+            diffPane.style.display = isDiff ? '' : 'none';
+            if (isDiff) refreshPlaygroundLoraList();  // re-pull on each visit
+        };
+        modeSelect.addEventListener('change', e => apply(e.target.value));
+        apply(modeSelect.value);
+    }
 }
 
 
