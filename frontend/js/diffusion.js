@@ -189,6 +189,10 @@ let _jsonlState = {
     rows: [],                 // last fetched page, with caption-edit overlays
     deletes: new Set(),       // row_indices marked for deletion (global)
     pendingEdits: new Map(),  // row_index -> new prompt (global)
+    // Caption column the dataset actually uses ('prompt' for diffusion,
+    // 'caption' for VLM-shape data). Captured from the preview response
+    // so save_jsonl_edits writes to the right field.
+    captionColumn: null,
 };
 
 
@@ -291,8 +295,12 @@ async function loadJsonlPage() {
         const data = await r.json();
         s.rows = data.rows;
         s.total = data.total;
+        // Capture the inferred caption field (prompt / caption / etc.) so
+        // save_jsonl_edits writes back to whichever column the dataset
+        // actually uses. First row wins; mixed-column datasets are rare.
+        s.captionColumn = (data.rows[0] && data.rows[0].caption_field) || 'prompt';
         renderJsonlPreview();
-        status.textContent = `loaded ${data.returned} rows`;
+        status.textContent = `loaded ${data.returned} rows · captions in '${s.captionColumn}' column`;
     } catch (e) {
         console.error('JSONL preview failed:', e);
         status.innerHTML = `<span style="color: #d32f2f;">load failed: ${e.message}</span>`;
@@ -312,6 +320,7 @@ async function saveJsonlEdits() {
         jsonl_path: s.path,
         edits: Array.from(s.pendingEdits.entries()).map(([idx, p]) => ({ row_index: idx, prompt: p })),
         deletes: Array.from(s.deletes),
+        caption_column: s.captionColumn,  // 'prompt' for diffusion, 'caption' for VLM
     };
     try {
         const r = await fetch('/dataset/save-jsonl', {
@@ -355,7 +364,11 @@ function initJsonlPreview() {
             toast.error('Paste a JSONL path first.');
             return;
         }
-        _jsonlState = { path: p, offset: 0, total: 0, rows: [], deletes: new Set(), pendingEdits: new Map() };
+        _jsonlState = {
+            path: p, offset: 0, total: 0, rows: [],
+            deletes: new Set(), pendingEdits: new Map(),
+            captionColumn: 'prompt',  // overwritten by loadJsonlPage from server response
+        };
         loadJsonlPage();
     });
 

@@ -632,14 +632,27 @@ class MerlinaApp {
         const updateFields = (mode) => {
             const isPreference = PREFERENCE_MODES.includes(mode);
             const isDiffusion = (mode || '').startsWith('diffusion_');
+            const isVlm       = (mode || '').startsWith('vlm_');
             // Beta: shown for all preference methods
             if (betaField) betaField.style.display = isPreference ? 'block' : 'none';
             // Gamma: SimPO only
             if (gammaField) gammaField.style.display = mode === 'simpo' ? 'block' : 'none';
             // Label smoothing: DPO and CPO
             if (labelSmoothingField) labelSmoothingField.style.display = (mode === 'dpo' || mode === 'cpo') ? 'block' : 'none';
-            // Diffusion-only fields: image resolution, lora rank override, dataset paths
-            if (diffusionFieldsSection) diffusionFieldsSection.style.display = isDiffusion ? 'block' : 'none';
+            // Image-dataset section: shown for diffusion AND VLM (both train
+            // on image + caption data; the same JSONL preview / drag-drop UI
+            // serves both). VLM-shape datasets use the `caption` column by
+            // convention so the preview endpoint falls back to it.
+            if (diffusionFieldsSection) diffusionFieldsSection.style.display = (isDiffusion || isVlm) ? 'block' : 'none';
+            // Diffusion-only sub-fields (LoRA rank/targets/resolution) only
+            // make sense in diffusion mode — hide them for VLM which uses
+            // its own Pydantic fields (vision_model_id, stage, etc).
+            const diffOnlyIds = ['diffusion-image-resolution', 'diffusion-lora-rank',
+                                  'diffusion-lora-target-modules'];
+            diffOnlyIds.forEach(id => {
+                const group = document.getElementById(id)?.closest('.form-group');
+                if (group) group.style.display = isDiffusion ? '' : 'none';
+            });
             // Description
             if (descriptionEl) descriptionEl.innerHTML = MODE_DESCRIPTIONS[mode] || '';
         };

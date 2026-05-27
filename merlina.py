@@ -2108,7 +2108,13 @@ async def diffusion_generate(req: DiffusionGenerateRequest):
 
 
 @app.get("/dataset/preview-images")
-async def preview_image_dataset(jsonl_path: str, limit: int = 24, offset: int = 0):
+async def preview_image_dataset(
+    jsonl_path: str,
+    limit: int = 24,
+    offset: int = 0,
+    image_column: Optional[str] = None,
+    caption_column: Optional[str] = None,
+):
     """Read N rows from an image-dataset JSONL and return thumbnails + captions.
 
     Image paths in the JSONL can be absolute or relative; relative paths
@@ -2117,16 +2123,25 @@ async def preview_image_dataset(jsonl_path: str, limit: int = 24, offset: int = 
     ``/dataset/image-content`` so the same path-safety rules apply.
 
     Args:
-        jsonl_path: absolute path to a {prompt, image} JSONL (or
-                    {prompt, chosen, rejected} — both shapes accepted).
-        limit:      how many rows to return (default 24, max 200).
-        offset:     skip the first N rows for pagination.
+        jsonl_path:     absolute path to the JSONL.
+        limit:          how many rows to return (default 24, max 200).
+        offset:         skip the first N rows for pagination.
+        image_column:   override the image-bearing key. Default tries
+                        'image' → 'chosen' → 'rejected' in order.
+        caption_column: override the text-bearing key. Default tries
+                        'prompt' then 'caption' (the VLM convention).
     """
     jsonl = Path(os.path.expanduser(jsonl_path)).resolve()
     if not jsonl.exists() or not jsonl.is_file():
         raise HTTPException(status_code=404, detail=f"JSONL not found: {jsonl}")
     limit = max(1, min(int(limit), 200))
     offset = max(0, int(offset))
+
+    # Probe order: caller-specified column wins, otherwise fall back to
+    # the conventional names (diffusion uses image/prompt, Artemis VLM
+    # uses image/caption, DPO-shaped uses chosen/rejected).
+    img_keys = [image_column] if image_column else ["image", "chosen", "rejected"]
+    cap_keys = [caption_column] if caption_column else ["prompt", "caption"]
 
     rows_out = []
     total = 0
@@ -2145,14 +2160,13 @@ async def preview_image_dataset(jsonl_path: str, limit: int = 24, offset: int = 
                     row = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                # Normalize image-bearing key — accept image / chosen / rejected.
-                img_field = None
-                for k in ("image", "chosen", "rejected"):
-                    if k in row and isinstance(row[k], str):
-                        img_field = k
-                        break
+                img_field = next(
+                    (k for k in img_keys if k in row and isinstance(row[k], str)),
+                    None,
+                )
                 if img_field is None:
                     continue
+                caption_field = next((k for k in cap_keys if k in row), None)
                 raw_path = row[img_field]
                 # Resolve relative paths against the JSONL's dir.
                 p = Path(os.path.expanduser(raw_path))
@@ -2162,23 +2176,26 @@ async def preview_image_dataset(jsonl_path: str, limit: int = 24, offset: int = 
                     p = p.resolve()
                 rows_out.append({
                     "row_index":      i,
-                    "prompt":         row.get("prompt") or row.get("caption") or "",
+                    "prompt":         (row.get(caption_field) or "") if caption_field else "",
                     "image_path":     str(p),
                     "image_url":      (
                         f"/dataset/image-content?path={p}&jsonl_path={jsonl}"
                     ),
                     "image_field":    img_field,
+                    "caption_field":  caption_field,
                 })
     except OSError as e:
         raise HTTPException(status_code=400, detail=f"could not read JSONL: {e}")
 
     return {
-        "jsonl_path": str(jsonl),
-        "total":      total,
-        "offset":     offset,
-        "limit":      limit,
-        "returned":   len(rows_out),
-        "rows":       rows_out,
+        "jsonl_path":     str(jsonl),
+        "image_column":   image_column,
+        "caption_column": caption_column,
+        "total":          total,
+        "offset":         offset,
+        "limit":          limit,
+        "returned":       len(rows_out),
+        "rows":           rows_out,
     }
 
 
@@ -2231,11 +2248,12 @@ class SaveJsonlRow(BaseModel):
 
 
 class SaveJsonlRequest(BaseModel):
-    jsonl_path:  str           = Field(..., description="Path to the JSONL file being edited")
-    edits:       list[SaveJsonlRow] = Field(default_factory=list,
-                                            description="Caption edits (overwrites the prompt field at each row_index)")
-    deletes:     list[int]     = Field(default_factory=list,
-                                       description="Row indices to drop from the JSONL")
+    jsonl_path:    str               = Field(..., description="Path to the JSONL file being edited")
+    edits:         list[SaveJsonlRow] = Field(default_factory=list,
+                                              description="Caption edits (overwrites the caption_column field at each row_index)")
+    deletes:       list[int]         = Field(default_factory=list,
+                                             description="Row indices to drop from the JSONL")
+    caption_column: Optional[str]    = Field(None, description="Column to write captions to (default 'prompt'; pass 'caption' for VLM-style datasets)")
 
 
 @app.post("/dataset/save-jsonl")
@@ -2259,6 +2277,10 @@ async def save_jsonl_edits(req: SaveJsonlRequest):
 
     edits_by_idx = {e.row_index: e.prompt for e in req.edits}
     deletes = set(req.deletes)
+    # Caption column override — defaults to 'prompt' (diffusion convention);
+    # pass 'caption' for VLM-style datasets so the edit writes to the column
+    # the VLM runner actually reads.
+    caption_field = req.caption_column or "prompt"
 
     new_rows: list[dict] = []
     total_in = 0
@@ -2280,7 +2302,7 @@ async def save_jsonl_edits(req: SaveJsonlRequest):
                 kept += 1
                 continue
             if i in edits_by_idx:
-                row["prompt"] = edits_by_idx[i]
+                row[caption_field] = edits_by_idx[i]
                 edited += 1
             new_rows.append(row)
             kept += 1

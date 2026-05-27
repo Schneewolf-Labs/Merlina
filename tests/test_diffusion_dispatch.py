@@ -367,3 +367,89 @@ class TestJsonlPreviewEndpoints:
             "edits": [], "deletes": [],
         })
         assert r.status_code == 404
+
+    def _make_vlm_dataset(self, tmp, n=3):
+        """VLM-shape JSONL — {image, caption} instead of {image, prompt}."""
+        import json
+        from pathlib import Path
+        png_1x1 = bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+            "0000000d49444154789c63000100000005000167a4d0a30000000049454e44ae426082"
+        )
+        images_dir = Path(tmp) / "images"
+        images_dir.mkdir()
+        for i in range(n):
+            (images_dir / f"img{i}.png").write_bytes(png_1x1)
+        jsonl = Path(tmp) / "train.jsonl"
+        with open(jsonl, "w") as f:
+            for i in range(n):
+                f.write(json.dumps({"caption": f"vlm caption {i}", "image": f"images/img{i}.png"}) + "\n")
+        return jsonl
+
+    def test_preview_vlm_shape_falls_back_to_caption_column(self):
+        """A {image, caption} JSONL (Artemis Stage 1 shape) should
+        preview correctly without needing the caller to pass
+        caption_column — the endpoint falls back to 'caption' when
+        'prompt' is absent."""
+        import tempfile
+        from fastapi.testclient import TestClient
+        from merlina import app
+        with tempfile.TemporaryDirectory() as tmp:
+            jsonl = self._make_vlm_dataset(tmp, n=3)
+            client = TestClient(app)
+            r = client.get(f"/dataset/preview-images?jsonl_path={jsonl}")
+            assert r.status_code == 200
+            data = r.json()
+            assert data["returned"] == 3
+            assert data["rows"][0]["prompt"] == "vlm caption 0"
+            assert data["rows"][0]["caption_field"] == "caption"
+
+    def test_preview_explicit_column_overrides(self):
+        """Caller can override which keys are inspected — useful for
+        datasets with non-standard column names (image_url, label, etc.)."""
+        import json, tempfile
+        from pathlib import Path
+        from fastapi.testclient import TestClient
+        from merlina import app
+        png_1x1 = bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+            "0000000d49444154789c63000100000005000167a4d0a30000000049454e44ae426082"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "images").mkdir()
+            (Path(tmp) / "images" / "x.png").write_bytes(png_1x1)
+            jsonl = Path(tmp) / "train.jsonl"
+            with open(jsonl, "w") as f:
+                f.write(json.dumps({"label": "weird label", "image_url": "images/x.png"}) + "\n")
+            client = TestClient(app)
+            r = client.get(
+                f"/dataset/preview-images?jsonl_path={jsonl}"
+                "&image_column=image_url&caption_column=label"
+            )
+            assert r.status_code == 200, r.text
+            data = r.json()
+            assert data["rows"][0]["prompt"] == "weird label"
+            assert data["rows"][0]["caption_field"] == "label"
+            assert data["rows"][0]["image_field"] == "image_url"
+
+    def test_save_jsonl_writes_to_specified_caption_column(self):
+        """When caption_column='caption' is passed (VLM dataset), the
+        edit should write to the caption field, not prompt."""
+        import json, tempfile
+        from fastapi.testclient import TestClient
+        from merlina import app
+        with tempfile.TemporaryDirectory() as tmp:
+            jsonl = self._make_vlm_dataset(tmp, n=2)
+            client = TestClient(app)
+            r = client.post("/dataset/save-jsonl", json={
+                "jsonl_path":     str(jsonl),
+                "edits":          [{"row_index": 0, "prompt": "rewritten"}],
+                "deletes":        [],
+                "caption_column": "caption",
+            })
+            assert r.status_code == 200, r.text
+            # Re-read and assert the 'caption' key was updated, not 'prompt'
+            with open(jsonl) as f:
+                rows = [json.loads(line) for line in f if line.strip()]
+            assert rows[0].get("caption") == "rewritten"
+            assert "prompt" not in rows[0]
