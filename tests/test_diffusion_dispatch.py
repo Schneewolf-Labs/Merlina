@@ -234,3 +234,136 @@ class TestPreflightDiffusionGating:
         )
         v._check_diffusion_config(cfg)
         assert any("very high" in w for w in v.warnings)
+
+
+class TestJsonlPreviewEndpoints:
+    """The /dataset/preview-images + /dataset/save-jsonl + /dataset/image-content
+    endpoints enable in-Merlina inspection + editing of any local image
+    dataset. The tests use a synthetic JSONL + on-disk PNGs in a tempdir
+    so no model/GPU is involved."""
+
+    def _make_dataset(self, tmp, n=3):
+        """Create n tiny PNGs + a JSONL referencing them via relative paths."""
+        import json
+        from pathlib import Path
+        # Minimal valid 1x1 PNG bytes (raw — Pillow not required for the test)
+        png_1x1 = bytes.fromhex(
+            "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+            "0000000d49444154789c63000100000005000167a4d0a30000000049454e44ae426082"
+        )
+        images_dir = Path(tmp) / "images"
+        images_dir.mkdir()
+        for i in range(n):
+            (images_dir / f"img{i}.png").write_bytes(png_1x1)
+        jsonl = Path(tmp) / "train.jsonl"
+        with open(jsonl, "w") as f:
+            for i in range(n):
+                f.write(json.dumps({"prompt": f"caption {i}", "image": f"images/img{i}.png"}) + "\n")
+        return jsonl
+
+    def test_preview_returns_rows_with_resolved_urls(self):
+        import tempfile
+        from fastapi.testclient import TestClient
+        from merlina import app
+        with tempfile.TemporaryDirectory() as tmp:
+            jsonl = self._make_dataset(tmp, n=5)
+            client = TestClient(app)
+            r = client.get(f"/dataset/preview-images?jsonl_path={jsonl}&limit=3")
+            assert r.status_code == 200, r.text
+            data = r.json()
+            assert data["total"] == 5
+            assert data["returned"] == 3
+            assert data["offset"] == 0
+            assert len(data["rows"]) == 3
+            for i, row in enumerate(data["rows"]):
+                assert row["prompt"] == f"caption {i}"
+                assert row["image_path"].endswith(f"img{i}.png")
+                assert "image_url" in row
+                assert row["row_index"] == i
+
+    def test_preview_missing_jsonl_404(self):
+        from fastapi.testclient import TestClient
+        from merlina import app
+        client = TestClient(app)
+        r = client.get("/dataset/preview-images?jsonl_path=/tmp/does-not-exist.jsonl")
+        assert r.status_code == 404
+
+    def test_preview_pagination_offset(self):
+        import tempfile
+        from fastapi.testclient import TestClient
+        from merlina import app
+        with tempfile.TemporaryDirectory() as tmp:
+            jsonl = self._make_dataset(tmp, n=10)
+            client = TestClient(app)
+            r = client.get(f"/dataset/preview-images?jsonl_path={jsonl}&limit=3&offset=5")
+            assert r.status_code == 200
+            data = r.json()
+            assert data["total"] == 10
+            assert data["returned"] == 3
+            assert data["offset"] == 5
+            assert data["rows"][0]["row_index"] == 5
+            assert data["rows"][0]["prompt"] == "caption 5"
+
+    def test_image_content_serves_file_under_jsonl_dir(self):
+        import tempfile
+        from fastapi.testclient import TestClient
+        from merlina import app
+        with tempfile.TemporaryDirectory() as tmp:
+            jsonl = self._make_dataset(tmp, n=1)
+            client = TestClient(app)
+            img_path = jsonl.parent / "images" / "img0.png"
+            r = client.get(f"/dataset/image-content?path={img_path}&jsonl_path={jsonl}")
+            assert r.status_code == 200
+            assert r.headers["content-type"] == "image/png"
+            assert len(r.content) > 0
+
+    def test_image_content_blocks_path_outside_jsonl_dir(self):
+        """Path-safety: requesting /etc/passwd or anything outside the
+        JSONL's parent must 403 — the endpoint must not become an
+        arbitrary file reader."""
+        import tempfile
+        from fastapi.testclient import TestClient
+        from merlina import app
+        with tempfile.TemporaryDirectory() as tmp:
+            jsonl = self._make_dataset(tmp, n=1)
+            client = TestClient(app)
+            r = client.get(f"/dataset/image-content?path=/etc/hostname&jsonl_path={jsonl}")
+            assert r.status_code == 403
+
+    def test_save_jsonl_edits_captions_and_keeps_backup(self):
+        import json, tempfile
+        from pathlib import Path
+        from fastapi.testclient import TestClient
+        from merlina import app
+        with tempfile.TemporaryDirectory() as tmp:
+            jsonl = self._make_dataset(tmp, n=4)
+            client = TestClient(app)
+            r = client.post("/dataset/save-jsonl", json={
+                "jsonl_path": str(jsonl),
+                "edits":   [{"row_index": 1, "prompt": "EDITED caption"}],
+                "deletes": [3],
+            })
+            assert r.status_code == 200, r.text
+            data = r.json()
+            assert data["edited"] == 1
+            assert data["deleted"] == 1
+            assert data["total_after"] == 3
+            # Backup file should exist
+            assert Path(data["backup"]).exists()
+            # Re-read the JSONL and assert edits + deletion stuck
+            with open(jsonl) as f:
+                rows = [json.loads(line) for line in f if line.strip()]
+            assert len(rows) == 3
+            prompts = [r["prompt"] for r in rows]
+            assert "EDITED caption" in prompts
+            assert "caption 3" not in prompts  # the deleted row's caption
+
+    def test_save_jsonl_missing_file_404(self):
+        from fastapi.testclient import TestClient
+        from merlina import app
+        client = TestClient(app)
+        r = client.post("/dataset/save-jsonl", json={
+            "jsonl_path": "/tmp/does-not-exist.jsonl",
+            "edits": [], "deletes": [],
+        })
+        assert r.status_code == 404

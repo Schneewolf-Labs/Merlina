@@ -172,6 +172,210 @@ async function uploadStagedDataset() {
 
 
 // ---------------------------------------------------------------------
+// JSONL image-dataset preview + inline editor
+// ---------------------------------------------------------------------
+//
+// Pulls rows from an existing image-dataset JSONL (server reads it +
+// returns thumbnails + captions), renders an editable grid, lets the
+// user fix captions / drop bad rows, and POSTs the diff back to
+// /dataset/save-jsonl. First save creates a .bak next to the file so
+// misclicks are recoverable.
+
+const JSONL_PAGE_SIZE = 24;
+let _jsonlState = {
+    path: null,
+    offset: 0,
+    total: 0,
+    rows: [],                 // last fetched page, with caption-edit overlays
+    deletes: new Set(),       // row_indices marked for deletion (global)
+    pendingEdits: new Map(),  // row_index -> new prompt (global)
+};
+
+
+function jsonlPreviewEl(id) { return document.getElementById(`diffusion-jsonl-${id}`); }
+
+
+function renderJsonlPreview() {
+    const grid    = jsonlPreviewEl('thumbnails');
+    const summary = jsonlPreviewEl('preview-summary');
+    if (!grid || !summary) return;
+    const s = _jsonlState;
+    const pageEnd = Math.min(s.offset + JSONL_PAGE_SIZE, s.total);
+    const dirty = s.pendingEdits.size + s.deletes.size;
+    summary.innerHTML = `
+        <code style="font-size: 0.85em; color: #444;">${s.path || ''}</code><br>
+        <span style="color: #666; font-size: 0.9em;">
+            showing ${s.offset + 1}–${pageEnd} of ${s.total}
+            ${dirty ? `· <span style="color: var(--primary-purple);">${dirty} unsaved change${dirty === 1 ? '' : 's'}</span>` : ''}
+        </span>
+    `;
+
+    grid.innerHTML = s.rows.map(row => {
+        const isDeleted = s.deletes.has(row.row_index);
+        const overlay = s.pendingEdits.get(row.row_index);
+        const caption = overlay !== undefined ? overlay : row.prompt;
+        return `
+            <div style="
+                background: ${isDeleted ? '#fde4e4' : 'white'};
+                border-radius: 8px; padding: 6px;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+                opacity: ${isDeleted ? 0.5 : 1};
+                display: flex; flex-direction: column; gap: 4px;
+            ">
+                <div style="position: relative; aspect-ratio: 1; overflow: hidden; border-radius: 6px; background: #f5edff;">
+                    <img src="${row.image_url}" alt="row ${row.row_index}" loading="lazy"
+                         style="width: 100%; height: 100%; object-fit: cover;">
+                    <button type="button" data-jdrop="${row.row_index}" title="${isDeleted ? 'Restore' : 'Mark for deletion'}" style="
+                        position: absolute; top: 4px; right: 4px;
+                        background: ${isDeleted ? '#4caf50' : 'rgba(0,0,0,0.6)'}; color: white;
+                        border: none; border-radius: 50%; width: 24px; height: 24px;
+                        cursor: pointer; font-size: 0.8em; line-height: 24px;
+                    ">${isDeleted ? '↺' : '✕'}</button>
+                </div>
+                <div style="font-size: 0.7em; color: #888;">row ${row.row_index}</div>
+                <textarea data-jedit="${row.row_index}" rows="3" ${isDeleted ? 'disabled' : ''} style="
+                    width: 100%; border: 1px solid ${overlay !== undefined ? 'var(--primary-purple)' : '#e0d0f0'};
+                    border-radius: 4px; padding: 4px 6px; font-size: 0.75em;
+                    resize: vertical; font-family: inherit; min-height: 50px;
+                    ${isDeleted ? 'background: #fafafa;' : ''}
+                ">${caption || ''}</textarea>
+            </div>
+        `;
+    }).join('');
+
+    grid.querySelectorAll('[data-jdrop]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const idx = parseInt(btn.dataset.jdrop, 10);
+            if (s.deletes.has(idx)) s.deletes.delete(idx);
+            else                    s.deletes.add(idx);
+            renderJsonlPreview();
+        });
+    });
+    grid.querySelectorAll('[data-jedit]').forEach(ta => {
+        ta.addEventListener('input', () => {
+            const idx = parseInt(ta.dataset.jedit, 10);
+            const original = s.rows.find(r => r.row_index === idx)?.prompt || '';
+            if (ta.value === original) s.pendingEdits.delete(idx);
+            else                        s.pendingEdits.set(idx, ta.value);
+            // Don't re-render — just update the summary dirty count
+            const summary = jsonlPreviewEl('preview-summary');
+            const dirty = s.pendingEdits.size + s.deletes.size;
+            const counter = summary.querySelector('span span');
+            // Cheap: just trigger a header re-render
+            const pageEnd = Math.min(s.offset + JSONL_PAGE_SIZE, s.total);
+            summary.innerHTML = `
+                <code style="font-size: 0.85em; color: #444;">${s.path || ''}</code><br>
+                <span style="color: #666; font-size: 0.9em;">
+                    showing ${s.offset + 1}–${pageEnd} of ${s.total}
+                    ${dirty ? `· <span style="color: var(--primary-purple);">${dirty} unsaved change${dirty === 1 ? '' : 's'}</span>` : ''}
+                </span>
+            `;
+        });
+    });
+}
+
+
+async function loadJsonlPage() {
+    const section = jsonlPreviewEl('preview-section');
+    const status  = jsonlPreviewEl('status');
+    section.style.display = 'block';
+    status.textContent = 'loading…';
+    const s = _jsonlState;
+    try {
+        const url = `/dataset/preview-images?jsonl_path=${encodeURIComponent(s.path)}&limit=${JSONL_PAGE_SIZE}&offset=${s.offset}`;
+        const r = await fetch(url);
+        if (!r.ok) {
+            const err = await r.text();
+            throw new Error(`HTTP ${r.status}: ${err.slice(0, 200)}`);
+        }
+        const data = await r.json();
+        s.rows = data.rows;
+        s.total = data.total;
+        renderJsonlPreview();
+        status.textContent = `loaded ${data.returned} rows`;
+    } catch (e) {
+        console.error('JSONL preview failed:', e);
+        status.innerHTML = `<span style="color: #d32f2f;">load failed: ${e.message}</span>`;
+    }
+}
+
+
+async function saveJsonlEdits() {
+    const s = _jsonlState;
+    const status = jsonlPreviewEl('status');
+    if (s.pendingEdits.size === 0 && s.deletes.size === 0) {
+        status.textContent = 'nothing to save';
+        return;
+    }
+    status.textContent = 'saving…';
+    const body = {
+        jsonl_path: s.path,
+        edits: Array.from(s.pendingEdits.entries()).map(([idx, p]) => ({ row_index: idx, prompt: p })),
+        deletes: Array.from(s.deletes),
+    };
+    try {
+        const r = await fetch('/dataset/save-jsonl', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+        });
+        if (!r.ok) {
+            const err = await r.text();
+            throw new Error(`HTTP ${r.status}: ${err.slice(0, 200)}`);
+        }
+        const data = await r.json();
+        status.innerHTML = `
+            <span style="color: #2e7d32;">
+                ✨ saved — edited ${data.edited}, deleted ${data.deleted},
+                ${data.total_after} rows remain.
+                backup at <code>${data.backup}</code>.
+            </span>
+        `;
+        toast.success(`Dataset updated: ${data.edited} captions + ${data.deleted} removals`);
+        // Clear staged edits + reload current page (indices may have shifted only if deletes;
+        // we keep the offset for predictability, the user can navigate).
+        s.pendingEdits.clear();
+        s.deletes.clear();
+        await loadJsonlPage();
+    } catch (e) {
+        status.innerHTML = `<span style="color: #d32f2f;">save failed: ${e.message}</span>`;
+        toast.error(`Save failed: ${e.message}`);
+    }
+}
+
+
+function initJsonlPreview() {
+    const btn = document.getElementById('diffusion-jsonl-preview');
+    const input = document.getElementById('diffusion-dataset-jsonl');
+    if (!btn || !input) return;
+
+    btn.addEventListener('click', () => {
+        const p = input.value.trim();
+        if (!p) {
+            toast.error('Paste a JSONL path first.');
+            return;
+        }
+        _jsonlState = { path: p, offset: 0, total: 0, rows: [], deletes: new Set(), pendingEdits: new Map() };
+        loadJsonlPage();
+    });
+
+    jsonlPreviewEl('next-page')?.addEventListener('click', () => {
+        const s = _jsonlState;
+        if (s.offset + JSONL_PAGE_SIZE >= s.total) return;
+        s.offset += JSONL_PAGE_SIZE;
+        loadJsonlPage();
+    });
+    jsonlPreviewEl('prev-page')?.addEventListener('click', () => {
+        const s = _jsonlState;
+        if (s.offset === 0) return;
+        s.offset = Math.max(0, s.offset - JSONL_PAGE_SIZE);
+        loadJsonlPage();
+    });
+    jsonlPreviewEl('save-edits')?.addEventListener('click', saveJsonlEdits);
+}
+
+
+// ---------------------------------------------------------------------
 // Sample-image gallery (post-training previews)
 // ---------------------------------------------------------------------
 
@@ -421,4 +625,7 @@ export function initDiffusionDropzone() {
     if (saveBtn) {
         saveBtn.addEventListener('click', uploadStagedDataset);
     }
+
+    // Wire the JSONL preview + inline editor (separate from drag-drop).
+    initJsonlPreview();
 }

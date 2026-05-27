@@ -518,8 +518,34 @@
                             <summary style="cursor: pointer; color: #666; font-size: 0.9em;">⚙️ Advanced: paste a JSONL path or HF dataset name instead</summary>
                             <div class="form-group" style="margin-top: 12px;">
                                 <label>📂 Dataset JSONL Path</label>
-                                <input type="text" id="diffusion-dataset-jsonl" placeholder="/path/to/train.jsonl" class="magic-input">
-                                <small style="color: #888; font-size: 0.85em;">Local JSONL with {prompt, image} (or {prompt, chosen, rejected}) rows. Auto-set when you save a drag-drop dataset above.</small>
+                                <div style="display: flex; gap: 6px;">
+                                    <input type="text" id="diffusion-dataset-jsonl" placeholder="/path/to/train.jsonl" class="magic-input" style="flex: 1;">
+                                    <button type="button" id="diffusion-jsonl-preview" class="action-button" style="
+                                        background: var(--primary-purple); color: white;
+                                        padding: 8px 14px; font-size: 0.9em; white-space: nowrap;
+                                    ">👁 Preview &amp; Edit</button>
+                                </div>
+                                <small style="color: #888; font-size: 0.85em;">Local JSONL with {prompt, image} (or {prompt, chosen, rejected}) rows. Auto-set when you save a drag-drop dataset above. Click Preview to inspect + inline-edit captions before training.</small>
+                            </div>
+
+                            <!-- JSONL preview + inline editor (populated by Preview button) -->
+                            <div id="diffusion-jsonl-preview-section" style="display: none; margin: 12px 0; padding: 12px; background: rgba(255,255,255,0.55); border-radius: 8px;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                                    <strong id="diffusion-jsonl-preview-summary">Loading…</strong>
+                                    <div>
+                                        <button type="button" id="diffusion-jsonl-prev-page" class="action-button" style="background: transparent; color: var(--primary-purple); border: 1px solid var(--primary-purple); padding: 4px 10px; font-size: 0.8em;">← prev</button>
+                                        <button type="button" id="diffusion-jsonl-next-page" class="action-button" style="background: transparent; color: var(--primary-purple); border: 1px solid var(--primary-purple); padding: 4px 10px; font-size: 0.8em;">next →</button>
+                                        <button type="button" id="diffusion-jsonl-save-edits" class="action-button" style="background: var(--primary-purple); color: white; padding: 4px 12px; font-size: 0.85em; margin-left: 8px;">💾 Save Edits</button>
+                                    </div>
+                                </div>
+                                <div id="diffusion-jsonl-thumbnails" style="
+                                    display: grid;
+                                    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+                                    gap: 12px;
+                                    max-height: 520px; overflow-y: auto;
+                                    padding: 8px;
+                                "></div>
+                                <div id="diffusion-jsonl-status" style="margin-top: 8px; font-size: 0.85em; color: #555;"></div>
                             </div>
                             <div class="form-group">
                                 <label>🤗 HF Dataset Name</label>

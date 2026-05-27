@@ -2107,6 +2107,206 @@ async def diffusion_generate(req: DiffusionGenerateRequest):
     }
 
 
+@app.get("/dataset/preview-images")
+async def preview_image_dataset(jsonl_path: str, limit: int = 24, offset: int = 0):
+    """Read N rows from an image-dataset JSONL and return thumbnails + captions.
+
+    Image paths in the JSONL can be absolute or relative; relative paths
+    are resolved against the JSONL's parent dir (same convention the
+    diffusion runner uses). The returned ``image_url`` routes through
+    ``/dataset/image-content`` so the same path-safety rules apply.
+
+    Args:
+        jsonl_path: absolute path to a {prompt, image} JSONL (or
+                    {prompt, chosen, rejected} — both shapes accepted).
+        limit:      how many rows to return (default 24, max 200).
+        offset:     skip the first N rows for pagination.
+    """
+    jsonl = Path(os.path.expanduser(jsonl_path)).resolve()
+    if not jsonl.exists() or not jsonl.is_file():
+        raise HTTPException(status_code=404, detail=f"JSONL not found: {jsonl}")
+    limit = max(1, min(int(limit), 200))
+    offset = max(0, int(offset))
+
+    rows_out = []
+    total = 0
+    try:
+        with open(jsonl) as f:
+            for i, line in enumerate(f):
+                line = line.strip()
+                if not line:
+                    continue
+                total += 1
+                if i < offset:
+                    continue
+                if len(rows_out) >= limit:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                # Normalize image-bearing key — accept image / chosen / rejected.
+                img_field = None
+                for k in ("image", "chosen", "rejected"):
+                    if k in row and isinstance(row[k], str):
+                        img_field = k
+                        break
+                if img_field is None:
+                    continue
+                raw_path = row[img_field]
+                # Resolve relative paths against the JSONL's dir.
+                p = Path(os.path.expanduser(raw_path))
+                if not p.is_absolute():
+                    p = (jsonl.parent / p).resolve()
+                else:
+                    p = p.resolve()
+                rows_out.append({
+                    "row_index":      i,
+                    "prompt":         row.get("prompt") or row.get("caption") or "",
+                    "image_path":     str(p),
+                    "image_url":      (
+                        f"/dataset/image-content?path={p}&jsonl_path={jsonl}"
+                    ),
+                    "image_field":    img_field,
+                })
+    except OSError as e:
+        raise HTTPException(status_code=400, detail=f"could not read JSONL: {e}")
+
+    return {
+        "jsonl_path": str(jsonl),
+        "total":      total,
+        "offset":     offset,
+        "limit":      limit,
+        "returned":   len(rows_out),
+        "rows":       rows_out,
+    }
+
+
+@app.get("/dataset/image-content")
+async def dataset_image_content(path: str, jsonl_path: str):
+    """Serve a single image file from an image dataset.
+
+    Path-safety: the requested ``path`` must resolve under the
+    ``jsonl_path``'s parent directory. Stops the endpoint from being
+    used as an arbitrary local-file reader.
+    """
+    requested = Path(os.path.expanduser(path)).resolve()
+    jsonl = Path(os.path.expanduser(jsonl_path)).resolve()
+    if not jsonl.exists():
+        raise HTTPException(status_code=404, detail="jsonl_path does not exist")
+    # Allow files under the JSONL's parent OR under ./uploads (uploaded datasets).
+    allowed_roots = [jsonl.parent, Path("./uploads").resolve()]
+    if not any(
+        str(requested).startswith(str(root) + os.sep) or requested == root
+        for root in allowed_roots
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"path is outside the allowed roots ({[str(r) for r in allowed_roots]}); "
+                "the dataset preview endpoint only serves images under the JSONL's "
+                "directory or ./uploads/ to prevent arbitrary file access."
+            ),
+        )
+    if not requested.exists() or not requested.is_file():
+        raise HTTPException(status_code=404, detail=f"image not found: {requested}")
+
+    # Heuristic content type — Image() in the manifest is open enough that we
+    # don't need to be picky; rely on the extension for the MIME hint.
+    ext = requested.suffix.lower().lstrip(".")
+    media_type = {
+        "png":  "image/png",
+        "jpg":  "image/jpeg",
+        "jpeg": "image/jpeg",
+        "webp": "image/webp",
+        "gif":  "image/gif",
+        "bmp":  "image/bmp",
+    }.get(ext, "application/octet-stream")
+    return FileResponse(str(requested), media_type=media_type)
+
+
+class SaveJsonlRow(BaseModel):
+    row_index: int = Field(..., description="Original row index in the source JSONL")
+    prompt:    str = Field(..., description="New caption / prompt text")
+
+
+class SaveJsonlRequest(BaseModel):
+    jsonl_path:  str           = Field(..., description="Path to the JSONL file being edited")
+    edits:       list[SaveJsonlRow] = Field(default_factory=list,
+                                            description="Caption edits (overwrites the prompt field at each row_index)")
+    deletes:     list[int]     = Field(default_factory=list,
+                                       description="Row indices to drop from the JSONL")
+
+
+@app.post("/dataset/save-jsonl")
+async def save_jsonl_edits(req: SaveJsonlRequest):
+    """Apply caption edits + row deletions to an image-dataset JSONL.
+
+    Rewrites the JSONL in place; preserves all non-edited fields per row.
+    A `.bak` copy is written next to the file the first time it's edited
+    so a misclick is recoverable.
+    """
+    import shutil
+    jsonl = Path(os.path.expanduser(req.jsonl_path)).resolve()
+    if not jsonl.exists() or not jsonl.is_file():
+        raise HTTPException(status_code=404, detail=f"JSONL not found: {jsonl}")
+
+    # First-edit backup
+    backup = jsonl.with_suffix(jsonl.suffix + ".bak")
+    if not backup.exists():
+        shutil.copy2(jsonl, backup)
+        logger.info(f"backup created: {backup}")
+
+    edits_by_idx = {e.row_index: e.prompt for e in req.edits}
+    deletes = set(req.deletes)
+
+    new_rows: list[dict] = []
+    total_in = 0
+    kept = 0
+    edited = 0
+    with open(jsonl) as f:
+        for i, line in enumerate(f):
+            line = line.strip()
+            if not line:
+                continue
+            total_in += 1
+            if i in deletes:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                # Keep malformed rows unchanged rather than silently dropping
+                new_rows.append({"_raw": line})
+                kept += 1
+                continue
+            if i in edits_by_idx:
+                row["prompt"] = edits_by_idx[i]
+                edited += 1
+            new_rows.append(row)
+            kept += 1
+
+    # Atomic rewrite via .tmp then rename
+    tmp = jsonl.with_suffix(jsonl.suffix + ".tmp")
+    with open(tmp, "w") as f:
+        for r in new_rows:
+            if "_raw" in r and len(r) == 1:
+                f.write(r["_raw"] + "\n")
+            else:
+                f.write(json.dumps(r) + "\n")
+    tmp.replace(jsonl)
+
+    logger.info(f"saved JSONL edits: {jsonl} (edited={edited} deleted={len(deletes)} kept={kept})")
+    return {
+        "status":  "success",
+        "jsonl_path": str(jsonl),
+        "backup":     str(backup),
+        "total_before": total_in,
+        "total_after":  kept,
+        "edited":   edited,
+        "deleted":  len(deletes),
+    }
+
+
 @app.get("/jobs/{job_id}/samples")
 async def get_job_samples(job_id: str):
     """Return generated sample images for a completed diffusion training job.
