@@ -135,3 +135,102 @@ class TestTrainingConfigDiffusionFields:
         from merlina import TrainingConfig
         with pytest.raises(Exception):
             TrainingConfig(output_name="x", lora_rank=2)  # below min 4
+
+    def test_diffusion_mode_forces_use_4bit_off(self):
+        """When model_type='diffusion' the Pydantic validator should
+        suppress use_4bit so the LLM-only quantization flag doesn't
+        leak into the runner / produce misleading preflight warnings."""
+        from merlina import TrainingConfig
+        cfg = TrainingConfig(
+            output_name="diffusion-run",
+            model_type="diffusion",
+            training_mode="diffusion_qwen_image",
+            use_4bit=True,           # user sent it; should get forced off
+            export_gguf=True,        # ditto — no GGUF path for diffusion LoRAs
+            gguf_quant_types=["Q4_K_M"],
+        )
+        assert cfg.use_4bit is False
+        assert cfg.export_gguf is False
+
+    def test_text_mode_preserves_use_4bit(self):
+        """Text-mode jobs must NOT have their use_4bit flag mutated."""
+        from merlina import TrainingConfig
+        cfg = TrainingConfig(
+            output_name="text-run",
+            training_mode="orpo",
+            use_4bit=True,
+        )
+        assert cfg.use_4bit is True
+
+    def test_diffusion_via_prefix_also_suppressed(self):
+        """The fallback (training_mode prefix sniffing) should also
+        trigger the suppression — backward-compat with stored configs."""
+        from merlina import TrainingConfig
+        cfg = TrainingConfig(
+            output_name="x",
+            model_type="auto",
+            training_mode="diffusion_sdxl",
+            use_4bit=True,
+        )
+        assert cfg.use_4bit is False
+
+
+class TestPreflightDiffusionGating:
+    """The LLM-centric preflight checks (VRAM math, model access,
+    dataset columns, training config nags) should be skipped when the
+    job is a diffusion run; a small diffusion-specific check runs instead."""
+
+    def test_is_diffusion_detection(self):
+        from types import SimpleNamespace
+        from src.preflight_checks import PreflightValidator
+        v = PreflightValidator()
+        assert v._is_diffusion(SimpleNamespace(model_type="diffusion", training_mode="diffusion_qwen_image"))
+        assert v._is_diffusion(SimpleNamespace(model_type="auto", training_mode="diffusion_sdxl"))
+        assert not v._is_diffusion(SimpleNamespace(model_type="auto", training_mode="orpo"))
+        assert not v._is_diffusion(SimpleNamespace(model_type="causal_lm", training_mode="sft"))
+        assert not v._is_diffusion(SimpleNamespace())  # missing both attrs
+
+    def test_check_diffusion_config_missing_dataset_warns(self):
+        from types import SimpleNamespace
+        from src.preflight_checks import PreflightValidator
+        v = PreflightValidator()
+        cfg = SimpleNamespace(
+            model_type="diffusion",
+            training_mode="diffusion_qwen_image",
+            dataset_jsonl_path=None,
+            dataset_name=None,
+            lora_rank=64,
+            lora_r=None,
+        )
+        v._check_diffusion_config(cfg)
+        assert any("without dataset_jsonl_path or dataset_name" in w for w in v.warnings)
+
+    def test_check_diffusion_config_nonexistent_jsonl_errors(self):
+        from types import SimpleNamespace
+        from src.preflight_checks import PreflightValidator
+        v = PreflightValidator()
+        cfg = SimpleNamespace(
+            model_type="diffusion",
+            training_mode="diffusion_qwen_image",
+            dataset_jsonl_path="/tmp/does-not-exist-xyz.jsonl",
+            dataset_name=None,
+            lora_rank=64,
+            lora_r=None,
+        )
+        v._check_diffusion_config(cfg)
+        assert any("does not exist" in e for e in v.errors)
+
+    def test_check_diffusion_config_high_rank_warns(self):
+        from types import SimpleNamespace
+        from src.preflight_checks import PreflightValidator
+        v = PreflightValidator()
+        cfg = SimpleNamespace(
+            model_type="diffusion",
+            training_mode="diffusion_qwen_image",
+            dataset_jsonl_path=None,
+            dataset_name="user/x",
+            lora_rank=1024,
+            lora_r=None,
+        )
+        v._check_diffusion_config(cfg)
+        assert any("very high" in w for w in v.warnings)

@@ -543,6 +543,26 @@ class TrainingConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _normalize_diffusion_mode(self):
+        """Suppress LLM-only knobs that don't apply to the diffusion path.
+
+        - ``use_4bit`` (bitsandbytes 4-bit quantization) is an LLM-trainer
+          setting; the diffusion path uses bf16 / cpu-offload entirely
+          differently. Forcing it off here both keeps the runner honest
+          and stops the LLM preflight validator from warning "training
+          without 4-bit" on every diffusion submit.
+        - ``export_gguf`` similarly doesn't apply — diffusion LoRAs ship
+          as safetensors and there's no GGUF path in 2.0.
+        """
+        mode = (self.model_type or "auto").lower()
+        train_mode = (self.training_mode or "").lower()
+        is_diffusion = mode == "diffusion" or train_mode.startswith("diffusion_")
+        if is_diffusion:
+            self.use_4bit = False
+            self.export_gguf = False
+        return self
+
 class JobResponse(BaseModel):
     job_id: str
     status: str
