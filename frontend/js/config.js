@@ -216,6 +216,10 @@ class ConfigManager {
             delete config[field];
         }
 
+        // Diffusion fields are collected by buildTrainingConfig() itself
+        // (in form_config.js) so saved presets capture them automatically —
+        // no per-field plumbing needed here.
+
         return config;
     }
 

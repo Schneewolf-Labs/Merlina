@@ -692,7 +692,9 @@ merlina/
 │   ├── job_manager.py           # Job persistence
 │   ├── websocket_manager.py     # WebSocket manager
 │   ├── preflight_checks.py      # Validation
-│   └── training_runner.py       # Training logic
+│   ├── training_runner.py       # Text-LLM training (Grimoire) + sibling dispatcher
+│   ├── training_runner_vlm.py   # Artemis VLM training (Grimoire-driven)
+│   └── training_runner_diffusion.py  # Diffusion image-LoRA training (Atelier-driven)
 ├── dataset_handlers/             # Dataset pipeline
 │   ├── base.py
 │   ├── loaders.py

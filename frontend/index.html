@@ -78,8 +78,9 @@
                             <option value="auto" selected>Auto-detect</option>
                             <option value="causal_lm">Text LLM (CausalLM)</option>
                             <option value="vlm">Vision-Language Model (VLM)</option>
+                            <option value="diffusion">Diffusion / Image LoRA ✨ new</option>
                         </select>
-                        <small style="color: #888; font-size: 0.85em;">Auto-detect works for most models. Select VLM for vision models like Qwen-VL to preserve vision capabilities.</small>
+                        <small style="color: #888; font-size: 0.85em;">Auto-detect works for most models. Pick VLM for vision-language models (Qwen-VL etc.) or Diffusion to train an image LoRA on Qwen-Image / SDXL.</small>
                     </div>
                 </div>
 
@@ -154,13 +155,20 @@
                     <div class="form-group">
                         <label>Training Method</label>
                         <select id="training-mode" class="magic-select">
-                            <option value="sft">SFT - Supervised Fine-Tuning</option>
-                            <option value="orpo" selected>ORPO - Odds Ratio Preference Optimization</option>
-                            <option value="dpo">DPO - Direct Preference Optimization</option>
-                            <option value="simpo">SimPO - Simple Preference Optimization</option>
-                            <option value="kto">KTO - Kahneman-Tversky Optimization</option>
-                            <option value="cpo">CPO - Contrastive Preference Optimization</option>
-                            <option value="ipo">IPO - Identity Preference Optimization</option>
+                            <optgroup label="Text LLM">
+                                <option value="sft">SFT - Supervised Fine-Tuning</option>
+                                <option value="orpo" selected>ORPO - Odds Ratio Preference Optimization</option>
+                                <option value="dpo">DPO - Direct Preference Optimization</option>
+                                <option value="simpo">SimPO - Simple Preference Optimization</option>
+                                <option value="kto">KTO - Kahneman-Tversky Optimization</option>
+                                <option value="cpo">CPO - Contrastive Preference Optimization</option>
+                                <option value="ipo">IPO - Identity Preference Optimization</option>
+                            </optgroup>
+                            <optgroup label="Diffusion / Image LoRA">
+                                <option value="diffusion_qwen_image">Qwen-Image LoRA (text-to-image)</option>
+                                <option value="diffusion_qwen_edit">Qwen-Image-Edit LoRA (image-to-image)</option>
+                                <option value="diffusion_sdxl">SDXL LoRA</option>
+                            </optgroup>
                         </select>
                         <small id="training-mode-description" style="color: #888; font-size: 0.85em; display: block; margin-top: 8px;"></small>
                     </div>
@@ -428,15 +436,139 @@
                     <div class="form-group">
                         <label>🎯 Training Method</label>
                         <select id="training-mode-config" class="magic-select">
-                            <option value="sft">SFT - Supervised Fine-Tuning</option>
-                            <option value="orpo" selected>ORPO - Odds Ratio Preference Optimization</option>
-                            <option value="dpo">DPO - Direct Preference Optimization</option>
-                            <option value="simpo">SimPO - Simple Preference Optimization</option>
-                            <option value="kto">KTO - Kahneman-Tversky Optimization</option>
-                            <option value="cpo">CPO - Contrastive Preference Optimization</option>
-                            <option value="ipo">IPO - Identity Preference Optimization</option>
+                            <optgroup label="Text LLM">
+                                <option value="sft">SFT - Supervised Fine-Tuning</option>
+                                <option value="orpo" selected>ORPO - Odds Ratio Preference Optimization</option>
+                                <option value="dpo">DPO - Direct Preference Optimization</option>
+                                <option value="simpo">SimPO - Simple Preference Optimization</option>
+                                <option value="kto">KTO - Kahneman-Tversky Optimization</option>
+                                <option value="cpo">CPO - Contrastive Preference Optimization</option>
+                                <option value="ipo">IPO - Identity Preference Optimization</option>
+                            </optgroup>
+                            <optgroup label="Diffusion / Image LoRA">
+                                <option value="diffusion_qwen_image">Qwen-Image LoRA</option>
+                                <option value="diffusion_qwen_edit">Qwen-Image-Edit LoRA</option>
+                                <option value="diffusion_sdxl">SDXL LoRA</option>
+                            </optgroup>
                         </select>
                         <small style="color: #888; font-size: 0.85em;">Same setting as "What are you training?" on Step 2 — kept in sync.</small>
+                    </div>
+
+                    <!-- Diffusion-only fields (hidden unless training_mode starts with diffusion_) -->
+                    <div class="spell-section" id="diffusion-fields-section" style="display: none; background: linear-gradient(135deg, #fce4ec 0%, #f3e5f5 100%); border-left: 4px solid var(--primary-purple);">
+                        <h3>🎨 Diffusion Settings</h3>
+
+                        <!-- DRAG-DROP IMAGE DATASET UPLOAD -->
+                        <div class="form-group">
+                            <label>🖼️ Image Dataset</label>
+                            <div id="diffusion-dropzone" style="
+                                border: 3px dashed var(--primary-purple);
+                                border-radius: 12px;
+                                padding: 32px 16px;
+                                text-align: center;
+                                background: rgba(255,255,255,0.55);
+                                cursor: pointer;
+                                transition: all 0.2s ease;
+                                position: relative;
+                            ">
+                                <input type="file" id="diffusion-image-files" multiple accept="image/*"
+                                       style="position: absolute; inset: 0; opacity: 0; cursor: pointer;">
+                                <div id="diffusion-dropzone-prompt" style="pointer-events: none;">
+                                    <div style="font-size: 2.4em; margin-bottom: 8px;">🪄✨</div>
+                                    <div style="font-weight: bold; color: var(--primary-purple); margin-bottom: 4px;">
+                                        Drop your images here
+                                    </div>
+                                    <div style="color: #888; font-size: 0.85em;">
+                                        ...or click to pick a folder. PNG / JPG / WebP all work.
+                                    </div>
+                                </div>
+                            </div>
+                            <small style="color: #888; font-size: 0.85em; display: block; margin-top: 6px;">
+                                Captions default to the filename — edit each one inline below, or leave blank to let the trainer infer from the image.
+                            </small>
+                        </div>
+
+                        <!-- THUMBNAIL GRID + INLINE CAPTION EDITOR (populated after drop) -->
+                        <div id="diffusion-thumbnail-grid" style="display: none; margin: 16px 0;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                                <strong id="diffusion-thumbnail-count">0 images selected</strong>
+                                <div>
+                                    <button type="button" id="diffusion-clear-images" class="action-button" style="
+                                        background: transparent; color: var(--primary-purple);
+                                        border: 1px solid var(--primary-purple); padding: 6px 14px; font-size: 0.85em;
+                                    ">🗑 Clear</button>
+                                    <button type="button" id="diffusion-save-dataset" class="action-button" style="
+                                        background: var(--primary-purple); color: white; padding: 6px 14px; font-size: 0.85em;
+                                    ">💾 Save & Use Dataset</button>
+                                </div>
+                            </div>
+                            <div id="diffusion-thumbnails" style="
+                                display: grid;
+                                grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+                                gap: 12px;
+                                max-height: 480px; overflow-y: auto;
+                                padding: 8px;
+                                background: rgba(255,255,255,0.4);
+                                border-radius: 8px;
+                            "></div>
+                            <div id="diffusion-dataset-status" style="margin-top: 12px; font-size: 0.9em;"></div>
+                        </div>
+
+                        <details style="margin: 16px 0;">
+                            <summary style="cursor: pointer; color: #666; font-size: 0.9em;">⚙️ Advanced: paste a JSONL path or HF dataset name instead</summary>
+                            <div class="form-group" style="margin-top: 12px;">
+                                <label>📂 Dataset JSONL Path</label>
+                                <div style="display: flex; gap: 6px;">
+                                    <input type="text" id="diffusion-dataset-jsonl" placeholder="/path/to/train.jsonl" class="magic-input" style="flex: 1;">
+                                    <button type="button" id="diffusion-jsonl-preview" class="action-button" style="
+                                        background: var(--primary-purple); color: white;
+                                        padding: 8px 14px; font-size: 0.9em; white-space: nowrap;
+                                    ">👁 Preview &amp; Edit</button>
+                                </div>
+                                <small style="color: #888; font-size: 0.85em;">Local JSONL with {prompt, image} (or {prompt, chosen, rejected}) rows. Auto-set when you save a drag-drop dataset above. Click Preview to inspect + inline-edit captions before training.</small>
+                            </div>
+
+                            <!-- JSONL preview + inline editor (populated by Preview button) -->
+                            <div id="diffusion-jsonl-preview-section" style="display: none; margin: 12px 0; padding: 12px; background: rgba(255,255,255,0.55); border-radius: 8px;">
+                                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                                    <strong id="diffusion-jsonl-preview-summary">Loading…</strong>
+                                    <div>
+                                        <button type="button" id="diffusion-jsonl-prev-page" class="action-button" style="background: transparent; color: var(--primary-purple); border: 1px solid var(--primary-purple); padding: 4px 10px; font-size: 0.8em;">← prev</button>
+                                        <button type="button" id="diffusion-jsonl-next-page" class="action-button" style="background: transparent; color: var(--primary-purple); border: 1px solid var(--primary-purple); padding: 4px 10px; font-size: 0.8em;">next →</button>
+                                        <button type="button" id="diffusion-jsonl-save-edits" class="action-button" style="background: var(--primary-purple); color: white; padding: 4px 12px; font-size: 0.85em; margin-left: 8px;">💾 Save Edits</button>
+                                    </div>
+                                </div>
+                                <div id="diffusion-jsonl-thumbnails" style="
+                                    display: grid;
+                                    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+                                    gap: 12px;
+                                    max-height: 520px; overflow-y: auto;
+                                    padding: 8px;
+                                "></div>
+                                <div id="diffusion-jsonl-status" style="margin-top: 8px; font-size: 0.85em; color: #555;"></div>
+                            </div>
+                            <div class="form-group">
+                                <label>🤗 HF Dataset Name</label>
+                                <input type="text" id="diffusion-dataset-name" placeholder="user/image-caption-dataset" class="magic-input">
+                                <small style="color: #888; font-size: 0.85em;">Alternative to upload / JSONL. Dataset must have an `image` + `prompt` (or `caption`) column.</small>
+                            </div>
+                        </details>
+
+                        <div class="form-group">
+                            <label>🖼️ Image Resolution (px)</label>
+                            <input type="number" id="diffusion-image-resolution" value="1024" min="256" max="2048" step="64" class="magic-input">
+                            <small style="color: #888; font-size: 0.85em;">Square crop at this size for both VAE encoding + training. 1024 is Qwen-Image native.</small>
+                        </div>
+                        <div class="form-group">
+                            <label>🎚️ LoRA Rank (overrides "LoRA r" below)</label>
+                            <input type="number" id="diffusion-lora-rank" value="32" min="4" max="256" class="magic-input">
+                            <small style="color: #888; font-size: 0.85em;">32 is a safe default for diffusion. Higher rank = more capacity but more overfit risk on small datasets.</small>
+                        </div>
+                        <div class="form-group">
+                            <label>🎯 LoRA Target Modules (comma-separated, blank = adapter defaults)</label>
+                            <input type="text" id="diffusion-lora-target-modules" placeholder="to_k, to_q, to_v, to_out.0" class="magic-input">
+                            <small style="color: #888; font-size: 0.85em;">Attention modules. Default targets attention only; add ff.net.0.proj / ff.net.2 for higher-capacity finetunes.</small>
+                        </div>
                     </div>
 
                     <!-- Output Name -->
@@ -979,9 +1111,27 @@
                 <div id="jobs-container"></div>
             </section>
 
-            <!-- Inference (STEP 5) -->
+            <!-- Inference (STEP 5) — unified for text LLM + diffusion -->
             <section id="inference-section" class="card nav-section" style="display: none;">
                 <h2>🔮 Step 5: Test Your Model</h2>
+
+                <!-- Mode selector — toggles between the chat UI (LLM) and the
+                     conjure UI (diffusion). Both use the same nav entry; they're
+                     the same intent ("test what you trained") for different
+                     model families. -->
+                <div class="spell-section" style="background: linear-gradient(135deg, #f3e8ff 0%, #fce4f0 100%);">
+                    <div class="form-group" style="margin: 0;">
+                        <label>🎭 Model kind</label>
+                        <select id="inference-mode" class="magic-select">
+                            <option value="text" selected>Text LLM (chat)</option>
+                            <option value="diffusion">Diffusion / Image LoRA</option>
+                        </select>
+                        <small style="color: #888; font-size: 0.85em;">Pick chat for any text model, or diffusion to render images from a trained image LoRA.</small>
+                    </div>
+                </div>
+
+                <!-- ═══ Text LLM mode (existing chat path) ═══ -->
+                <div id="inference-llm-mode">
 
                 <!-- Model Loading -->
                 <div class="spell-section">
@@ -1095,6 +1245,84 @@
                         <label for="inference-stream" style="margin: 0; cursor: pointer; font-size: 0.9em; color: #888;">Stream tokens (real-time output)</label>
                     </div>
                 </div>
+
+                </div><!-- /#inference-llm-mode -->
+
+                <!-- ═══ Diffusion mode (moved from old standalone Playground section) ═══ -->
+                <div id="inference-diffusion-mode" style="display: none;">
+                    <p style="color: #888; margin-top: 0;">
+                        Pick a base diffusion model + one of your trained LoRAs, type a prompt, hit conjure. Runs in a fresh subprocess so it won't fight live training jobs for VRAM.
+                    </p>
+
+                    <div class="spell-section">
+                        <h3>🪄 Conjure</h3>
+
+                        <div class="form-group">
+                            <label>🖼️ Base Diffusion Model</label>
+                            <input type="text" id="dplay-base-model" value="Qwen/Qwen-Image" class="magic-input">
+                            <small style="color: #888; font-size: 0.85em;">HF repo id or local path. Defaults to Qwen-Image.</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label>🎨 Adapter Family</label>
+                            <select id="dplay-adapter" class="magic-select">
+                                <option value="qwen_image" selected>Qwen-Image (text-to-image)</option>
+                                <option value="qwen_edit">Qwen-Image-Edit</option>
+                                <option value="sdxl">SDXL</option>
+                            </select>
+                            <small style="color: #888; font-size: 0.85em;">Match the family the LoRA was trained against.</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label>📁 Trained LoRA</label>
+                            <select id="dplay-lora" class="magic-select">
+                                <option value="">Loading…</option>
+                            </select>
+                            <small style="color: #888; font-size: 0.85em;">Picked from <code>./models/</code>. Refresh after training new ones.</small>
+                            <button type="button" id="dplay-refresh-loras" style="margin-top: 6px; background: transparent; color: var(--primary-purple); border: 1px solid var(--primary-purple); border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: 0.85em;">
+                                🔄 Refresh list
+                            </button>
+                        </div>
+
+                        <div class="form-group">
+                            <label>💬 Prompt</label>
+                            <textarea id="dplay-prompt" rows="3" class="magic-input" placeholder="a portrait of a young person with auburn hair, soft lighting"></textarea>
+                        </div>
+
+                        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px;">
+                            <div class="form-group">
+                                <label>Width</label>
+                                <input type="number" id="dplay-width" value="1024" min="256" max="2048" step="64" class="magic-input">
+                            </div>
+                            <div class="form-group">
+                                <label>Height</label>
+                                <input type="number" id="dplay-height" value="1024" min="256" max="2048" step="64" class="magic-input">
+                            </div>
+                            <div class="form-group">
+                                <label>Steps</label>
+                                <input type="number" id="dplay-steps" value="25" min="4" max="100" class="magic-input">
+                            </div>
+                        </div>
+
+                        <button type="button" id="dplay-conjure" class="action-button" style="
+                            width: 100%; background: linear-gradient(135deg, #7c4dff 0%, #ff4dc4 100%);
+                            color: white; font-weight: bold; padding: 14px; margin-top: 8px;
+                        ">
+                            ✨ Conjure Image
+                        </button>
+
+                        <div id="dplay-status" style="margin-top: 12px; font-size: 0.9em;"></div>
+
+                        <div id="dplay-result" style="margin-top: 16px; display: none;">
+                            <h4 style="color: var(--primary-purple);">Result</h4>
+                            <img id="dplay-result-image" alt="generated" style="
+                                width: 100%; max-width: 768px; border-radius: 12px;
+                                box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+                            ">
+                            <div id="dplay-result-prompt" style="margin-top: 8px; color: #666; font-size: 0.9em;"></div>
+                        </div>
+                    </div>
+                </div><!-- /#inference-diffusion-mode -->
             </section>
 
             <!-- ═══════════════════════════════════════════════════════════ -->
@@ -1309,6 +1537,22 @@
                         <button type="button" onclick="refreshJobGPUs()" class="action-button" style="width: 100%; margin-top: 10px; background: var(--secondary-pink); color: white;">
                             🔄 Refresh GPU Stats
                         </button>
+                    </div>
+
+                    <!-- Diffusion Sample Gallery (populated by diffusion.js after training completes) -->
+                    <div id="job-samples-gallery-section" style="margin-top: 24px; display: none;">
+                        <h3 style="color: var(--primary-purple); margin-bottom: 10px;">🎨 Sample Renders</h3>
+                        <p style="color: #666; font-size: 0.9em; margin-bottom: 12px;">
+                            Test images generated by your freshly-trained LoRA on a default prompt set. (Override via <code>sample_prompts</code> in the API.)
+                        </p>
+                        <div id="job-samples-grid" style="
+                            display: grid;
+                            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+                            gap: 12px;
+                        "></div>
+                        <p id="job-samples-empty" style="color: #888; font-size: 0.9em; margin-top: 10px; display: none;">
+                            No sample images yet — they'll appear once training completes.
+                        </p>
                     </div>
 
                     <div class="action-buttons">

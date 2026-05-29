@@ -200,17 +200,33 @@ class PreflightValidator:
             "checks": {}
         }
 
-        # Run all checks
-        checks = [
+        # Skip the LLM-specific checks (VRAM math via causal-LM size
+        # tables, model-access via transformers AutoConfig, dataset
+        # column validation, lora_r vs max_length warnings, "training
+        # without 4-bit" advisory) when the job is a diffusion run.
+        # Those checks are all written against the LLM training shape
+        # and produce false-positive warnings for diffusion submits.
+        # The diffusion runner has its own validation (dataset_jsonl_path
+        # exists, adapter loads, LoRA targets resolve) inside the runner.
+        is_diffusion = self._is_diffusion(config)
+
+        # Run all checks. GPU + Disk + Deps + Tokens are model-family
+        # agnostic and always run.
+        checks: list = [
             ("GPU", self._check_gpu),
-            ("VRAM", lambda: self._check_vram(config)),
             ("Disk Space", lambda: self._check_disk_space(config)),
-            ("Model Access", lambda: self._check_model_access(config)),
-            ("Dataset Config", lambda: self._check_dataset_config(config)),
-            ("Training Config", lambda: self._check_training_config(config)),
             ("Tokens", lambda: self._check_tokens(config)),
             ("Dependencies", self._check_dependencies),
         ]
+        if not is_diffusion:
+            checks[1:1] = [
+                ("VRAM", lambda: self._check_vram(config)),
+                ("Model Access", lambda: self._check_model_access(config)),
+                ("Dataset Config", lambda: self._check_dataset_config(config)),
+                ("Training Config", lambda: self._check_training_config(config)),
+            ]
+        else:
+            checks.append(("Diffusion Config", lambda: self._check_diffusion_config(config)))
 
         for check_name, check_func in checks:
             try:
@@ -232,6 +248,54 @@ class PreflightValidator:
         results["valid"] = len(self.errors) == 0
 
         return results["valid"], results
+
+    def _is_diffusion(self, config: Any) -> bool:
+        """Detect diffusion-mode jobs the same way training_runner does."""
+        model_type = (getattr(config, "model_type", None) or "auto").lower()
+        training_mode = (getattr(config, "training_mode", "") or "").lower()
+        return model_type == "diffusion" or training_mode.startswith("diffusion_")
+
+    def _check_diffusion_config(self, config: Any) -> Dict[str, Any]:
+        """Lightweight diffusion-specific sanity checks.
+
+        Just surfaces the obvious "this job is going to fail at runtime"
+        cases — does the dataset_jsonl_path exist if set, do we have any
+        dataset source at all, do the targets look plausible. The real
+        validation happens in the runner once Atelier loads the adapter.
+        """
+        import os
+        details: Dict[str, Any] = {}
+
+        # Need at least one dataset source.
+        has_jsonl = bool(getattr(config, "dataset_jsonl_path", None))
+        has_name = bool(getattr(config, "dataset_name", None))
+        if not has_jsonl and not has_name:
+            self.warnings.append(
+                "Diffusion job without dataset_jsonl_path or dataset_name. "
+                "An uploaded image dataset is also acceptable; otherwise the "
+                "runner will fail at _materialize_image_dataset."
+            )
+
+        if has_jsonl:
+            jsonl = os.path.expanduser(config.dataset_jsonl_path)
+            if not os.path.exists(jsonl):
+                self.errors.append(
+                    f"dataset_jsonl_path does not exist: {jsonl}"
+                )
+            else:
+                details["dataset_jsonl_path"] = jsonl
+
+        # LoRA rank sanity (different threshold than LLM — high rank is
+        # routine for diffusion, no need to warn at 64+).
+        lora_rank = getattr(config, "lora_rank", None) or getattr(config, "lora_r", None)
+        if lora_rank and lora_rank > 512:
+            self.warnings.append(
+                f"Diffusion LoRA rank ({lora_rank}) is very high; 32–256 is the usual range. "
+                "Higher ranks risk overfit on small image corpora."
+            )
+
+        details["model_type"] = "diffusion"
+        return details
 
     def _check_gpu(self) -> Dict[str, Any]:
         """Check GPU availability and capabilities"""

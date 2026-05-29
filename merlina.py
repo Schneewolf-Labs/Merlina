@@ -286,7 +286,10 @@ class TrainingConfig(BaseModel):
     # Model type
     model_type: str = Field(
         "auto",
-        description="Model type: 'auto' (detect from config), 'causal_lm' (text-only LLM), or 'vlm' (vision-language model)"
+        description=(
+            "Model type: 'auto' (detect from config), 'causal_lm' (text-only LLM), "
+            "'vlm' (vision-language model), or 'diffusion' (image LoRA via Atelier)"
+        )
     )
 
     # Training mode
@@ -294,8 +297,10 @@ class TrainingConfig(BaseModel):
         "orpo",
         description=(
             "Training mode: 'sft', 'orpo', 'dpo', 'simpo', 'cpo', 'ipo', 'kto', "
-            "'vlm_stage1' (Artemis projector-only alignment), or 'vlm_stage2' "
-            "(Artemis full multimodal instruction FFT)"
+            "'vlm_stage1' (Artemis projector-only alignment), 'vlm_stage2' "
+            "(Artemis full multimodal instruction FFT), 'diffusion_qwen_image' "
+            "(Qwen-Image T2I LoRA), 'diffusion_qwen_edit' (Qwen-Image-Edit LoRA), "
+            "or 'diffusion_sdxl' (SDXL LoRA)"
         )
     )
 
@@ -352,6 +357,46 @@ class TrainingConfig(BaseModel):
             "max_samples cap takes effect). Images are stored once as JPEG bytes; PIL decode "
             "stays lazy at training time."
         )
+    )
+
+    # Atelier diffusion fields (Qwen-Image / Qwen-Image-Edit / SDXL) — used
+    # when training_mode starts with 'diffusion_'. All fields are Optional
+    # so text-mode / VLM-mode requests can ignore this block entirely.
+    model_name: Optional[str] = Field(
+        None,
+        description="HF repo id of the diffusion model to fine-tune (e.g. 'Qwen/Qwen-Image'). Falls back to base_model if unset."
+    )
+    image_resolution: Optional[int] = Field(
+        None, ge=256, le=2048,
+        description="Square resolution (px) at which images are cached + trained. Default 1024."
+    )
+    lora_rank: Optional[int] = Field(
+        None, ge=4, le=256,
+        description="LoRA rank for diffusion training (defaults to lora_r if unset)."
+    )
+    lora_target_modules: Optional[list[str]] = Field(
+        None,
+        description="LoRA target modules; defaults are adapter-specific (typically [to_k,to_q,to_v,to_out.0])."
+    )
+    dataset_jsonl_path: Optional[str] = Field(
+        None,
+        description="Absolute path to a local JSONL of {prompt, image} (or {prompt, chosen, rejected}) rows for diffusion training."
+    )
+    dataset_name: Optional[str] = Field(
+        None,
+        description="HF Hub dataset id for diffusion training (alternative to dataset_jsonl_path / uploads)."
+    )
+    dataset_split: Optional[str] = Field(
+        None,
+        description="HF split when dataset_name is used (default 'train')."
+    )
+    sample_prompts: Optional[list[str]] = Field(
+        None,
+        description="Override the default post-training sample prompts. List of prompt strings rendered after training completes; visible in the job's sample gallery."
+    )
+    sample_num_steps: Optional[int] = Field(
+        None, ge=4, le=100,
+        description="Diffusion sampling steps for post-training preview images (default 25)."
     )
 
     # Dataset configuration
@@ -496,6 +541,26 @@ class TrainingConfig(BaseModel):
                 "export_gguf is enabled but gguf_quant_types is empty — "
                 "pick at least one (e.g. 'Q4_K_M')."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _normalize_diffusion_mode(self):
+        """Suppress LLM-only knobs that don't apply to the diffusion path.
+
+        - ``use_4bit`` (bitsandbytes 4-bit quantization) is an LLM-trainer
+          setting; the diffusion path uses bf16 / cpu-offload entirely
+          differently. Forcing it off here both keeps the runner honest
+          and stops the LLM preflight validator from warning "training
+          without 4-bit" on every diffusion submit.
+        - ``export_gguf`` similarly doesn't apply — diffusion LoRAs ship
+          as safetensors and there's no GGUF path in 2.0.
+        """
+        mode = (self.model_type or "auto").lower()
+        train_mode = (self.training_mode or "").lower()
+        is_diffusion = mode == "diffusion" or train_mode.startswith("diffusion_")
+        if is_diffusion:
+            self.use_4bit = False
+            self.export_gguf = False
         return self
 
 class JobResponse(BaseModel):
@@ -712,6 +777,25 @@ if FRONTEND_DIR.exists():
     
     # Mount the frontend directory to serve static files
     app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+
+    # Serve uploaded image-dataset thumbnails so the diffusion training form
+    # can render previews after a drag-drop upload. The directory is created
+    # on demand by /dataset/upload-images; mounting it here is harmless even
+    # before the first upload (StaticFiles tolerates missing dirs lazily as
+    # of fastapi 0.95+ via check_dir=False).
+    uploads_root = Path("./uploads")
+    uploads_root.mkdir(parents=True, exist_ok=True)
+    app.mount("/uploads", StaticFiles(directory=str(uploads_root), check_dir=False),
+              name="uploads")
+
+    # Serve post-training sample images (diffusion path writes to
+    # ./models/<output_name>/samples/). Mounting the whole models tree is
+    # the minimum-friction way — the UI fetches via
+    # /model-files/<output_name>/samples/sample_NN.png.
+    models_root = Path("./models")
+    models_root.mkdir(parents=True, exist_ok=True)
+    app.mount("/model-files", StaticFiles(directory=str(models_root), check_dir=False),
+              name="model-files")
     
     # Also serve CSS, JS modules, and images from root for simplicity
     @app.get("/styles.css")
@@ -1852,7 +1936,7 @@ async def upload_dataset(file: bytes = None, filename: str = None):
 
 
 # Proper upload endpoint with FastAPI's UploadFile
-from fastapi import File, UploadFile as FastAPIUploadFile
+from fastapi import File, Form, UploadFile as FastAPIUploadFile
 
 @app.post("/dataset/upload-file")
 async def upload_dataset_file(file: FastAPIUploadFile = File(...)):
@@ -1926,6 +2010,436 @@ async def list_uploaded_datasets():
                 })
 
     return {"datasets": datasets_list}
+
+
+class DiffusionGenerateRequest(BaseModel):
+    """Body for POST /diffusion/generate — the LoRA test playground."""
+    base_model: str = Field(..., description="HF repo id or local path of the base diffusion model")
+    lora_name: str = Field(..., description="Directory name under ./models/ that contains the trained LoRA")
+    adapter: str = Field("qwen_image", description="Adapter family: qwen_image | qwen_edit | sdxl")
+    prompt: str = Field(..., description="Text prompt")
+    width: int = Field(1024, ge=256, le=2048)
+    height: int = Field(1024, ge=256, le=2048)
+    num_steps: int = Field(25, ge=4, le=100)
+    guidance_scale: float = Field(4.0, ge=0.0, le=20.0)
+    seed: int = Field(0, ge=0)
+
+
+@app.get("/diffusion/loras")
+async def list_diffusion_loras():
+    """List trained LoRAs under ./models/ that look like diffusers checkpoints
+    (contain pytorch_lora_weights.safetensors). Powers the playground picker.
+    """
+    models_root = Path("./models")
+    if not models_root.exists():
+        return {"loras": []}
+    loras = []
+    for child in sorted(models_root.iterdir()):
+        if not child.is_dir():
+            continue
+        weights = child / "pytorch_lora_weights.safetensors"
+        if weights.exists():
+            stat = weights.stat()
+            loras.append({
+                "name": child.name,
+                "path": str(child.resolve()),
+                "size_bytes": stat.st_size,
+                "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            })
+    return {"loras": loras}
+
+
+@app.post("/diffusion/generate")
+async def diffusion_generate(req: DiffusionGenerateRequest):
+    """Run a one-off diffusion inference in a subprocess.
+
+    Reuses ``scripts/generate_diffusion_samples.py`` with a single-prompt
+    list so the same code path drives both post-training previews and the
+    playground. Returns a URL to the generated PNG.
+    """
+    import subprocess
+    import sys
+    import hashlib
+
+    lora_dir = Path("./models") / req.lora_name
+    if not lora_dir.exists():
+        raise HTTPException(status_code=404, detail=f"LoRA not found: {req.lora_name}")
+
+    # Each request gets its own output dir under the LoRA so users can
+    # browse history later via /model-files/<name>/playground/<id>/.
+    req_id = f"play_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{hashlib.md5(req.prompt.encode()).hexdigest()[:6]}"
+    out_dir = lora_dir / "playground" / req_id
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    script = Path(__file__).resolve().parent / "scripts" / "generate_diffusion_samples.py"
+    if not script.exists():
+        raise HTTPException(status_code=500, detail="sample generator script missing")
+
+    cmd = [
+        sys.executable, str(script),
+        "--base-model", req.base_model,
+        "--lora-dir", str(lora_dir),
+        "--out-dir", str(out_dir),
+        "--adapter", req.adapter,
+        "--prompts", json.dumps([req.prompt]),
+        "--num-steps", str(req.num_steps),
+        "--guidance-scale", str(req.guidance_scale),
+        "--width", str(req.width),
+        "--height", str(req.height),
+        "--seed", str(req.seed or 42),
+    ]
+    logger.info(f"[playground] {' '.join(cmd)}")
+
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=30 * 60)
+    if res.returncode != 0:
+        logger.error(f"[playground] subprocess exit {res.returncode}: {res.stderr[-500:]}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"diffusion subprocess failed (exit {res.returncode}). Last stderr:\n{res.stderr[-500:]}",
+        )
+
+    image_url = f"/model-files/{req.lora_name}/playground/{req_id}/sample_00.png"
+    return {
+        "status": "success",
+        "image_url": image_url,
+        "request_id": req_id,
+        "prompt": req.prompt,
+    }
+
+
+@app.get("/dataset/preview-images")
+async def preview_image_dataset(
+    jsonl_path: str,
+    limit: int = 24,
+    offset: int = 0,
+    image_column: Optional[str] = None,
+    caption_column: Optional[str] = None,
+):
+    """Read N rows from an image-dataset JSONL and return thumbnails + captions.
+
+    Image paths in the JSONL can be absolute or relative; relative paths
+    are resolved against the JSONL's parent dir (same convention the
+    diffusion runner uses). The returned ``image_url`` routes through
+    ``/dataset/image-content`` so the same path-safety rules apply.
+
+    Args:
+        jsonl_path:     absolute path to the JSONL.
+        limit:          how many rows to return (default 24, max 200).
+        offset:         skip the first N rows for pagination.
+        image_column:   override the image-bearing key. Default tries
+                        'image' → 'chosen' → 'rejected' in order.
+        caption_column: override the text-bearing key. Default tries
+                        'prompt' then 'caption' (the VLM convention).
+    """
+    jsonl = Path(os.path.expanduser(jsonl_path)).resolve()
+    if not jsonl.exists() or not jsonl.is_file():
+        raise HTTPException(status_code=404, detail=f"JSONL not found: {jsonl}")
+    limit = max(1, min(int(limit), 200))
+    offset = max(0, int(offset))
+
+    # Probe order: caller-specified column wins, otherwise fall back to
+    # the conventional names (diffusion uses image/prompt, Artemis VLM
+    # uses image/caption, DPO-shaped uses chosen/rejected).
+    img_keys = [image_column] if image_column else ["image", "chosen", "rejected"]
+    cap_keys = [caption_column] if caption_column else ["prompt", "caption"]
+
+    rows_out = []
+    total = 0
+    try:
+        with open(jsonl) as f:
+            for i, line in enumerate(f):
+                line = line.strip()
+                if not line:
+                    continue
+                total += 1
+                if i < offset:
+                    continue
+                if len(rows_out) >= limit:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                img_field = next(
+                    (k for k in img_keys if k in row and isinstance(row[k], str)),
+                    None,
+                )
+                if img_field is None:
+                    continue
+                caption_field = next((k for k in cap_keys if k in row), None)
+                raw_path = row[img_field]
+                # Resolve relative paths against the JSONL's dir.
+                p = Path(os.path.expanduser(raw_path))
+                if not p.is_absolute():
+                    p = (jsonl.parent / p).resolve()
+                else:
+                    p = p.resolve()
+                rows_out.append({
+                    "row_index":      i,
+                    "prompt":         (row.get(caption_field) or "") if caption_field else "",
+                    "image_path":     str(p),
+                    "image_url":      (
+                        f"/dataset/image-content?path={p}&jsonl_path={jsonl}"
+                    ),
+                    "image_field":    img_field,
+                    "caption_field":  caption_field,
+                })
+    except OSError as e:
+        raise HTTPException(status_code=400, detail=f"could not read JSONL: {e}")
+
+    return {
+        "jsonl_path":     str(jsonl),
+        "image_column":   image_column,
+        "caption_column": caption_column,
+        "total":          total,
+        "offset":         offset,
+        "limit":          limit,
+        "returned":       len(rows_out),
+        "rows":           rows_out,
+    }
+
+
+@app.get("/dataset/image-content")
+async def dataset_image_content(path: str, jsonl_path: str):
+    """Serve a single image file from an image dataset.
+
+    Path-safety: the requested ``path`` must resolve under the
+    ``jsonl_path``'s parent directory. Stops the endpoint from being
+    used as an arbitrary local-file reader.
+    """
+    requested = Path(os.path.expanduser(path)).resolve()
+    jsonl = Path(os.path.expanduser(jsonl_path)).resolve()
+    if not jsonl.exists():
+        raise HTTPException(status_code=404, detail="jsonl_path does not exist")
+    # Allow files under the JSONL's parent OR under ./uploads (uploaded datasets).
+    allowed_roots = [jsonl.parent, Path("./uploads").resolve()]
+    if not any(
+        str(requested).startswith(str(root) + os.sep) or requested == root
+        for root in allowed_roots
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"path is outside the allowed roots ({[str(r) for r in allowed_roots]}); "
+                "the dataset preview endpoint only serves images under the JSONL's "
+                "directory or ./uploads/ to prevent arbitrary file access."
+            ),
+        )
+    if not requested.exists() or not requested.is_file():
+        raise HTTPException(status_code=404, detail=f"image not found: {requested}")
+
+    # Heuristic content type — Image() in the manifest is open enough that we
+    # don't need to be picky; rely on the extension for the MIME hint.
+    ext = requested.suffix.lower().lstrip(".")
+    media_type = {
+        "png":  "image/png",
+        "jpg":  "image/jpeg",
+        "jpeg": "image/jpeg",
+        "webp": "image/webp",
+        "gif":  "image/gif",
+        "bmp":  "image/bmp",
+    }.get(ext, "application/octet-stream")
+    return FileResponse(str(requested), media_type=media_type)
+
+
+class SaveJsonlRow(BaseModel):
+    row_index: int = Field(..., description="Original row index in the source JSONL")
+    prompt:    str = Field(..., description="New caption / prompt text")
+
+
+class SaveJsonlRequest(BaseModel):
+    jsonl_path:    str               = Field(..., description="Path to the JSONL file being edited")
+    edits:         list[SaveJsonlRow] = Field(default_factory=list,
+                                              description="Caption edits (overwrites the caption_column field at each row_index)")
+    deletes:       list[int]         = Field(default_factory=list,
+                                             description="Row indices to drop from the JSONL")
+    caption_column: Optional[str]    = Field(None, description="Column to write captions to (default 'prompt'; pass 'caption' for VLM-style datasets)")
+
+
+@app.post("/dataset/save-jsonl")
+async def save_jsonl_edits(req: SaveJsonlRequest):
+    """Apply caption edits + row deletions to an image-dataset JSONL.
+
+    Rewrites the JSONL in place; preserves all non-edited fields per row.
+    A `.bak` copy is written next to the file the first time it's edited
+    so a misclick is recoverable.
+    """
+    import shutil
+    jsonl = Path(os.path.expanduser(req.jsonl_path)).resolve()
+    if not jsonl.exists() or not jsonl.is_file():
+        raise HTTPException(status_code=404, detail=f"JSONL not found: {jsonl}")
+
+    # First-edit backup
+    backup = jsonl.with_suffix(jsonl.suffix + ".bak")
+    if not backup.exists():
+        shutil.copy2(jsonl, backup)
+        logger.info(f"backup created: {backup}")
+
+    edits_by_idx = {e.row_index: e.prompt for e in req.edits}
+    deletes = set(req.deletes)
+    # Caption column override — defaults to 'prompt' (diffusion convention);
+    # pass 'caption' for VLM-style datasets so the edit writes to the column
+    # the VLM runner actually reads.
+    caption_field = req.caption_column or "prompt"
+
+    new_rows: list[dict] = []
+    total_in = 0
+    kept = 0
+    edited = 0
+    with open(jsonl) as f:
+        for i, line in enumerate(f):
+            line = line.strip()
+            if not line:
+                continue
+            total_in += 1
+            if i in deletes:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                # Keep malformed rows unchanged rather than silently dropping
+                new_rows.append({"_raw": line})
+                kept += 1
+                continue
+            if i in edits_by_idx:
+                row[caption_field] = edits_by_idx[i]
+                edited += 1
+            new_rows.append(row)
+            kept += 1
+
+    # Atomic rewrite via .tmp then rename
+    tmp = jsonl.with_suffix(jsonl.suffix + ".tmp")
+    with open(tmp, "w") as f:
+        for r in new_rows:
+            if "_raw" in r and len(r) == 1:
+                f.write(r["_raw"] + "\n")
+            else:
+                f.write(json.dumps(r) + "\n")
+    tmp.replace(jsonl)
+
+    logger.info(f"saved JSONL edits: {jsonl} (edited={edited} deleted={len(deletes)} kept={kept})")
+    return {
+        "status":  "success",
+        "jsonl_path": str(jsonl),
+        "backup":     str(backup),
+        "total_before": total_in,
+        "total_after":  kept,
+        "edited":   edited,
+        "deleted":  len(deletes),
+    }
+
+
+@app.get("/jobs/{job_id}/samples")
+async def get_job_samples(job_id: str):
+    """Return generated sample images for a completed diffusion training job.
+
+    Diffusion runs emit a ``samples/`` directory under
+    ``./models/<output_name>/`` with PNGs + a ``samples.json`` manifest.
+    UI uses this to render the post-training preview gallery.
+    """
+    job = job_manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"job {job_id} not found")
+
+    output_name = (job.config or {}).get("output_name")
+    if not output_name:
+        return {"samples": [], "reason": "no output_name in job config"}
+
+    samples_dir = Path("./models") / output_name / "samples"
+    manifest = samples_dir / "samples.json"
+    if not manifest.exists():
+        return {"samples": [], "reason": "no samples generated yet (job may still be running or wasn't a diffusion run)"}
+
+    try:
+        data = json.loads(manifest.read_text())
+    except Exception as e:
+        return {"samples": [], "reason": f"manifest unreadable: {e}"}
+
+    samples = []
+    for prompt, fname in zip(data.get("prompts", []), data.get("files", [])):
+        if (samples_dir / fname).exists():
+            samples.append({
+                "prompt": prompt,
+                "url": f"/model-files/{output_name}/samples/{fname}",
+            })
+
+    return {
+        "samples":      samples,
+        "adapter":      data.get("adapter"),
+        "base_model":   data.get("base_model"),
+        "lora_dir":     data.get("lora_dir"),
+        "output_name":  output_name,
+    }
+
+
+@app.post("/dataset/upload-images")
+async def upload_image_dataset(
+    files: list[FastAPIUploadFile] = File(...),
+    captions: str = Form("{}"),
+):
+    """Upload a folder of images + their captions for diffusion training.
+
+    Materializes the upload to disk and writes a JSONL with ``{prompt, image}``
+    rows that the diffusion training runner can consume directly via
+    ``dataset_jsonl_path``.
+
+    Body:
+        files     — multipart: one or more image files
+        captions  — multipart Form: JSON string {filename: caption}; any
+                    file without a caption defaults to the filename stem.
+
+    Returns:
+        {jsonl_path, image_count, batch_id, preview: [{filename, caption, url}]}
+    """
+    import hashlib
+
+    try:
+        caption_map = json.loads(captions) if captions else {}
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"captions must be JSON: {e}")
+
+    if not files:
+        raise HTTPException(status_code=400, detail="no files uploaded")
+
+    batch_id = f"images_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{hashlib.md5(str(len(files)).encode()).hexdigest()[:6]}"
+    base_dir = Path("./uploads") / batch_id
+    images_dir = base_dir / "images"
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    rows = []
+    preview = []
+    for f in files:
+        # Sanitize filename — strip path components users might've smuggled in
+        safe_name = Path(f.filename).name
+        if not safe_name:
+            continue
+        target = images_dir / safe_name
+        content = await f.read()
+        target.write_bytes(content)
+        caption = caption_map.get(f.filename, "") or caption_map.get(safe_name, "")
+        if not caption:
+            caption = Path(safe_name).stem.replace("_", " ").replace("-", " ")
+        rows.append({"image": str(target.resolve()), "prompt": caption})
+        preview.append({
+            "filename": safe_name,
+            "caption": caption,
+            "url": f"/uploads/{batch_id}/images/{safe_name}",
+        })
+
+    jsonl_path = base_dir / "train.jsonl"
+    with open(jsonl_path, "w") as jf:
+        for r in rows:
+            jf.write(json.dumps(r) + "\n")
+
+    logger.info(f"Image dataset upload: batch={batch_id} count={len(rows)} → {jsonl_path}")
+
+    return {
+        "status": "success",
+        "batch_id": batch_id,
+        "jsonl_path": str(jsonl_path.resolve()),
+        "image_count": len(rows),
+        "preview": preview[:48],  # first 48 thumbnails are enough for the UI
+    }
 
 
 @app.post("/dataset/cleanup")

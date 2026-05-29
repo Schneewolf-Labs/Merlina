@@ -7,6 +7,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.0] - 2026-05-24 "Workshop"
+
+### Added
+- **Diffusion training is now a first-class Merlina backend** via [Atelier](https://github.com/Schneewolf-Labs/atelier). Three new training modes — `diffusion_qwen_image` (Qwen-Image text-to-image LoRA), `diffusion_qwen_edit` (Qwen-Image-Edit image-to-image LoRA), `diffusion_sdxl` (SDXL LoRA) — accepted by the existing `TrainingConfig` and dispatched to a new `src/training_runner_diffusion.py` runner. Same job lifecycle / WebSocket / preflight surface as the text + VLM paths.
+- **`src/training_runner_diffusion.py`**: parallel narrow path mirroring `run_vlm_training_sync`'s contract but the body is Atelier-driven — loads an Atelier `ModelAdapter` (`QwenImageAdapter` / `QwenEditAdapter` / `SDXLAdapter`), runs `cache_embeddings` to pre-compute text + image embeddings (with the staged-load pattern so encoders + transformer don't have to coexist in VRAM during the cache pass), frees encoders, moves the transformer onto the GPU, then drives `AtelierTrainer` with `FlowMatchingLoss` + LoRA. Reuses the existing `WebSocketCallback` unchanged — Atelier's callback fire loop is duck-typed so the same callback object works across both engines.
+- **Generalized dispatch**: the `training_mode.startswith("vlm_")` if-statement in `run_training_sync` is now a `_resolve_sibling_runner(config)` helper that picks a parallel runner by (a) explicit `model_type` (new `'diffusion'` value joins `'vlm'`) or (b) legacy `training_mode` prefix sniffing for backward compatibility. Easy to extend further: add a new `model_type` value and a `training_runner_<x>.py`, register both in the helper.
+- **`TrainingConfig` (Pydantic) gains diffusion fields** — all `Optional` so text-mode / VLM-mode requests are unaffected:
+  - `model_name` (HF repo id of the diffusion model; falls back to `base_model` if unset)
+  - `image_resolution` (square cache + train resolution, default 1024)
+  - `lora_rank` (overrides `lora_r` for diffusion runs)
+  - `lora_target_modules` (DiT/UNet target list, e.g. `["to_k","to_q","to_v","to_out.0"]`)
+  - `dataset_jsonl_path` / `dataset_name` / `dataset_split` (three ways to source the image+caption corpus)
+- **Frontend: diffusion picker + form**: `🧠 Model Type` gains a `Diffusion / Image LoRA` option, the `Training Method` dropdown groups text vs diffusion modes under `<optgroup>`s, and a new `🎨 Diffusion Settings` panel (image resolution, LoRA rank override, target modules, dataset JSONL path, HF dataset name) shows when a `diffusion_*` mode is selected.
+- **`atelier` + `diffusers>=0.34` added to `requirements.txt`** — pulled via git URL the same way `grimoire-rl` is.
+- **`tests/test_diffusion_dispatch.py`** — lightweight unit tests for the `_resolve_sibling_runner` routing, the diffusion mode registry shape, and the new Pydantic field surface. No model weights needed (heavy end-to-end tests live elsewhere and skip under pytest, mirroring `test_artemis_runner.py`).
+
+### Changed
+- **Major version bump (1.8.1 → 2.0.0)**. The job dispatcher now reads `model_type` as a first-class engine selector (was: `training_mode` prefix only). Existing text-mode + VLM jobs (no `model_type` set, or `model_type='auto'`/`'causal_lm'`/`'vlm'`) continue to dispatch to the correct runner unchanged — no breaking change for stored configs or external API consumers using the v1 surface. The prefix-sniff fallback (`vlm_*`, `diffusion_*`) means in-flight VLM configs keep working.
+
+### Notes
+- Diffusion training currently produces a LoRA at `./models/<output_name>/` in diffusers `pytorch_lora_weights.safetensors` format — directly loadable by `pipeline.load_lora_weights(...)` for inference, drag-droppable into ComfyUI / A1111. GGUF export and HF Hub upload for diffusion LoRAs are out-of-scope for 2.0 (the existing post-hoc upload endpoint can ship the saved directory manually).
+- The Atelier QwenImage adapter loads the 38 GiB Qwen-Image transformer to CPU first by default (`defer_transformer=True`) and only moves it to GPU after `free_encoders()` reclaims the ~14 GiB Qwen-VL text encoder. This keeps peak VRAM = max(encoders, transformer) instead of their sum — important on 48 GB cards. Merlina's diffusion runner honors this dance.
+
+### ✨ EPIC additions (the wizard-hat goes ON)
+
+- **Drag-drop image-caption dataset upload** (`/dataset/upload-images` + new `frontend/js/diffusion.js`). Drop a folder of images onto the Diffusion Settings panel → thumbnails appear in a grid with editable caption textareas under each → "Save & Use Dataset" uploads everything, writes the JSONL on the server, and auto-fills the `dataset_jsonl_path` so the training submit Just Works. Filenames default to captions; the user only types if they want to. Replaces the bare "type a JSONL path" text input as the primary flow (advanced users can still expand the collapsed JSONL / HF-name section).
+- **Post-training sample image gallery**. After training completes, a new `_generate_post_training_samples` helper spawns `scripts/generate_diffusion_samples.py` as a subprocess (fresh diffusers pipeline, doesn't contend with anything for VRAM since the training process already released the transformer), renders 4 preview images from a curated default prompt set, writes them + a `samples.json` manifest to `./models/<output_name>/samples/`. The job-detail modal grows a `🎨 Sample Renders` section that fetches `/jobs/{job_id}/samples` on open + again on completion, and renders the gallery with the prompts as captions. Mid-training previews remain a 2.0.1 follow-up (needs proper VRAM scheduling to avoid OOM).
+- **Inference Playground for diffusion LoRAs** (merged into the existing Inference section via a "Model kind" toggle — was a separate nav entry pre-merge). Pick base model + a trained LoRA from `./models/`, type a prompt, hit `✨ Conjure Image`. `POST /diffusion/generate` runs the same subprocess script with a single-prompt list, returns a URL to the PNG, and the playground shows it inline with cache busting. `GET /diffusion/loras` powers the LoRA picker by scanning `./models/` for `pytorch_lora_weights.safetensors` files. Per-request output dirs (`./models/<name>/playground/<id>/`) so generation history is browsable later.
+- **Pydantic config**: new Optional fields `sample_prompts` (override the default preview prompts) and `sample_num_steps` (denoise step count for the previews). Both ignored on text/VLM jobs.
+- **Static mounts**: `/uploads` (for image dataset thumbnails) and `/model-files` (for sample previews + playground outputs) so the frontend can fetch images directly without needing a per-file API endpoint.
+
+### 🛠 Fixes surfaced by the first live diffusion training
+
+Four bugs landed in follow-up commits after the first end-to-end POST /train submit. All from real runs:
+
+- **LoRA save format** (Atelier-side, [Schneewolf-Labs/atelier#4](https://github.com/Schneewolf-Labs/atelier/pull/4)): `QwenImageAdapter.save_lora` was writing keys in the legacy diffusers layout (`base_model.model.…lora.down/up.weight`) that modern `pipe.load_lora_weights` couldn't load — every Atelier-trained LoRA was unloadable until the converter was dropped + the PEFT wrapper prefix explicitly stripped. Cascades into Merlina's post-training samples + playground inference (both would have failed). Merlina pulls atelier from main, so the fix lands on next install.
+- **Relative image paths**: `_materialize_image_dataset` opened `row["image"]` from the runner's cwd instead of resolving against the JSONL's parent dir. JSONLs with paths like `images/<flame_id>.png` blew up with FileNotFoundError. Fixed to resolve relative paths for `image`, `chosen`, and `rejected` keys against the JSONL's dir.
+- **Exception-handler masking the original error**: failure-path WebSocket call missed the required `progress=` positional, so any real exception turned into a `TypeError` that buried the cause in the logs. Now passes `progress=0.0`.
+- **Job status stuck at the previous stage during training**: `WebSocketCallback.on_log` sent `status="training"` to the websocket but didn't mirror it into the JobManager DB, so HTTP `/jobs` kept reporting whatever the previous status was. Now includes `status="training"` in the `job_manager.update_job()` call.
+
+### 🪄 Preflight + Pydantic gating (no more LLM-shaped noise on diffusion submits)
+
+- `validate_config` gates the LLM-centric checks (VRAM math via causal-LM size tables, model access via transformers AutoConfig, dataset columns, "training without 4-bit" advisory) behind `not is_diffusion(config)`. A small `_check_diffusion_config` runs in their place: warns on missing dataset source, errors on nonexistent `dataset_jsonl_path`, warns at LoRA rank > 512 (vs the LLM threshold of 64). GPU / Disk / Tokens / Deps still run for both paths.
+- New `_normalize_diffusion_mode` Pydantic validator on `TrainingConfig` forces `use_4bit=False` + `export_gguf=False` when `model_type='diffusion'` or `training_mode` starts with `diffusion_`. Saves having to remember to send the right shape from API clients; the UI's diffusion form doesn't surface these knobs anyway.
+
+### 📂 Image dataset preview + inline editing
+
+Dataset editing is a first-class 2.0 feature. Image datasets had no persistent preview path — once you uploaded or pointed at a JSONL, the only "preview" was the in-flight blob: URLs from the drag-drop session. And the existing `/dataset/preview` is text-shaped (returns rows as strings), so an image dataset showed up as a list of file paths.
+
+- **`GET /dataset/preview-images?jsonl_path=…&limit=&offset=&image_column=&caption_column=`** — reads the JSONL, returns rows with `prompt` + resolved `image_path` + `image_url`. Pagination (24/page default). Probe order: `image` → `chosen` → `rejected` for images, `prompt` → `caption` for text — covers diffusion AND Artemis VLM (image+caption) shapes without configuration. `image_column` / `caption_column` query params override for datasets with non-standard column names.
+- **`GET /dataset/image-content?path=…&jsonl_path=…`** — serves a single image file. **Path-safety**: the requested path must resolve under the JSONL's parent dir OR under `./uploads/`. Endpoint isn't an arbitrary local-file reader.
+- **`POST /dataset/save-jsonl`** — applies `edits` (overwrite captions at specified row_indexes) + `deletes` (drop rows entirely). Atomic rewrite via `.tmp` + rename. Creates a `.bak` next to the file on first edit so misclicks are recoverable. `caption_column` field lets VLM edits write to `caption` instead of `prompt`.
+- **Frontend**: 👁 Preview & Edit button next to the JSONL path input. Editable thumbnail grid (24/page) with pagination + dirty-state counter + delete-mark toggles + caption textareas. Visual cues: edited captions get a purple border; deleted rows go red + dimmed + restorable. Image dataset section is now visible for both diffusion AND VLM modes (was diffusion-only); diffusion-only sub-fields (rank/targets/resolution) stay hidden in VLM mode.
+
+## [1.8.1] - 2026-05-29
+
+### Added
+- **Artemis VLM Stage 2 dataset reader** (`_load_image_caption_dataset` gains an ArtemisMix-shape branch with a length filter)
+- **A3 checkpoint loader for vlm_stage2** — continue from an existing A3 checkpoint instead of rebuilding the projector + decoder graft
+
+(Released without a CHANGELOG entry on main; this entry added retroactively when 2.0.0 rebased on top.)
+
 ## [1.8.0] - 2026-05-24 "Artemis Extract"
 
 ### Changed
