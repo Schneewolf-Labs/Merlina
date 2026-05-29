@@ -1,15 +1,54 @@
 """
 Configuration Manager for Merlina Training Configs
 
-Handles saving, loading, and managing training configuration presets as JSON files.
+Handles saving, loading, and managing training configuration presets as
+JSON files. Centralizes the rules for what a "saved config" looks like so
+both /configs/save (preset library) and the model-card embedder produce
+identical, importable JSON.
+
+The serialized format is intentionally simple:
+
+    {
+      "_metadata": {
+        "name": "<config name>",
+        "description": "...",
+        "created_at": "<iso>",
+        "modified_at": "<iso>",
+        "tags": [...],
+        "schema": "merlina/training-config",
+        "schema_version": 1,
+        "merlina_version": "X.Y.Z"
+      },
+      "<TrainingConfig field>": ...,
+      ...
+    }
+
+Anyone with a Merlina instance running can drop one of these JSONs into
+``data/configs/`` and load it from the UI. We strip credentials before
+persisting so a saved config is safe to commit, share in a model card,
+or paste into a HuggingFace README.
 """
 
 import json
-import os
+import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
-from dataclasses import dataclass, asdict
+from typing import Any, Dict, List, Optional, Tuple
+from dataclasses import dataclass
+
+
+logger = logging.getLogger(__name__)
+
+
+# Fields that must NEVER be persisted to a saved config or shared in a
+# model README. /train endpoints can still receive these via the request
+# body or fall back to ``.env``.
+SECRET_FIELDS: Tuple[str, ...] = ("hf_token", "wandb_key")
+
+# Schema identifier embedded in every saved config. Bump SCHEMA_VERSION on
+# breaking changes to the on-disk shape so importers can detect mismatches.
+SCHEMA_NAME = "merlina/training-config"
+SCHEMA_VERSION = 1
 
 
 @dataclass
@@ -20,6 +59,75 @@ class ConfigMetadata:
     created_at: str
     modified_at: str
     tags: List[str]
+
+
+def strip_secrets(config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Return a shallow copy of ``config`` with credential fields removed.
+
+    Centralizes the secret-stripping rule so callers don't each maintain
+    their own list. Used by /configs/save (persistence) and the model-card
+    embedder (sharing).
+    """
+    return {k: v for k, v in config.items() if k not in SECRET_FIELDS}
+
+
+def normalize_training_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Validate and normalize a TrainingConfig-shaped dict.
+
+    Routes the config through the Pydantic ``TrainingConfig`` model so:
+      * Unknown / typo'd fields raise instead of silently dropping
+      * Defaults are filled in for absent fields
+      * Lists/numbers come back in their canonical form
+
+    Always strips secrets — this is the form that's safe to write to disk.
+    Importable by any Merlina instance running the same major version.
+    """
+    # Local import — TrainingConfig lives in merlina.py and pulls heavy
+    # ML deps at import time. Keep this lazy so unit tests of ConfigManager
+    # don't pay the cost when they don't need it.
+    from merlina import TrainingConfig
+    from pydantic import TypeAdapter
+
+    validated = TypeAdapter(TrainingConfig).validate_python(config)
+    dumped = validated.model_dump(mode="json")
+    return strip_secrets(dumped)
+
+
+def build_config_envelope(
+    config: Dict[str, Any],
+    *,
+    name: str,
+    description: str = "",
+    tags: Optional[List[str]] = None,
+    created_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Wrap a TrainingConfig payload with the standard ``_metadata`` block.
+
+    The envelope is the single, importable serialization format produced
+    by /configs/save and (optionally) by the model-card embedder. Keeping
+    one builder means the two paths can never drift.
+    """
+    # Lazy import to avoid pulling version on hot path of empty test envs.
+    try:
+        from version import __version__ as _merlina_version
+    except Exception:  # pragma: no cover - version.py always exists in repo
+        _merlina_version = "unknown"
+
+    now = datetime.utcnow().isoformat()
+    metadata = {
+        "name": name,
+        "description": description,
+        "created_at": created_at or now,
+        "modified_at": now,
+        "tags": list(tags or []),
+        "schema": SCHEMA_NAME,
+        "schema_version": SCHEMA_VERSION,
+        "merlina_version": _merlina_version,
+    }
+    return {"_metadata": metadata, **config}
 
 
 class ConfigManager:
@@ -40,7 +148,8 @@ class ConfigManager:
         name: str,
         config: dict,
         description: str = "",
-        tags: Optional[List[str]] = None
+        tags: Optional[List[str]] = None,
+        validate: bool = False,
     ) -> str:
         """
         Save a training configuration to a JSON file.
@@ -50,12 +159,18 @@ class ConfigManager:
             config: Training configuration dictionary
             description: Optional description of the configuration
             tags: Optional list of tags for categorization
+            validate: When True, route the config through the Pydantic
+                ``TrainingConfig`` schema before saving. Catches typo'd
+                or missing fields at save time and produces a normalized
+                payload that's safe to import elsewhere.
 
         Returns:
             Path to the saved configuration file
 
         Raises:
             ValueError: If name contains invalid characters
+            pydantic.ValidationError: If validate=True and the config
+                fails Pydantic validation
         """
         # Sanitize filename
         safe_name = self._sanitize_filename(name)
@@ -64,34 +179,33 @@ class ConfigManager:
 
         filepath = self.config_dir / f"{safe_name}.json"
 
-        # Check if config exists
-        existing_metadata = None
+        # Check if config exists — preserve created_at across resaves
+        existing_created_at: Optional[str] = None
         if filepath.exists():
             try:
                 existing = self.load_config(safe_name)
-                existing_metadata = existing.get("_metadata", {})
+                existing_created_at = existing.get("_metadata", {}).get("created_at")
             except (FileNotFoundError, json.JSONDecodeError, KeyError):
                 pass
 
-        # Create metadata
-        now = datetime.utcnow().isoformat()
-        metadata = {
-            "name": name,
-            "description": description,
-            "created_at": existing_metadata.get("created_at", now) if existing_metadata else now,
-            "modified_at": now,
-            "tags": tags or []
-        }
+        # Normalize through Pydantic when requested. Otherwise just strip
+        # secrets — the legacy contract is "save whatever I give you" and
+        # we don't want to break callers that pass partial dicts in tests.
+        if validate:
+            payload = normalize_training_config(config)
+        else:
+            payload = strip_secrets(config)
 
-        # Combine config and metadata
-        config_with_metadata = {
-            "_metadata": metadata,
-            **config
-        }
+        envelope = build_config_envelope(
+            payload,
+            name=name,
+            description=description,
+            tags=tags,
+            created_at=existing_created_at,
+        )
 
-        # Save to file
-        with open(filepath, 'w') as f:
-            json.dump(config_with_metadata, f, indent=2)
+        with open(filepath, "w") as f:
+            json.dump(envelope, f, indent=2)
 
         return str(filepath)
 
@@ -115,7 +229,7 @@ class ConfigManager:
         if not filepath.exists():
             raise FileNotFoundError(f"Configuration '{name}' not found")
 
-        with open(filepath, 'r') as f:
+        with open(filepath, "r") as f:
             return json.load(f)
 
     def list_configs(self, tag: Optional[str] = None) -> List[Dict]:
@@ -132,7 +246,7 @@ class ConfigManager:
 
         for filepath in self.config_dir.glob("*.json"):
             try:
-                with open(filepath, 'r') as f:
+                with open(filepath, "r") as f:
                     config = json.load(f)
                     metadata = config.get("_metadata", {})
 
@@ -142,7 +256,7 @@ class ConfigManager:
 
                     configs.append({
                         "filename": filepath.stem,
-                        **metadata
+                        **metadata,
                     })
             except (json.JSONDecodeError, KeyError):
                 # Skip invalid config files
@@ -199,7 +313,7 @@ class ConfigManager:
         """
         config = self.load_config(name)
 
-        with open(output_path, 'w') as f:
+        with open(output_path, "w") as f:
             json.dump(config, f, indent=2)
 
         return output_path
@@ -215,7 +329,7 @@ class ConfigManager:
         Returns:
             Path to the saved configuration file
         """
-        with open(filepath, 'r') as f:
+        with open(filepath, "r") as f:
             config = json.load(f)
 
         # Remove metadata if present (will be recreated)
@@ -239,10 +353,10 @@ class ConfigManager:
         """
         # Remove invalid filename characters
         invalid_chars = '<>:"/\\|?*'
-        safe_name = ''.join(c if c not in invalid_chars else '_' for c in name)
+        safe_name = "".join(c if c not in invalid_chars else "_" for c in name)
 
         # Remove leading/trailing whitespace and dots
-        safe_name = safe_name.strip('. ')
+        safe_name = safe_name.strip(". ")
 
         # Limit length
         safe_name = safe_name[:200]

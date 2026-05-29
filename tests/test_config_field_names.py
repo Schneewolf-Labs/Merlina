@@ -94,13 +94,18 @@ class TestTrainingConfigFieldNames:
 # ---------------------------------------------------------------------------
 
 class TestFrontendConfigJS:
-    """Parse config.js to verify it sends field names matching the Pydantic model."""
+    """Parse the centralized form_config.js to verify it sends field
+    names matching the Pydantic model. Both /train and /configs/save
+    delegate to ``buildTrainingConfig`` in form_config.js, so this is
+    the only file we need to scan."""
 
     @pytest.fixture
     def config_js(self):
-        js_path = Path(__file__).parent.parent / "frontend" / "js" / "config.js"
+        # The emission moved out of config.js into form_config.js as part
+        # of the centralization refactor. Scan the new canonical builder.
+        js_path = Path(__file__).parent.parent / "frontend" / "js" / "form_config.js"
         if not js_path.exists():
-            pytest.skip("frontend/js/config.js not found")
+            pytest.skip("frontend/js/form_config.js not found")
         return js_path.read_text()
 
     def test_no_per_device_train_batch_size_in_config_send(self, config_js):
@@ -118,7 +123,7 @@ class TestFrontendConfigJS:
             # Allow it in the config loader fallback (config.per_device_train_batch_size)
             if re.search(r'^\s*per_device_train_batch_size\s*:', line):
                 pytest.fail(
-                    f"config.js line {i} sends 'per_device_train_batch_size' — "
+                    f"form_config.js line {i} sends 'per_device_train_batch_size' — "
                     "backend expects 'batch_size'"
                 )
 
@@ -131,20 +136,20 @@ class TestFrontendConfigJS:
                 continue
             if re.search(r'^\s*num_train_epochs\s*:', line):
                 pytest.fail(
-                    f"config.js line {i} sends 'num_train_epochs' — "
+                    f"form_config.js line {i} sends 'num_train_epochs' — "
                     "backend expects 'num_epochs'"
                 )
 
     def test_sends_batch_size(self, config_js):
         """Frontend must send 'batch_size' (matching Pydantic model)."""
         assert re.search(r'^\s*batch_size\s*:', config_js, re.MULTILINE), (
-            "config.js does not send 'batch_size' — backend will use default"
+            "form_config.js does not send 'batch_size' — backend will use default"
         )
 
     def test_sends_num_epochs(self, config_js):
         """Frontend must send 'num_epochs' (matching Pydantic model)."""
         assert re.search(r'^\s*num_epochs\s*:', config_js, re.MULTILINE), (
-            "config.js does not send 'num_epochs' — backend will use default"
+            "form_config.js does not send 'num_epochs' — backend will use default"
         )
 
 

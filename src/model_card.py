@@ -5,6 +5,7 @@ Kept separate from training_runner to avoid heavy imports (torch, grimoire)
 in tests and other lightweight consumers.
 """
 
+import json
 import os
 import logging
 from typing import Any
@@ -13,6 +14,11 @@ from huggingface_hub import HfApi
 
 from src.preflight_checks import is_local_model_path
 from src.utils import calculate_effective_batch_size
+from src.config_manager import (
+    SECRET_FIELDS as _CONFIG_SECRET_FIELDS,
+    SCHEMA_NAME as _CONFIG_SCHEMA_NAME,
+    SCHEMA_VERSION as _CONFIG_SCHEMA_VERSION,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +194,14 @@ def generate_model_readme(config: Any, training_mode: str, is_vlm: bool = False)
     if dataset_section:
         readme_parts.extend(["", dataset_section])
 
+    # Optionally embed the full training config so a reader can drop it
+    # into their own Merlina instance and reproduce the run with one click.
+    # Gated by ``share_config`` (defaults to True). Secrets are always
+    # stripped — see _build_share_config_section for the contract.
+    share_section = _build_share_config_section(config)
+    if share_section:
+        readme_parts.extend(["", share_section])
+
     readme_parts.extend([
         "",
         "---",
@@ -199,6 +213,82 @@ def generate_model_readme(config: Any, training_mode: str, is_vlm: bool = False)
     ])
 
     return '\n'.join(readme_parts)
+
+
+def _build_share_config_section(config: Any) -> str:
+    """
+    Render the optional "Reproduce this training run" block.
+
+    Returns an empty string when ``share_config`` is False (or absent on a
+    legacy/test config that pre-dates the field), or when the config can't
+    be serialized (e.g. a Mock in tests). Otherwise returns markdown with:
+
+      * A short note explaining how to import the config
+      * A fenced JSON block containing the validated, secret-stripped
+        TrainingConfig payload (same shape /configs/save produces)
+
+    Secrets (``hf_token``, ``wandb_key``) are stripped unconditionally.
+    """
+    if not getattr(config, "share_config", False):
+        return ""
+
+    # Pydantic models expose model_dump(); plain dicts/Mocks don't, in
+    # which case we silently skip the section rather than crash.
+    try:
+        payload = config.model_dump(mode="json")
+    except (AttributeError, TypeError):
+        return ""
+
+    if not isinstance(payload, dict):
+        return ""
+
+    # Drop secrets and the share flag itself (it's a publishing toggle,
+    # not a training hyperparameter — no need to round-trip it).
+    payload = {
+        k: v for k, v in payload.items()
+        if k not in _CONFIG_SECRET_FIELDS and k != "share_config"
+    }
+
+    # Wrap with the same schema header as data/configs/*.json so the
+    # blob is importable through /configs/import without ceremony.
+    try:
+        from version import __version__ as _merlina_version
+    except Exception:  # pragma: no cover
+        _merlina_version = "unknown"
+
+    envelope = {
+        "_metadata": {
+            "name": getattr(config, "output_name", ""),
+            "description": (
+                "Training configuration shared from a Merlina-trained model."
+            ),
+            "tags": [],
+            "schema": _CONFIG_SCHEMA_NAME,
+            "schema_version": _CONFIG_SCHEMA_VERSION,
+            "merlina_version": _merlina_version,
+        },
+        **payload,
+    }
+
+    try:
+        rendered = json.dumps(envelope, indent=2, sort_keys=False)
+    except (TypeError, ValueError):
+        return ""
+
+    lines = [
+        "## Reproduce this training run",
+        "",
+        "This model was trained with [Merlina](https://github.com/Schneewolf-Labs/Merlina). "
+        "Save the JSON below to `data/configs/<name>.json` (or import it via the "
+        "*Load Configuration* dialog) to reproduce the exact training setup. "
+        "Credentials are not included — Merlina will use your own `HF_TOKEN` "
+        "and `WANDB_API_KEY` from `.env` or the form.",
+        "",
+        "```json",
+        rendered,
+        "```",
+    ]
+    return "\n".join(lines)
 
 
 def _build_dataset_section(config: Any) -> str:

@@ -3,6 +3,7 @@
 import { MerlinaAPI } from './api.js';
 import { Toast, Modal, LoadingManager } from './ui.js';
 import { sanitizeHTML } from './validation.js';
+import { buildTrainingConfig, SECRET_FIELDS } from './form_config.js';
 
 /**
  * Configuration Manager - handles saving/loading configs
@@ -193,146 +194,26 @@ class ConfigManager {
     }
 
     /**
-     * Get current configuration from form
+     * Get current configuration from form for SAVE-AS-PRESET.
+     *
+     * Delegates to the centralized buildTrainingConfig() so saved presets
+     * always cover every training field. Secrets (hf_token, wandb_key) are
+     * intentionally stripped before persistence — saved configs are meant
+     * to be portable/shareable, not credential stores. The backend will
+     * fill in tokens from .env or the form at /train time.
      */
     getCurrentConfig() {
-        // Gather dataset cards from the unified datasets list. The first card
-        // becomes DatasetConfig.source; any additional cards become
-        // additional_sources[]. We read the raw DOM so unfilled fields still
-        // round-trip (saving shouldn't enforce validation).
-        const cards = Array.from(document.querySelectorAll('#datasets-list .dataset-card'));
-        const readCardSource = (card) => {
-            const t = card.querySelector('.ds-source-type')?.value || 'huggingface';
-            const src = { source_type: t };
-            if (t === 'huggingface') {
-                src.repo_id = card.querySelector('.ds-repo')?.value || '';
-                src.split = card.querySelector('.ds-split')?.value || 'train';
-            } else if (t === 'local_file') {
-                src.file_path = card.querySelector('.ds-local-path')?.value || '';
-                src.file_format = card.querySelector('.ds-local-format')?.value || '';
-            } else if (t === 'upload') {
-                src.dataset_id = card.dataset.uploadId || '';
-            }
-            const mapping = this.readCardColumnMapping(card);
-            if (Object.keys(mapping).length > 0) src.column_mapping = mapping;
-            return src;
-        };
+        const config = buildTrainingConfig({
+            gpuManager: window.gpuManager || null,
+            includeSecrets: false,
+        });
 
-        const firstCard = cards[0];
-        let datasetSource = firstCard
-            ? readCardSource(firstCard)
-            : { source_type: 'huggingface', repo_id: '', split: 'train' };
-        const additionalSources = cards.slice(1).map(readCardSource);
-
-        const formatType = document.getElementById('dataset-format-type')?.value || 'tokenizer';
-        let datasetFormat = { format_type: formatType };
-
-        if (formatType === 'qwen3') {
-            datasetFormat.enable_thinking = document.getElementById('enable-thinking')?.checked ?? true;
-        } else if (formatType === 'custom') {
-            datasetFormat.custom_templates = {
-                prompt_template: document.getElementById('custom-prompt-template')?.value || '',
-                chosen_template: document.getElementById('custom-chosen-template')?.value || '',
-                rejected_template: document.getElementById('custom-rejected-template')?.value || ''
-            };
-        }
-
-        // Get LoRA config
-        const useLora = document.getElementById('use-lora')?.checked ?? true;
-        let loraConfig = {};
-        if (useLora) {
-            loraConfig = {
-                lora_r: parseInt(document.getElementById('lora-r')?.value || 64),
-                lora_alpha: parseInt(document.getElementById('lora-alpha')?.value || 32),
-                lora_dropout: parseFloat(document.getElementById('lora-dropout')?.value || 0.05),
-                target_modules: document.getElementById('target-modules')?.value || '',
-                modules_to_save: document.getElementById('modules-to-save')?.value || '',
-                lora_task_type: document.getElementById('lora-task-type')?.value || 'CAUSAL_LM'
-            };
-        }
-
-        // Get training mode
-        const trainingMode = document.getElementById('training-mode')?.value || 'orpo';
-
-        // Build complete config
-        const config = {
-            base_model: document.getElementById('base-model')?.value || '',
-            output_name: document.getElementById('output-name')?.value || '',
-            model_type: document.getElementById('model-type')?.value || 'auto',
-            training_mode: trainingMode,
-            use_lora: useLora,
-            ...loraConfig,
-            use_4bit: document.getElementById('use-4bit')?.checked ?? true,
-            max_length: parseInt(document.getElementById('max-length')?.value || 2048),
-            max_prompt_length: parseInt(document.getElementById('max-prompt-length')?.value || 1024),
-            num_epochs: parseInt(document.getElementById('epochs')?.value || 2),
-            batch_size: parseInt(document.getElementById('batch-size')?.value || 1),
-            gradient_accumulation_steps: parseInt(document.getElementById('grad-accum')?.value || 16),
-            learning_rate: parseFloat(document.getElementById('learning-rate')?.value || 0.000005),
-            warmup_ratio: parseFloat(document.getElementById('warmup-ratio')?.value || 0.05),
-            beta: parseFloat(document.getElementById('beta')?.value || 0.1),
-            seed: parseInt(document.getElementById('seed')?.value || 42),
-            max_grad_norm: parseFloat(document.getElementById('max-grad-norm')?.value || 0.3),
-            weight_decay: parseFloat(document.getElementById('weight-decay')?.value || 0.01),
-            lr_scheduler_type: document.getElementById('lr-scheduler-type')?.value || 'cosine',
-            logging_steps: parseInt(document.getElementById('logging-steps')?.value || 1),
-            shuffle_dataset: document.getElementById('shuffle-dataset')?.checked ?? true,
-            gradient_checkpointing: document.getElementById('gradient-checkpointing')?.checked ?? false,
-            optimizer_type: document.getElementById('optimizer-type')?.value || 'paged_adamw_8bit',
-            adam_beta1: parseFloat(document.getElementById('adam-beta1')?.value || 0.9),
-            adam_beta2: parseFloat(document.getElementById('adam-beta2')?.value || 0.999),
-            adam_epsilon: parseFloat(document.getElementById('adam-epsilon')?.value || 1e-8),
-            adafactor_relative_step: document.getElementById('adafactor-relative-step')?.checked ?? false,
-            adafactor_scale_parameter: document.getElementById('adafactor-scale-parameter')?.checked ?? false,
-            adafactor_warmup_init: document.getElementById('adafactor-warmup-init')?.checked ?? false,
-            adafactor_decay_rate: parseFloat(document.getElementById('adafactor-decay-rate')?.value || -0.8),
-            adafactor_beta1: document.getElementById('adafactor-beta1')?.value ? parseFloat(document.getElementById('adafactor-beta1').value) : null,
-            adafactor_clip_threshold: parseFloat(document.getElementById('adafactor-clip-threshold')?.value || 1.0),
-            attn_implementation: document.getElementById('attn-implementation')?.value || 'auto',
-            use_liger: document.getElementById('use-liger')?.checked ?? false,
-            torch_compile: document.getElementById('torch-compile')?.checked ?? false,
-            neftune_alpha: document.getElementById('neftune-alpha')?.value
-                ? parseFloat(document.getElementById('neftune-alpha').value)
-                : null,
-            eval_on_start: document.getElementById('eval-on-start')?.checked ?? false,
-            eval_steps: parseFloat(document.getElementById('eval-steps')?.value || 0.2),
-            dataset: {
-                source: datasetSource,
-                additional_sources: additionalSources,
-                format: datasetFormat,
-                test_size: parseFloat(document.getElementById('test-size')?.value || 0.01),
-                convert_messages_format: document.getElementById('convert-messages-checkbox')?.checked ?? true,
-                system_prompt: document.getElementById('system-prompt-override')?.value?.trim() || undefined,
-                system_prompt_mode: document.querySelector('input[name="system-prompt-mode"]:checked')?.value || 'fill_empty'
-            }
-        };
-
-        // Optional fields
-        const hfToken = document.getElementById('hf-token')?.value || document.getElementById('hf-token-preload')?.value;
-        if (hfToken) {
-            config.hf_token = hfToken;
-        }
-
-        // W&B settings
-        if (document.getElementById('use-wandb')?.checked) {
-            const wandbKey = document.getElementById('wandb-key')?.value;
-            if (wandbKey) {
-                config.wandb_key = wandbKey;
-                config.wandb_project = document.getElementById('wandb-project')?.value || null;
-                config.wandb_run_name = document.getElementById('wandb-run-name')?.value || null;
-                const tagsInput = document.getElementById('wandb-tags')?.value;
-                if (tagsInput) {
-                    config.wandb_tags = tagsInput.split(',').map(t => t.trim()).filter(t => t);
-                }
-                config.wandb_notes = document.getElementById('wandb-notes')?.value || null;
-            }
-        }
-
-        // HF Hub settings
-        if (document.getElementById('push-hub')?.checked) {
-            config.push_to_hub = true;
-            config.hf_hub_private = document.getElementById('hf-hub-private')?.checked ?? true;
-            config.merge_lora_before_upload = document.getElementById('merge-lora-before-upload')?.checked ?? true;
+        // Defensive double-strip: even with includeSecrets=false there's no
+        // way for these to leak through, but make the contract explicit so
+        // a future regression in form_config.js cannot silently re-introduce
+        // tokens to disk.
+        for (const field of SECRET_FIELDS) {
+            delete config[field];
         }
 
         return config;
@@ -653,6 +534,12 @@ class ConfigManager {
             this.setCheckboxValue('push-hub', true);
             this.setCheckboxValue('hf-hub-private', config.hf_hub_private ?? true);
             this.setCheckboxValue('merge-lora-before-upload', config.merge_lora_before_upload ?? true);
+        }
+
+        // Share-config toggle (controls whether the training config is
+        // embedded in the model README at upload time).
+        if (config.share_config !== undefined) {
+            this.setCheckboxValue('share-config', config.share_config);
         }
     }
 

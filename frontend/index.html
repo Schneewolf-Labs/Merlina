@@ -893,6 +893,15 @@
                                         When checked, uploads full merged model (larger). When unchecked, uploads only LoRA adapter (much smaller, requires base model to use).
                                     </small>
                                 </div>
+
+                                <!-- Share Config Toggle -->
+                                <label class="magic-checkbox" style="margin-top: 15px;">
+                                    <input type="checkbox" id="share-config" checked>
+                                    <span>📜 Share Training Config in README</span>
+                                </label>
+                                <small style="color: #888; font-size: 0.85em; display: block; margin-left: 30px; margin-top: 5px;">
+                                    Embeds the (secret-stripped) training config in the model's README so others can reproduce your run with one click. Uncheck to keep your hyperparameters private.
+                                </small>
                             </div>
                         </div>
 
