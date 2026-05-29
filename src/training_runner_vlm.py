@@ -24,6 +24,7 @@ that the same upload machinery in the API layer can ship if requested.
 """
 import os
 import gc
+import json
 import logging
 from typing import Any, Optional, Tuple
 
@@ -169,6 +170,87 @@ def _load_image_caption_dataset(config: Any) -> Tuple[Dataset, Optional[Dataset]
 
 
 # ---------------------------------------------------------------------------
+# Stage-2: unified ArtemisMix corpus
+# ---------------------------------------------------------------------------
+
+class _ArtemisStage2Adapter:
+    """Lazy adapter: ArtemisMix unified row -> {images, messages} for the collator.
+
+    ArtemisMix rows carry `messages` (JSON-serialized chat with content lists)
+    and a nullable `image` (text-only L4 rows have image=None). Multimodal rows
+    embed `{"type":"image"}` placeholders in the user turn; text rows are plain
+    strings. The collator already tolerates image-less rows (no pixel_values).
+    """
+
+    def __init__(self, ds: Dataset, image_column: str = "image",
+                 messages_column: str = "messages") -> None:
+        self.ds = ds
+        self.image_column = image_column
+        self.messages_column = messages_column
+
+    def __len__(self) -> int:
+        return len(self.ds)
+
+    def __getitem__(self, idx: int) -> dict:
+        row = self.ds[idx]
+        msgs = row[self.messages_column]
+        if isinstance(msgs, str):            # ArtemisMix stores messages as JSON
+            msgs = json.loads(msgs)
+        img = row.get(self.image_column)
+        return {
+            "messages": msgs,
+            "images": [img] if img is not None else [],
+        }
+
+
+def _load_stage2_dataset(config: Any) -> Tuple[Dataset, Optional[Dataset]]:
+    """Load the ArtemisMix unified corpus for vlm_stage2.
+
+    Accepts either a local `save_to_disk` directory or an HF Hub repo id
+    (e.g. `schneewolflabs/ArtemisMix-v1`). Rows: `messages` (JSON str),
+    nullable `image`, plus `layer`/`source`/`reasoning` (ignored here).
+    """
+    dataset_cfg = config.dataset
+    repo_id = getattr(dataset_cfg.source, "repo_id", None) or dataset_cfg.source.path
+    split = getattr(dataset_cfg.source, "split", None) or "train"
+    token = config.hf_token or os.environ.get("HF_TOKEN")
+    max_samples = getattr(dataset_cfg, "max_samples", None)
+
+    logger.info(f"Loading Stage-2 (ArtemisMix) dataset: {repo_id} split={split}")
+
+    if os.path.isdir(repo_id) and os.path.exists(os.path.join(repo_id, "dataset_info.json")):
+        from datasets import load_from_disk
+        raw = load_from_disk(repo_id)
+        if hasattr(raw, "keys"):             # DatasetDict -> pick split
+            raw = raw[split]
+    else:
+        raw = load_dataset(repo_id, split=split, token=token)
+
+    # Drop pathologically long rows. A few % of L4 (competitive-programming
+    # code dumps, long GLM reasoning) reach 50k-90k tokens and would OOM a
+    # full-FFT batch. Cheap char proxy (~4 chars/token) avoids tokenizing all
+    # rows just to measure. Tune via config.max_seq_length (default 4096).
+    max_seq_len = getattr(config, "max_seq_length", None) or 4096
+    max_chars = max_seq_len * 4
+    before = len(raw)
+    raw = raw.filter(lambda r: len(r["messages"]) <= max_chars, num_proc=4)
+    logger.info(
+        f"  length filter (<= ~{max_seq_len} tok / {max_chars} chars): "
+        f"{before} -> {len(raw)} rows ({before - len(raw)} dropped)"
+    )
+
+    if max_samples and max_samples < len(raw):
+        raw = raw.shuffle(seed=config.seed).select(range(max_samples))
+        logger.info(f"  capped to {max_samples} samples (shuffled across layers)")
+
+    test_size = getattr(dataset_cfg, "test_size", 0.01) or 0.01
+    if len(raw) > 100 and test_size > 0:
+        split_out = raw.train_test_split(test_size=test_size, seed=config.seed)
+        return split_out["train"], split_out["test"]
+    return raw, None
+
+
+# ---------------------------------------------------------------------------
 # Model + processor assembly
 # ---------------------------------------------------------------------------
 
@@ -298,18 +380,29 @@ def run_vlm_training_sync(
 
         # ---- Build dataset ----
         job_manager.update_job(job_id, status="loading_dataset", progress=0.1)
-        train_raw, eval_raw = _load_image_caption_dataset(config)
-        instruction = config.instruction or "Describe this image."
-        image_column = config.image_column or "image"
-        caption_column = config.caption_column or "caption"
-
-        train_dataset = _ArtemisImageCaptionAdapter(
-            train_raw, image_column, caption_column, instruction
-        )
-        eval_dataset = (
-            _ArtemisImageCaptionAdapter(eval_raw, image_column, caption_column, instruction)
-            if eval_raw is not None else None
-        )
+        if stage == "stage2":
+            # Unified ArtemisMix corpus: messages (JSON) + nullable image.
+            train_raw, eval_raw = _load_stage2_dataset(config)
+            image_column = config.image_column or "image"
+            messages_column = getattr(config, "messages_column", None) or "messages"
+            train_dataset = _ArtemisStage2Adapter(train_raw, image_column, messages_column)
+            eval_dataset = (
+                _ArtemisStage2Adapter(eval_raw, image_column, messages_column)
+                if eval_raw is not None else None
+            )
+        else:
+            # Stage-1: image-caption corpus with a fixed instruction.
+            train_raw, eval_raw = _load_image_caption_dataset(config)
+            instruction = config.instruction or "Describe this image."
+            image_column = config.image_column or "image"
+            caption_column = config.caption_column or "caption"
+            train_dataset = _ArtemisImageCaptionAdapter(
+                train_raw, image_column, caption_column, instruction
+            )
+            eval_dataset = (
+                _ArtemisImageCaptionAdapter(eval_raw, image_column, caption_column, instruction)
+                if eval_raw is not None else None
+            )
         logger.info(
             f"Dataset: train={len(train_dataset)} "
             f"eval={len(eval_dataset) if eval_dataset else 0}"
