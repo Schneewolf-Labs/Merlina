@@ -287,14 +287,32 @@ export function buildTrainingConfig({ gpuManager = null, includeSecrets = true }
         // Pydantic schema so text/VLM jobs ignore them entirely. Read
         // unconditionally; saved presets still capture them so a
         // diffusion-trained preset round-trips.
-        // model_name is not collected here — diffusion runs reuse
-        // base_model (runner falls back when model_name is unset).
+        model_name:          null,  // diffusion runs reuse base_model; runner falls back when null
         image_resolution:    numOrNull('diffusion-image-resolution', parseInt),
         lora_rank:           numOrNull('diffusion-lora-rank', parseInt),
         lora_target_modules: (strList('diffusion-lora-target-modules').length
                               ? strList('diffusion-lora-target-modules') : null),
         dataset_jsonl_path:  str('diffusion-dataset-jsonl', '') || null,
         dataset_name:        str('diffusion-dataset-name', '') || null,
+        dataset_split:       null,  // wired when an explicit-split UI lands; null = HF default
+        sample_prompts:      null,  // power-user override for post-training preview prompts
+        sample_num_steps:    null,  // power-user override for preview denoise steps
+
+        // Artemis VLM fields. All Optional; UI inputs don't exist yet
+        // (VLM mode currently reuses the text dataset section, with
+        // these knobs driven by API clients). Null placeholders here
+        // satisfy the form_config↔TrainingConfig parity contract so
+        // saved presets that DID set them via the API round-trip.
+        vision_model_id:        null,
+        stage:                  null,
+        unfreeze_vision_top_n:  null,
+        image_token_id:         null,
+        min_pixels:             null,
+        max_pixels:             null,
+        image_column:           null,
+        caption_column:         null,
+        instruction:            null,
+        streaming:              null,
 
         // Secrets — always present in the dict so the contract is
         // deterministic. The values come from the form (or null) when
