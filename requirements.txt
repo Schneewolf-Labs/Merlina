@@ -16,11 +16,17 @@ python-multipart>=0.0.6
 # your pre-installed torch stack includes a matching torchvision build.
 transformers>=5.0.0
 accelerate>=0.24.0
+# grimoire-rl is on PyPI as `grimoire-rl` but PyPI is at 1.1.1 and Merlina
+# was developed against the git HEAD (1.2.0+). Keeping the git URL until a
+# 1.2.x tag is cut for PyPI.
 grimoire-rl @ git+https://github.com/Schneewolf-Labs/grimoire.git
-artemis-vlm @ git+https://github.com/Schneewolf-Labs/Artemis.git@v0.1.1    # ArtemisVLM model classes (Project Artemis); only loaded when training_mode starts with "vlm_"
+# ArtemisVLM model classes (Project Artemis); only loaded when training_mode
+# starts with "vlm_". Published as `artemis-vlm` on PyPI.
+artemis-vlm>=0.1.2
 # Diffusion training engine (sister project to grimoire). Drives the
 # 'diffusion' model_type path via src/training_runner_diffusion.py.
-atelier @ git+https://github.com/Schneewolf-Labs/atelier.git
+# Published as `atelier-diffusion` on PyPI; import name stays `atelier`.
+atelier-diffusion>=0.1.0
 diffusers>=0.34.0   # required by atelier (Qwen-Image pipelines need >=0.34)
 peft>=0.6.0
 bitsandbytes>=0.41.0
