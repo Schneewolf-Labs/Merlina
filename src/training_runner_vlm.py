@@ -569,7 +569,7 @@ def run_vlm_training_sync(
         job_manager.update_job(job_id, status="failed", error=str(e))
         send_websocket_update(
             websocket_manager.send_status_update(
-                job_id=job_id, status="failed", message=str(e),
+                job_id=job_id, status="failed", progress=1.0, message=str(e),
             ),
             event_loop,
         )
