@@ -698,34 +698,134 @@ class WebSocketCallback(TrainerCallback):
             self.job_manager.update_job(self.job_id, **update_data)
 
 
+# Trainer-side attribute names that commonly hold strong references back to
+# the model, optimizer state, or accelerator hooks. Clearing these before
+# `del trainer` is what actually lets `gc` reclaim the model — without it,
+# a partially-constructed trainer (e.g. when GrimoireTrainer.__init__ OOMs
+# inside prepare_model_for_kbit_training) keeps the model alive past the
+# finally block and the next queued job hits CUDA OOM at model load.
+_TRAINER_REF_ATTRS = (
+    "optimizer", "lr_scheduler", "scheduler",
+    "accelerator", "_accelerator",
+    "train_dataloader", "eval_dataloader",
+    "model", "ref_model", "_model",
+    "callbacks",
+)
+
+# Sub-module attributes an Atelier adapter may hold. The adapter itself
+# isn't an nn.Module, so we walk these to find the actual CUDA tensors.
+_DIFFUSION_ADAPTER_SUBMODULE_ATTRS = (
+    "transformer", "unet", "model",
+    "vae", "text_encoder", "text_encoder_2",
+    "image_encoder",
+)
+
+
+def _release_cuda_tensors(obj: Any) -> None:
+    """Replace any CUDA-resident param/buffer .data on ``obj`` with an empty
+    CPU tensor, and null out .grad.
+
+    This guarantees the CUDA storage is dropped even when external code
+    (gradient-checkpointing hooks, accelerator state, peft wrappers,
+    callbacks) keeps the Parameter/Buffer objects themselves alive past
+    `del model`. Without this, `gc.collect()` + `empty_cache()` cannot
+    reclaim the VRAM and the next queued job OOMs.
+
+    Safe to call on partially-constructed models (e.g. after peft's
+    prepare_model_for_kbit_training has half-cast params to fp32).
+    """
+    try:
+        params_iter = getattr(obj, "parameters", None)
+        if callable(params_iter):
+            for p in params_iter(recurse=True):
+                try:
+                    if p.device.type == "cuda":
+                        p.data = torch.empty(0, device="cpu")
+                    if p.grad is not None:
+                        p.grad = None
+                except Exception:
+                    continue
+        buffers_iter = getattr(obj, "buffers", None)
+        if callable(buffers_iter):
+            for b in buffers_iter(recurse=True):
+                try:
+                    if b.device.type == "cuda":
+                        b.data = torch.empty(0, device="cpu")
+                except Exception:
+                    continue
+    except Exception:
+        # Cleanup is best-effort; never let a partial model's broken
+        # __getattr__ mask the original training failure.
+        pass
+
+
 def _cleanup_training_resources(model: Optional[Any], trainer: Optional[Any]) -> None:
     """
     Clean up training resources to free GPU memory.
 
-    This function safely deletes model and trainer objects and clears
-    CUDA cache to prevent OOM errors in subsequent training jobs.
+    Drops trainer-internal references that would otherwise pin the model,
+    then forcibly releases the model's CUDA storage by replacing param +
+    buffer .data with empty CPU tensors. This is required because the
+    naive `del model; gc.collect(); empty_cache()` sequence does *not*
+    free VRAM when something (peft hooks, accelerator state, a partially
+    initialized trainer) still references the Parameter objects.
+
+    Works on:
+        * transformers/grimoire models (nn.Module)
+        * Artemis VLM models (nn.Module)
+        * Atelier diffusion adapters (non-Module wrappers with sub-models
+          like `.transformer`, `.vae`, `.text_encoder`)
 
     Args:
-        model: The model object to clean up (can be None)
+        model: The model or diffusion adapter to clean up (can be None)
         trainer: The trainer object to clean up (can be None)
     """
     try:
-        # Delete trainer first as it may hold references to model
+        # 1. Drop trainer-internal references first so the trainer stops
+        #    pinning the model + optimizer state.
         if trainer is not None:
-            del trainer
+            for attr in _TRAINER_REF_ATTRS:
+                try:
+                    if hasattr(trainer, attr):
+                        setattr(trainer, attr, None)
+                except Exception:
+                    continue
+            try:
+                del trainer
+            except Exception:
+                pass
             logger.debug("Trainer cleaned up")
 
-        # Then delete model
+        # 2. Forcibly release CUDA tensors on the model itself.
         if model is not None:
-            del model
+            _release_cuda_tensors(model)
+            # Atelier adapter case: walk its sub-models too.
+            for attr in _DIFFUSION_ADAPTER_SUBMODULE_ATTRS:
+                sub = getattr(model, attr, None)
+                if sub is not None and sub is not model:
+                    _release_cuda_tensors(sub)
+            try:
+                del model
+            except Exception:
+                pass
             logger.debug("Model cleaned up")
 
-        # Force garbage collection
-        gc.collect()
+        # 3. Multiple gc passes to break circular refs created by hooks /
+        #    callbacks / accelerator state.
+        for _ in range(3):
+            gc.collect()
 
-        # Clear CUDA cache if available
+        # 4. Release CUDA caching allocator memory back to the driver.
         if torch.cuda.is_available():
+            try:
+                torch.cuda.synchronize()
+            except Exception:
+                pass
             torch.cuda.empty_cache()
+            try:
+                torch.cuda.ipc_collect()
+            except Exception:
+                pass
             logger.debug("GPU memory cleaned up")
 
     except Exception as cleanup_error:

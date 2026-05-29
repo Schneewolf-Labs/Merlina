@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.1] - 2026-05-29 "Workshop"
+
+### Fixed
+- **GPU memory leak after failed training jobs**. When a job died mid-load — e.g. `prepare_model_for_kbit_training` OOMing inside `GrimoireTrainer.__init__` on a 25B MoE — the previous job's ~46 GiB of CUDA tensors stayed allocated and the next queued job hit `CUDA out of memory` at model load. Root cause: a partially-constructed trainer (optimizer / accelerator / dataloader / `trainer.model` attrs) kept strong references to model parameters past the `finally` block's `del model; gc.collect(); empty_cache()`, so the caching allocator couldn't release the memory. Fix: `_cleanup_training_resources` in `src/training_runner.py` now (a) nulls a known set of trainer ref-holding attributes (`optimizer`, `lr_scheduler`, `accelerator`, `train_dataloader`, `eval_dataloader`, `model`, `ref_model`, `callbacks`) before `del trainer`, and (b) forcibly replaces every CUDA-resident `param.data` / `buffer.data` with an empty CPU tensor before `del model`, guaranteeing the CUDA storage is dropped even when peft hooks / accelerator state / callbacks still hold the `Parameter` objects. For Atelier diffusion adapters (which aren't `nn.Module` themselves) the helper now walks known sub-model attributes (`transformer`, `unet`, `model`, `vae`, `text_encoder`, `text_encoder_2`, `image_encoder`) and releases each. Three `gc.collect()` passes break circular refs created by gradient-checkpointing hooks. The shared helper is used by all three runners (text / VLM / diffusion), so Atelier and Artemis benefit automatically.
+- **Single-GPU MoE 4-bit load failures**: `device_map="auto"` was occasionally spilling MoE experts to CPU on single-GPU rigs even with plenty of headroom, after which bnb 4-bit refused the dispatch with "Some modules are dispatched on the CPU or the disk." Now uses `device_map={"": 0}` whenever `torch.cuda.device_count() == 1`, bypassing the auto-dispatcher's conservative per-module estimates. Multi-GPU setups still get `"auto"` for sharding.
+
+### Added
+- **`tests/test_cleanup.py`**: 14 unit tests for `_cleanup_training_resources` and the new `_release_cuda_tensors` helper. Cover the None-safety / partial-trainer / mixed CPU+CUDA / broken-iterator / adapter-self-reference / weakref-collection cases. CPU-only — runs under the existing conftest torch mock via sentinel-based reassignment checks.
+
 ## [2.0.0] - 2026-05-24 "Workshop"
 
 ### Added
