@@ -463,7 +463,11 @@ class ConfigManager {
             if (neftuneEl) neftuneEl.value = '';
         }
 
-        // Dataset config
+        // Dataset config — source restoration is handled by the dataset-cards
+        // system (introduced in PR #75's centralization), not by raw-input
+        // setters here. PR 54's streaming flag round-trips through that path
+        // (DatasetSource.streaming on the Pydantic side; the dataset card UI
+        // pulls it back via DatasetManager.restoreFromConfig).
         if (config.dataset) {
             if (config.dataset.format) {
                 this.setInputValue('dataset-format-type', config.dataset.format.format_type || 'tokenizer');

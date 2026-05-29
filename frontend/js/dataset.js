@@ -316,6 +316,13 @@ class DatasetManager {
             group.classList.remove('field-disabled');
             select.disabled = false;
         }
+        // Note: PR 54 originally toggled #streaming-group visibility here
+        // based on `sourceType`, but this function gets called with `mode`
+        // (training mode), not a source type — `sourceType` is undefined
+        // and breaks page load. The streaming checkbox is per-card-source
+        // semantically; for the dataset-cards UI it's simpler to just
+        // leave the global checkbox always visible and let the user pick.
+        // getDatasetConfig() only applies it when the first card is HF.
     }
 
     /**
@@ -734,6 +741,16 @@ class DatasetManager {
 
         const maxSamples = document.getElementById('max-samples')?.value;
         if (maxSamples) config.max_samples = parseInt(maxSamples);
+
+        // Streaming mode (global checkbox; PR 54). Pre-PR-75 the source
+        // type lived in a single dropdown so the check was inline; the
+        // dataset-cards system now builds source via readCardSource(), so
+        // we apply the streaming flag post-hoc only when the first card
+        // is a HuggingFace source. Per-card streaming is a 2.0.x follow-up.
+        if (document.getElementById('dataset-streaming')?.checked
+            && config.source?.source_type === 'huggingface') {
+            config.source.streaming = true;
+        }
 
         config.deduplicate = document.getElementById('deduplicate')?.checked ?? false;
         config.dedupe_strategy = document.getElementById('dedupe-strategy')?.value || 'prompt_chosen';

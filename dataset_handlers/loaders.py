@@ -15,6 +15,7 @@ from typing import Optional, Union, List, Dict
 import logging
 
 from datasets import load_dataset, Dataset
+import pyarrow as pa
 from .base import DatasetLoader
 
 logger = logging.getLogger(__name__)
@@ -86,6 +87,126 @@ class HuggingFaceLoader(DatasetLoader):
             "source_type": "huggingface",
             "repo_id": self.repo_id,
             "split": self.split
+        }
+
+
+class StreamingHuggingFaceLoader(DatasetLoader):
+    """
+    Load dataset from HuggingFace Hub using streaming mode.
+
+    Instead of downloading the entire dataset into memory at once, this loader
+    streams rows in batches and materializes them incrementally. This is useful
+    for large datasets (100k+ rows) that would otherwise cause OOM errors.
+
+    The loader buffers rows into batches and builds a PyArrow-backed Dataset,
+    keeping peak memory usage proportional to batch_size rather than dataset size.
+
+    Example:
+        >>> loader = StreamingHuggingFaceLoader("bigcode/starcoderdata", max_samples=100000)
+        >>> dataset = loader.load()  # Streams and materializes up to 100k rows
+    """
+
+    DEFAULT_BATCH_SIZE = 10000
+
+    def __init__(
+        self,
+        repo_id: str,
+        split: str = "train",
+        token: Optional[str] = None,
+        max_samples: Optional[int] = None,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+    ) -> None:
+        """
+        Initialize streaming HuggingFace dataset loader.
+
+        Args:
+            repo_id: HuggingFace repository ID (e.g., "schneewolflabs/Athanorlite-DPO")
+            split: Dataset split to load (default: "train")
+            token: Optional HuggingFace API token for private/gated datasets
+            max_samples: Maximum number of rows to load. Required for streaming mode
+                        to prevent accidentally loading billions of rows. If None,
+                        loads the entire dataset (use with caution).
+            batch_size: Number of rows to buffer before flushing to the Arrow table.
+                       Higher values use more memory but are faster. Default: 10000.
+        """
+        self.repo_id = repo_id
+        self.split = split
+        self.token = token
+        self.max_samples = max_samples
+        self.batch_size = batch_size
+
+    def load(self) -> Dataset:
+        """
+        Load dataset from HuggingFace Hub via streaming.
+
+        Streams rows from the dataset and materializes them into a regular
+        Dataset object in batches. If max_samples is set, stops after
+        collecting that many rows.
+
+        Returns:
+            The loaded Dataset
+
+        Raises:
+            ValueError: If the dataset cannot be loaded or stream is empty
+        """
+        logger.info(
+            f"Streaming dataset from HuggingFace: {self.repo_id} "
+            f"(split: {self.split}, max_samples: {self.max_samples})"
+        )
+
+        try:
+            iterable_dataset = load_dataset(
+                self.repo_id,
+                split=self.split,
+                token=self.token,
+                streaming=True,
+            )
+
+            # Materialize streaming dataset into batches
+            rows = []
+            tables = []
+            count = 0
+
+            for row in iterable_dataset:
+                rows.append(row)
+                count += 1
+
+                # Flush batch to Arrow table to keep memory bounded
+                if len(rows) >= self.batch_size:
+                    tables.append(pa.Table.from_pylist(rows))
+                    logger.info(f"  Streamed {count} rows so far...")
+                    rows = []
+
+                if self.max_samples and count >= self.max_samples:
+                    break
+
+            # Flush remaining rows
+            if rows:
+                tables.append(pa.Table.from_pylist(rows))
+
+            if not tables:
+                raise ValueError(f"Dataset '{self.repo_id}' (split: {self.split}) returned no rows")
+
+            # Concatenate all Arrow tables and wrap as Dataset
+            combined_table = pa.concat_tables(tables)
+            dataset = Dataset(combined_table)
+
+            logger.info(f"Successfully streamed {len(dataset)} samples from {self.repo_id}")
+            return dataset
+
+        except Exception as e:
+            logger.error(f"Failed to stream dataset from HuggingFace: {e}")
+            raise ValueError(f"Failed to stream dataset '{self.repo_id}': {str(e)}")
+
+    def get_source_info(self) -> dict:
+        """Get information about the dataset source."""
+        return {
+            "source_type": "huggingface",
+            "repo_id": self.repo_id,
+            "split": self.split,
+            "streaming": True,
+            "max_samples": self.max_samples,
+            "batch_size": self.batch_size,
         }
 
 

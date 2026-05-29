@@ -9,7 +9,7 @@ from typing import Dict, Optional, Tuple, Any
 import logging
 
 from .base import DatasetLoader, DatasetPipeline
-from .loaders import HuggingFaceLoader, LocalFileLoader, UploadedDatasetLoader
+from .loaders import HuggingFaceLoader, StreamingHuggingFaceLoader, LocalFileLoader, UploadedDatasetLoader
 from .formatters import get_formatter
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,9 @@ def create_loader(
     file_format: Optional[str] = None,
     dataset_id: Optional[str] = None,
     uploaded_datasets: Optional[Dict[str, Tuple[bytes, str]]] = None,
-    hf_token: Optional[str] = None
+    hf_token: Optional[str] = None,
+    streaming: bool = False,
+    streaming_batch_size: int = 10000,
 ) -> DatasetLoader:
     """
     Create a dataset loader based on source type.
@@ -42,6 +44,8 @@ def create_loader(
         dataset_id: ID of uploaded dataset (required for upload source)
         uploaded_datasets: Dict mapping dataset_id to (content, filename) tuples
         hf_token: HuggingFace API token for private datasets
+        streaming: Use streaming mode for HuggingFace datasets (for large datasets)
+        streaming_batch_size: Batch size for streaming materialization (default: 10000)
 
     Returns:
         Configured DatasetLoader instance
@@ -52,6 +56,13 @@ def create_loader(
     if source_type == "huggingface":
         if not repo_id:
             raise LoaderCreationError("repo_id is required for huggingface source")
+        if streaming:
+            return StreamingHuggingFaceLoader(
+                repo_id=repo_id,
+                split=split,
+                token=hf_token,
+                batch_size=streaming_batch_size,
+            )
         return HuggingFaceLoader(
             repo_id=repo_id,
             split=split,
@@ -129,6 +140,8 @@ def create_loader_from_config(
             'file_path': getattr(source_config, 'file_path', None),
             'file_format': getattr(source_config, 'file_format', None),
             'dataset_id': getattr(source_config, 'dataset_id', None),
+            'streaming': getattr(source_config, 'streaming', False),
+            'streaming_batch_size': getattr(source_config, 'streaming_batch_size', 10000),
         }
 
     return create_loader(
@@ -139,7 +152,9 @@ def create_loader_from_config(
         file_format=config_dict.get('file_format'),
         dataset_id=config_dict.get('dataset_id'),
         uploaded_datasets=uploaded_datasets,
-        hf_token=hf_token
+        hf_token=hf_token,
+        streaming=config_dict.get('streaming', False),
+        streaming_batch_size=config_dict.get('streaming_batch_size', 10000),
     )
 
 
