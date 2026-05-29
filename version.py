@@ -7,7 +7,7 @@ MINOR version: Backwards-compatible functionality additions
 PATCH version: Backwards-compatible bug fixes
 """
 
-__version__ = "1.8.0"
+__version__ = "1.8.1"
 __version_info__ = tuple(int(i) for i in __version__.split("."))
 
 # Version metadata
