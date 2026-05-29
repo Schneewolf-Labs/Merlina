@@ -260,11 +260,30 @@ def _load_artemis_model_and_processor(
 ) -> Tuple[ArtemisVLMForConditionalGeneration, ArtemisVLMProcessor, Any]:
     """Build Artemis VLM (text + vision + projector) and matching processor.
 
-    `config.base_model` is the A-series text decoder; `config.vision_model_id`
+    Stage-1: `config.base_model` is the A-series text decoder; `config.vision_model_id`
     is the source of the pretrained Qwen3-VL ViT (the decoder of that model
     is dropped). The projector is fresh, the vision tower is the pretrained
     ViT, the language model is the A-series decoder unchanged.
+
+    Stage-2: `config.base_model` is a saved A3 (Stage-1) ArtemisVLM checkpoint;
+    we reload it via from_pretrained so the *trained* projector + decoder + ViT
+    continue into the full fine-tune (a fresh projector would discard Stage-1).
     """
+    stage = (getattr(config, "stage", None) or "stage1").lower()
+
+    if stage == "stage2":
+        ckpt = config.base_model  # an ArtemisVLM (A3) checkpoint directory
+        logger.info(f"Loading Artemis Stage-2 checkpoint (continue from A3): {ckpt}")
+        model = ArtemisVLMForConditionalGeneration.from_pretrained(ckpt, dtype=torch_dtype)
+        tokenizer = AutoTokenizer.from_pretrained(ckpt, trust_remote_code=True)
+        processor = ArtemisVLMProcessor(
+            tokenizer=tokenizer,
+            vision_config=model.config.vision_config,
+            min_pixels=(config.min_pixels or 32 * 32),
+            max_pixels=(config.max_pixels or 512 * 512),
+        )
+        return model, processor, tokenizer
+
     from transformers import Qwen3VLForConditionalGeneration
 
     text_path = config.base_model
