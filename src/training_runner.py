@@ -1266,12 +1266,19 @@ def run_training_sync(
         model_type = getattr(config, 'model_type', 'auto')
         auto_model_cls, is_vlm = _get_auto_model_class(config.base_model, model_type)
 
+        # Single-GPU rigs: pin everything to cuda:0 to avoid accelerate's auto-dispatch
+        # spilling MoE experts to CPU (bnb 4-bit refuses any CPU/disk-resident modules).
+        if torch.cuda.is_available() and torch.cuda.device_count() == 1:
+            device_map = {"": 0}
+        else:
+            device_map = "auto"
+
         model = auto_model_cls.from_pretrained(
             config.base_model,
             quantization_config=bnb_config,
             attn_implementation=attn_implementation,
             dtype=torch_dtype if not bnb_config else None,
-            device_map="auto",
+            device_map=device_map,
             trust_remote_code=True,
         )
 
