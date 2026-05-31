@@ -1398,9 +1398,17 @@ async def upload_job(job_id: str, request: UploadJobRequest):
     # Start upload in background thread
     from src.training_runner import _run_background_upload
 
+    # Diffusion jobs need the is_diffusion flag so the helper skips the
+    # LLM merge path and the model card renders for diffusers.
+    is_diffusion = (
+        getattr(config, "model_type", "") == "diffusion"
+        or training_mode.lower().startswith("diffusion_")
+    )
+
     upload_thread = threading.Thread(
         target=_run_background_upload,
         args=(config, output_dir, training_mode, job_id, job_manager, event_loop),
+        kwargs={"is_diffusion": is_diffusion},
         name=f"UploadThread-{job_id}",
         daemon=False
     )
