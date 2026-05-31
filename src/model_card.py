@@ -23,7 +23,12 @@ from src.config_manager import (
 logger = logging.getLogger(__name__)
 
 
-def generate_model_readme(config: Any, training_mode: str, is_vlm: bool = False) -> str:
+def generate_model_readme(
+    config: Any,
+    training_mode: str,
+    is_vlm: bool = False,
+    is_diffusion: bool = False,
+) -> str:
     """
     Generate a README.md for the HuggingFace model card.
 
@@ -32,42 +37,67 @@ def generate_model_readme(config: Any, training_mode: str, is_vlm: bool = False)
 
     Args:
         config: Training configuration object
-        training_mode: 'sft' or 'orpo'
+        training_mode: 'sft' or 'orpo' for LLM/VLM, 'diffusion_qwen_image' etc.
+            for diffusion
         is_vlm: Whether the model is a vision-language model
+        is_diffusion: Whether the model is a diffusion LoRA (Qwen-Image,
+            Qwen-Image-Edit, SDXL). Switches library / pipeline_tag, picks
+            base_model from config.model_name, and embeds a sample preview.
 
     Returns:
         README content as a string
     """
-    # Extract base model name (handle both HF IDs and local paths)
-    base_model = config.base_model
+    # Diffusion runs put the base model in `model_name`; LLM/VLM runs use
+    # `base_model`. Fall back the other way for safety.
+    if is_diffusion:
+        base_model = getattr(config, "model_name", None) or getattr(config, "base_model", "")
+    else:
+        base_model = config.base_model
     if is_local_model_path(base_model):
         # For local models, just use the directory name
         base_model_display = os.path.basename(base_model.rstrip('/'))
     else:
         base_model_display = base_model
 
-    # Build YAML frontmatter
-    frontmatter_lines = [
-        "---",
-        "library_name: transformers",
-    ]
-
-    # Set pipeline_tag so HuggingFace correctly classifies the model
-    if is_vlm:
-        frontmatter_lines.append("pipeline_tag: image-text-to-text")
+    # Build YAML frontmatter — library/pipeline differ across the three
+    # model families so HF classifies the repo correctly.
+    frontmatter_lines = ["---"]
+    if is_diffusion:
+        frontmatter_lines.append("library_name: diffusers")
+        # Edit adapter is image-conditioned; Qwen-Image and SDXL are pure T2I.
+        if "edit" in training_mode.lower():
+            frontmatter_lines.append("pipeline_tag: image-to-image")
+        else:
+            frontmatter_lines.append("pipeline_tag: text-to-image")
     else:
-        frontmatter_lines.append("pipeline_tag: text-generation")
+        frontmatter_lines.append("library_name: transformers")
+        if is_vlm:
+            frontmatter_lines.append("pipeline_tag: image-text-to-text")
+        else:
+            frontmatter_lines.append("pipeline_tag: text-generation")
 
     # Add keyword tags for discoverability
     frontmatter_lines.append("tags:")
     frontmatter_lines.append("- merlina")
-    frontmatter_lines.append("- grimoire")
-    if is_vlm:
-        frontmatter_lines.append("- image-text-to-text")
-        frontmatter_lines.append("- vision-language-model")
+    if is_diffusion:
+        frontmatter_lines.append("- atelier")
+        frontmatter_lines.append("- lora")
+        frontmatter_lines.append("- diffusion")
+        if "edit" in training_mode.lower():
+            frontmatter_lines.append("- image-to-image")
+        elif "sdxl" in training_mode.lower():
+            frontmatter_lines.append("- stable-diffusion-xl")
+            frontmatter_lines.append("- text-to-image")
+        else:
+            frontmatter_lines.append("- text-to-image")
     else:
-        frontmatter_lines.append("- text-generation")
-    frontmatter_lines.append(f"- {training_mode.lower()}")  # sft or orpo
+        frontmatter_lines.append("- grimoire")
+        if is_vlm:
+            frontmatter_lines.append("- image-text-to-text")
+            frontmatter_lines.append("- vision-language-model")
+        else:
+            frontmatter_lines.append("- text-generation")
+    frontmatter_lines.append(f"- {training_mode.lower()}")
 
     # Add dataset info if using HuggingFace dataset(s). Includes every
     # HuggingFace source the user concatenated — primary + additional.
@@ -146,17 +176,24 @@ def generate_model_readme(config: Any, training_mode: str, is_vlm: bool = False)
         if row:
             config_lines.append(row)
 
-    # Add LoRA params if enabled
-    if getattr(config, "use_lora", False):
+    # Add LoRA params. Diffusion runs always use LoRA and write to
+    # `lora_rank` / `lora_target_modules`; LLM/VLM runs gate on use_lora
+    # and write to `lora_r` / `target_modules`.
+    if is_diffusion or getattr(config, "use_lora", False):
+        rank_attr = "lora_rank" if is_diffusion else "lora_r"
+        rank_label = "LoRA Rank" if is_diffusion else "LoRA Rank (r)"
         for label, attr in (
-            ("LoRA Rank (r)", "lora_r"),
+            (rank_label, rank_attr),
             ("LoRA Alpha", "lora_alpha"),
             ("LoRA Dropout", "lora_dropout"),
         ):
             row = _row(label, getattr(config, attr, _MISSING))
             if row:
                 config_lines.append(row)
-        target_modules = getattr(config, "target_modules", _MISSING)
+        if is_diffusion and getattr(config, "lora_use_dora", False):
+            config_lines.append("| DoRA | true (Weight-Decomposed LoRA) |")
+        targets_attr = "lora_target_modules" if is_diffusion else "target_modules"
+        target_modules = getattr(config, targets_attr, _MISSING)
         if target_modules is not _MISSING and target_modules:
             config_lines.append(f"| Target Modules | {', '.join(target_modules)} |")
 
@@ -188,6 +225,14 @@ def generate_model_readme(config: Any, training_mode: str, is_vlm: bool = False)
         '\n'.join(config_lines),
     ]
 
+    # Diffusion: usage snippet + sample preview so the model card actually
+    # tells someone how to load it. The preview image references the LoRA's
+    # samples/sample_00.png (the post-training renderer always writes this).
+    if is_diffusion:
+        usage = _build_diffusion_usage_section(config, training_mode, base_model)
+        if usage:
+            readme_parts.extend(["", usage])
+
     # If multiple datasets were concatenated, surface them in a body section
     # so readers see more than just the YAML frontmatter.
     dataset_section = _build_dataset_section(config)
@@ -213,6 +258,54 @@ def generate_model_readme(config: Any, training_mode: str, is_vlm: bool = False)
     ])
 
     return '\n'.join(readme_parts)
+
+
+def _build_diffusion_usage_section(config: Any, training_mode: str, base_model: str) -> str:
+    """Render a "How to use this LoRA" block for diffusion model cards.
+
+    Includes a sample preview image (samples/sample_00.png, written by the
+    post-training renderer) and a minimal diffusers usage snippet keyed to
+    the adapter family. Returns "" if anything required is missing.
+    """
+    if not base_model:
+        return ""
+
+    mode_lc = training_mode.lower()
+    # Pick the right pipeline class for the snippet. Match the same
+    # adapter-family mapping the runner uses.
+    if "qwen_edit" in mode_lc or mode_lc == "diffusion_qwen_edit":
+        pipeline_cls = "QwenImageEditPipeline"
+    elif "qwen_image" in mode_lc or mode_lc == "diffusion_qwen_image":
+        pipeline_cls = "QwenImagePipeline"
+    elif "sdxl" in mode_lc:
+        pipeline_cls = "StableDiffusionXLPipeline"
+    else:
+        pipeline_cls = "DiffusionPipeline"
+
+    output_name = getattr(config, "output_name", "")
+    parts = ["## Sample", ""]
+    parts.append("![preview](samples/sample_00.png)")
+    parts.extend([
+        "",
+        "More samples — including mid-training snapshots if `mid_training_samples` "
+        "was enabled — are in the `samples/` directory of this repo.",
+        "",
+        "## Usage",
+        "",
+        "```python",
+        "import torch",
+        f"from diffusers import {pipeline_cls}",
+        "",
+        f'pipe = {pipeline_cls}.from_pretrained("{base_model}", torch_dtype=torch.bfloat16)',
+        'pipe.enable_model_cpu_offload()  # fits Qwen-Image on a 24GB card; drop for SDXL',
+        "",
+        f'pipe.load_lora_weights("{output_name}")',
+        "",
+        'image = pipe(prompt="…your prompt here…", num_inference_steps=25).images[0]',
+        'image.save("out.png")',
+        "```",
+    ])
+    return "\n".join(parts)
 
 
 def _build_share_config_section(config: Any) -> str:

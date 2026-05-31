@@ -532,12 +532,16 @@ def run_diffusion_training_sync(
             except Exception as e:
                 logger.warning(f"Sample generation failed (non-fatal): {e}")
 
+        # Record where the LoRA actually lives — the manual /jobs/{id}/upload
+        # endpoint reads job.output_dir to find the artifact, and Atelier's
+        # checkpoint dir under ./results/ is the wrong target.
         job_manager.update_job(
             job_id,
             status="stopped" if was_stopped else "completed",
             progress=1.0,
             current_step=final_step,
             total_steps=final_max_steps,
+            output_dir=final_output_dir,
         )
         send_websocket_update(
             websocket_manager.send_status_update(
@@ -549,6 +553,24 @@ def run_diffusion_training_sync(
             ),
             event_loop,
         )
+
+        # Auto-upload to HuggingFace Hub when push_to_hub is set and we have
+        # a token. Mirrors the LLM/VLM runner's behavior. Background thread
+        # so the queue worker can move on.
+        if (not was_stopped
+                and bool(getattr(config, "push_to_hub", False))
+                and getattr(config, "hf_token", None)):
+            import threading
+            from src.training_runner import _run_background_upload
+            logger.info("📤 Auto-upload: starting background HF Hub upload thread")
+            threading.Thread(
+                target=_run_background_upload,
+                args=(config, final_output_dir, config.training_mode,
+                      job_id, job_manager, event_loop),
+                kwargs={"is_diffusion": True},
+                name=f"DiffusionUploadThread-{job_id}",
+                daemon=False,
+            ).start()
 
     except Exception as e:
         logger.exception(f"Diffusion training failed: {e}")

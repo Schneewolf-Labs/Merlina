@@ -187,6 +187,7 @@ def _run_background_upload(
     is_vlm: bool = False,
     *,
     merge_artifact: Optional["_MergeArtifact"] = None,
+    is_diffusion: bool = False,
 ) -> None:
     """
     Run HuggingFace Hub upload in a background thread.
@@ -199,7 +200,8 @@ def _run_background_upload(
     Args:
         config: Training configuration
         final_output_dir: Path to saved model
-        training_mode: Training method name (sft, orpo, dpo, simpo, cpo, ipo)
+        training_mode: Training method name (sft, orpo, dpo, simpo, cpo,
+            ipo, diffusion_qwen_image, diffusion_qwen_edit, diffusion_sdxl)
         job_id: Job identifier
         job_manager: JobManager for status updates
         event_loop: Event loop for WebSocket updates
@@ -207,6 +209,10 @@ def _run_background_upload(
         merge_artifact: Pre-merged checkpoint produced by the sync merge
             step. ``path=None`` indicates the merge failed and we should
             fall back to adapter-only upload.
+        is_diffusion: Whether this is a diffusion-LoRA upload. Skips merge
+            logic entirely (diffusion LoRAs are uploaded as plain folders),
+            uses a diffusers-tagged README, and emits a diffusion-shaped
+            usage hint in the logs.
     """
     try:
         logger.info(f"🚀 Starting background upload for job {job_id}")
@@ -236,8 +242,23 @@ def _run_background_upload(
         full_repo_id = repo_url.repo_id
         logger.info(f"📦 Repository ready: {full_repo_id}")
 
-        # Handle upload based on whether LoRA was used and merge preference
-        if config.use_lora and config.merge_lora_before_upload:
+        # Diffusion LoRAs are uploaded as plain folders — no merge path
+        # exists (would require loading a 38 GiB transformer just to bake
+        # the LoRA in, which we'd rather not do here), and the folder
+        # already contains pytorch_lora_weights.safetensors + samples/.
+        if is_diffusion:
+            logger.info(f"📤 Uploading diffusion LoRA to HuggingFace Hub as {repo_visibility} repository...")
+            logger.info(f"   Repository: {full_repo_id}")
+            api.upload_folder(
+                folder_path=final_output_dir,
+                repo_id=full_repo_id,
+                token=config.hf_token,
+                commit_message=f"Upload diffusion LoRA trained with Merlina ({training_mode})",
+            )
+            logger.info("✅ Diffusion LoRA uploaded successfully!")
+            logger.info(f"💡 To use: pipe.load_lora_weights('{config.output_name}')")
+        # Handle LLM/VLM upload based on whether LoRA was used and merge preference
+        elif config.use_lora and config.merge_lora_before_upload:
             # The merge already happened synchronously upstream. Use the
             # shared artifact dir directly. If the merge failed, drop
             # back to adapter-only upload — same fallback as before, just
@@ -298,7 +319,9 @@ def _run_background_upload(
         hub_url = f"https://huggingface.co/{full_repo_id}"
         logger.info(f"🎉 Model published at: {hub_url}")
         logger.info("📝 Generating model card README...")
-        readme_content = generate_model_readme(config, training_mode, is_vlm=is_vlm)
+        readme_content = generate_model_readme(
+            config, training_mode, is_vlm=is_vlm, is_diffusion=is_diffusion,
+        )
         upload_model_readme(full_repo_id, readme_content, config.hf_token)
 
         # Record the upload in the per-model sidecar so the Export UI
@@ -306,7 +329,9 @@ def _run_background_upload(
         try:
             from .upload_state import record_upload
             artifact_labels = []
-            if config.use_lora and config.merge_lora_before_upload and merge_artifact and merge_artifact.path:
+            if is_diffusion:
+                artifact_labels.append("diffusion_lora")
+            elif config.use_lora and config.merge_lora_before_upload and merge_artifact and merge_artifact.path:
                 artifact_labels.append("merged")
             elif config.use_lora:
                 artifact_labels.append("adapter")

@@ -428,6 +428,90 @@ def test_readme_no_datasets_body_section_for_single():
     print()
 
 
+class MockDiffusionConfig(BaseModel):
+    """Minimal config shaped like the diffusion-mode TrainingConfig."""
+    output_name: str = "test-flame-lora"
+    model_name: str = "Qwen/Qwen-Image"
+    base_model: str = ""
+    training_mode: str = "diffusion_qwen_image"
+    learning_rate: float = 1e-4
+    num_epochs: int = 8
+    batch_size: int = 1
+    gradient_accumulation_steps: int = 2
+    optimizer_type: str = "adafactor"
+    lr_scheduler_type: str = "cosine"
+    warmup_ratio: float = 0.05
+    weight_decay: float = 0.0
+    max_grad_norm: float = 1.0
+    seed: int = 42
+    lora_rank: int = 32
+    lora_alpha: int = 64
+    lora_dropout: float = 0.05
+    lora_use_dora: bool = True
+    lora_target_modules: list = ["to_k", "to_q", "to_v", "to_out.0"]
+    use_lora: bool = True
+    dataset: MockDatasetConfig = Field(default_factory=MockDatasetConfig)
+
+
+def test_readme_diffusion_frontmatter():
+    """Diffusion runs swap library / pipeline_tag / tags for the diffusers stack."""
+    config = MockDiffusionConfig()
+    readme = generate_model_readme(config, "diffusion_qwen_image", is_diffusion=True)
+
+    assert "library_name: diffusers" in readme, "diffusion README must declare diffusers"
+    assert "library_name: transformers" not in readme, "transformers tag would mis-classify the repo"
+    assert "pipeline_tag: text-to-image" in readme
+    assert "- atelier" in readme, "atelier tag instead of grimoire for diffusion"
+    assert "- grimoire" not in readme
+    assert "- diffusion" in readme
+    assert "- lora" in readme
+    assert "- Qwen/Qwen-Image" in readme, "base_model must come from config.model_name for diffusion"
+
+
+def test_readme_diffusion_edit_uses_image_to_image():
+    """The Qwen-Image-Edit adapter is image-conditioned; pipeline_tag reflects that."""
+    config = MockDiffusionConfig(training_mode="diffusion_qwen_edit")
+    readme = generate_model_readme(config, "diffusion_qwen_edit", is_diffusion=True)
+    assert "pipeline_tag: image-to-image" in readme
+    assert "- image-to-image" in readme
+
+
+def test_readme_diffusion_uses_lora_rank_field():
+    """Diffusion configs store the rank in `lora_rank`, not `lora_r`."""
+    config = MockDiffusionConfig(lora_rank=48)
+    readme = generate_model_readme(config, "diffusion_qwen_image", is_diffusion=True)
+    assert "| LoRA Rank | 48 |" in readme, "should read from lora_rank"
+
+
+def test_readme_diffusion_dora_flag():
+    """DoRA gets its own row when use_dora is enabled."""
+    config = MockDiffusionConfig(lora_use_dora=True)
+    readme = generate_model_readme(config, "diffusion_qwen_image", is_diffusion=True)
+    assert "DoRA" in readme and "true" in readme
+
+
+def test_readme_diffusion_usage_block():
+    """The diffusion model card embeds a sample image + usage snippet."""
+    config = MockDiffusionConfig(output_name="my-flame")
+    readme = generate_model_readme(config, "diffusion_qwen_image", is_diffusion=True)
+
+    assert "## Sample" in readme
+    assert "samples/sample_00.png" in readme, "preview image must reference the standard sample filename"
+    assert "## Usage" in readme
+    assert "QwenImagePipeline" in readme
+    assert "load_lora_weights" in readme
+    assert "my-flame" in readme, "usage snippet must reference the actual LoRA name"
+
+
+def test_readme_diffusion_sdxl_pipeline_snippet():
+    """SDXL uses a different pipeline class than the Qwen-Image adapters."""
+    config = MockDiffusionConfig(training_mode="diffusion_sdxl",
+                                 model_name="stabilityai/stable-diffusion-xl-base-1.0")
+    readme = generate_model_readme(config, "diffusion_sdxl", is_diffusion=True)
+    assert "StableDiffusionXLPipeline" in readme
+    assert "- stable-diffusion-xl" in readme
+
+
 def test_readme_gpu_info():
     """Test that GPU info is included when CUDA is available"""
     print("=" * 70)
