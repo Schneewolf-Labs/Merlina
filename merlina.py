@@ -391,6 +391,15 @@ class TrainingConfig(BaseModel):
         None,
         description="LoRA target modules; defaults are adapter-specific (typically [to_k,to_q,to_v,to_out.0])."
     )
+    lora_use_dora: Optional[bool] = Field(
+        None,
+        description=(
+            "Use DoRA (Weight-Decomposed Low-Rank Adaptation) instead of plain LoRA. "
+            "Decomposes the LoRA update into magnitude + direction; meaningfully better "
+            "quality on small aesthetic datasets at ~5-10% extra step time. "
+            "Diffusion only; ignored on text/VLM jobs. Requires peft>=0.10."
+        )
+    )
     dataset_jsonl_path: Optional[str] = Field(
         None,
         description="Absolute path to a local JSONL of {prompt, image} (or {prompt, chosen, rejected}) rows for diffusion training."

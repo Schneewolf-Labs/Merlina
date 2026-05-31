@@ -327,6 +327,7 @@ def run_diffusion_training_sync(
         from peft import LoraConfig
         lora_r = getattr(config, "lora_rank", None) or getattr(config, "lora_r", None) or 32
         targets = getattr(config, "lora_target_modules", None) or default_targets
+        use_dora = bool(getattr(config, "lora_use_dora", False) or False)
         peft_config = LoraConfig(
             r=int(lora_r),
             lora_alpha=int(getattr(config, "lora_alpha", 64)),
@@ -334,7 +335,10 @@ def run_diffusion_training_sync(
             lora_dropout=float(getattr(config, "lora_dropout", 0.05)),
             bias="none",
             init_lora_weights="gaussian",
+            use_dora=use_dora,
         )
+        if use_dora:
+            logger.info("[diffusion] DoRA enabled (use_dora=True) — ~5-10% slower step, better quality on small datasets")
 
         # ── Build Atelier TrainingConfig ─────────────────────────
         from atelier import TrainingConfig as AtelierTrainingConfig

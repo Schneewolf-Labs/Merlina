@@ -292,6 +292,7 @@ export function buildTrainingConfig({ gpuManager = null, includeSecrets = true }
         lora_rank:           numOrNull('diffusion-lora-rank', parseInt),
         lora_target_modules: (strList('diffusion-lora-target-modules').length
                               ? strList('diffusion-lora-target-modules') : null),
+        lora_use_dora:       bool('diffusion-lora-use-dora', false),
         dataset_jsonl_path:  str('diffusion-dataset-jsonl', '') || null,
         dataset_name:        str('diffusion-dataset-name', '') || null,
         dataset_split:       null,  // wired when an explicit-split UI lands; null = HF default

@@ -105,6 +105,7 @@ class TestTrainingConfigDiffusionFields:
         assert cfg.model_name is None
         assert cfg.image_resolution is None
         assert cfg.lora_rank is None
+        assert cfg.lora_use_dora is None
         assert cfg.dataset_jsonl_path is None
 
     def test_diffusion_fields_round_trip(self):
@@ -117,12 +118,14 @@ class TestTrainingConfigDiffusionFields:
             image_resolution=1024,
             lora_rank=32,
             lora_target_modules=["to_k", "to_q", "to_v", "to_out.0"],
+            lora_use_dora=True,
             dataset_jsonl_path="/tmp/train.jsonl",
         )
         assert cfg.model_name == "Qwen/Qwen-Image"
         assert cfg.image_resolution == 1024
         assert cfg.lora_rank == 32
         assert cfg.lora_target_modules == ["to_k", "to_q", "to_v", "to_out.0"]
+        assert cfg.lora_use_dora is True
 
     def test_image_resolution_bounds(self):
         from merlina import TrainingConfig
