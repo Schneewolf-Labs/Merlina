@@ -365,6 +365,11 @@ class JobManager {
                     window.merlinaRenderJobSamples(status.job_id || this.currentJobId)
                         .catch(() => {});
                 }
+            } else if (status.status === 'samples_ready' && window.merlinaRenderJobSamples) {
+                // Mid-training samples just landed — refresh the gallery
+                // so the new step bucket renders without modal reopen.
+                window.merlinaRenderJobSamples(status.job_id || this.currentJobId)
+                    .catch(() => {});
             } else if (status.status === 'failed') {
                 stopButton.disabled = true;
                 this.toast.error(`Training failed: ${status.error || 'Unknown error'}`);

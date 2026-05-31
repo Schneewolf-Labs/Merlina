@@ -583,6 +583,13 @@
                             </label>
                             <small style="color: #888; font-size: 0.85em;">Decomposes the LoRA update into magnitude + direction. ~5-10% slower step, meaningfully better quality on small aesthetic datasets where vanilla LoRA underfits the target style.</small>
                         </div>
+                        <div class="form-group">
+                            <label style="display: flex; align-items: center; gap: 8px;">
+                                <input type="checkbox" id="diffusion-mid-training-samples" style="width: auto;" checked>
+                                <span>🖼️ Mid-Training Sample Previews</span>
+                            </label>
+                            <small style="color: #888; font-size: 0.85em;">Generate preview images on every checkpoint, not just at the end. Watch the LoRA converge in near-real-time. Pauses training briefly while sampling (~30-60s per checkpoint). Untick for fastest wall-clock.</small>
+                        </div>
                     </div>
 
                     <!-- Output Name -->

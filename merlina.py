@@ -400,6 +400,17 @@ class TrainingConfig(BaseModel):
             "Diffusion only; ignored on text/VLM jobs. Requires peft>=0.10."
         )
     )
+    mid_training_samples: Optional[bool] = Field(
+        None,
+        description=(
+            "Render preview images at every checkpoint during diffusion training "
+            "(not just at the end). Each save_steps boundary fires a sample subprocess "
+            "against the current LoRA snapshot, writing to samples/step-{N}/. Lets the "
+            "user watch the model converge in near-real-time. Pauses training briefly "
+            "while sampling runs (~30-60s per checkpoint). Diffusion only; "
+            "defaults to True when unset, pass False to disable for faster wall-clock."
+        )
+    )
     dataset_jsonl_path: Optional[str] = Field(
         None,
         description="Absolute path to a local JSONL of {prompt, image} (or {prompt, chosen, rejected}) rows for diffusion training."
@@ -2353,11 +2364,20 @@ async def save_jsonl_edits(req: SaveJsonlRequest):
 
 @app.get("/jobs/{job_id}/samples")
 async def get_job_samples(job_id: str):
-    """Return generated sample images for a completed diffusion training job.
+    """Return generated sample images for a diffusion training job.
 
-    Diffusion runs emit a ``samples/`` directory under
-    ``./models/<output_name>/`` with PNGs + a ``samples.json`` manifest.
-    UI uses this to render the post-training preview gallery.
+    Diffusion runs write sample images under ``./models/<output_name>/samples/``:
+      - Flat ``samples.json`` + ``sample_NN.png`` at the root: the final
+        post-training batch.
+      - ``samples/step-{N}/samples.json``: a snapshot taken mid-training at
+        global step N (populated when mid_training_samples is enabled).
+
+    Response:
+      - ``samples``: the latest available batch (final if present, else
+        the highest-step snapshot). Kept for back-compat with the
+        post-training gallery.
+      - ``steps``: every snapshot grouped by step, ordered oldest → newest,
+        with the final batch (when present) appended as ``"final"``.
     """
     job = job_manager.get_job(job_id)
     if not job:
@@ -2365,32 +2385,62 @@ async def get_job_samples(job_id: str):
 
     output_name = (job.config or {}).get("output_name")
     if not output_name:
-        return {"samples": [], "reason": "no output_name in job config"}
+        return {"samples": [], "steps": [], "reason": "no output_name in job config"}
 
     samples_dir = Path("./models") / output_name / "samples"
-    manifest = samples_dir / "samples.json"
-    if not manifest.exists():
-        return {"samples": [], "reason": "no samples generated yet (job may still be running or wasn't a diffusion run)"}
+    if not samples_dir.exists():
+        return {"samples": [], "steps": [],
+                "reason": "no samples generated yet (job may still be running or wasn't a diffusion run)"}
 
-    try:
-        data = json.loads(manifest.read_text())
-    except Exception as e:
-        return {"samples": [], "reason": f"manifest unreadable: {e}"}
+    def _load_batch(batch_dir: Path, url_subpath: str) -> Optional[dict]:
+        """Read a samples.json from batch_dir and resolve URLs against url_subpath."""
+        manifest = batch_dir / "samples.json"
+        if not manifest.exists():
+            return None
+        try:
+            data = json.loads(manifest.read_text())
+        except Exception:
+            return None
+        items = []
+        for prompt, fname in zip(data.get("prompts", []), data.get("files", [])):
+            if (batch_dir / fname).exists():
+                items.append({
+                    "prompt": prompt,
+                    "url": f"/model-files/{output_name}/samples/{url_subpath}{fname}".replace("//", "/"),
+                })
+        return {
+            "samples":     items,
+            "adapter":     data.get("adapter"),
+            "base_model":  data.get("base_model"),
+            "lora_dir":    data.get("lora_dir"),
+        }
 
-    samples = []
-    for prompt, fname in zip(data.get("prompts", []), data.get("files", [])):
-        if (samples_dir / fname).exists():
-            samples.append({
-                "prompt": prompt,
-                "url": f"/model-files/{output_name}/samples/{fname}",
-            })
+    steps = []
+    for step_dir in sorted(samples_dir.glob("step-*"),
+                           key=lambda p: int(p.name.split("-", 1)[1]) if p.name.split("-", 1)[1].isdigit() else 0):
+        if not step_dir.is_dir():
+            continue
+        try:
+            step_num = int(step_dir.name.split("-", 1)[1])
+        except (IndexError, ValueError):
+            continue
+        batch = _load_batch(step_dir, f"{step_dir.name}/")
+        if batch and batch["samples"]:
+            steps.append({"step": step_num, **batch})
+
+    final_batch = _load_batch(samples_dir, "")
+    if final_batch and final_batch["samples"]:
+        steps.append({"step": "final", **final_batch})
+
+    latest = steps[-1] if steps else {"samples": []}
 
     return {
-        "samples":      samples,
-        "adapter":      data.get("adapter"),
-        "base_model":   data.get("base_model"),
-        "lora_dir":     data.get("lora_dir"),
+        "samples":      latest.get("samples", []),
+        "adapter":      latest.get("adapter"),
+        "base_model":   latest.get("base_model"),
+        "lora_dir":     latest.get("lora_dir"),
         "output_name":  output_name,
+        "steps":        steps,
     }
 
 
