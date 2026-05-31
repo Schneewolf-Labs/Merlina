@@ -417,7 +417,10 @@ export async function renderJobSamples(jobId) {
         return;
     }
 
-    if (!data || !Array.isArray(data.samples) || data.samples.length === 0) {
+    const steps = Array.isArray(data?.steps) ? data.steps : [];
+    const hasFlat = Array.isArray(data?.samples) && data.samples.length > 0;
+
+    if (!hasFlat && steps.length === 0) {
         // Show the section only if we got back a structured response (meaning
         // the job exists) so users get the "no samples yet" hint instead of
         // a blank space mid-modal.
@@ -428,8 +431,7 @@ export async function renderJobSamples(jobId) {
         return;
     }
 
-    section.style.display = 'block';
-    grid.innerHTML = data.samples.map((s, i) => `
+    const renderSample = (s) => `
         <figure style="
             margin: 0; background: white; border-radius: 10px;
             box-shadow: 0 1px 4px rgba(0,0,0,0.1); overflow: hidden;
@@ -443,7 +445,36 @@ export async function renderJobSamples(jobId) {
                 ${s.prompt}
             </figcaption>
         </figure>
-    `).join('');
+    `;
+
+    section.style.display = 'block';
+
+    // When mid-training samples exist, render each step bucket as its own
+    // sub-grid so the user can see convergence over training. Otherwise fall
+    // back to the flat (post-training-only) layout.
+    if (steps.length > 0) {
+        grid.innerHTML = steps.map(bucket => {
+            const label = bucket.step === 'final'
+                ? '🏁 Final'
+                : `Step ${bucket.step}`;
+            const items = bucket.samples.map(renderSample).join('');
+            return `
+                <div class="samples-step-bucket" style="
+                    grid-column: 1 / -1; margin-bottom: 8px;
+                ">
+                    <h4 style="margin: 0 0 8px 0; color: var(--primary-purple);
+                              font-size: 0.95em; font-weight: 600;">${label}</h4>
+                    <div style="display: grid;
+                                grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+                                gap: 12px;">
+                        ${items}
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } else {
+        grid.innerHTML = data.samples.map(renderSample).join('');
+    }
 }
 
 // Expose globally so jobs.js (which doesn't currently use ES module imports)

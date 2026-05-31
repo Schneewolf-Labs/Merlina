@@ -80,6 +80,55 @@ def _adapter_family_short_name(adapter_class_name: str) -> str:
     return "qwen_image"  # safe fallback
 
 
+def _run_sample_subprocess(
+    *,
+    config: Any,
+    lora_dir: str,
+    out_dir: Path,
+    base_model: str,
+    adapter_family: str,
+    timeout_s: int = 30 * 60,
+) -> bool:
+    """Spawn scripts/generate_diffusion_samples.py to render a sample batch.
+
+    Pure subprocess driver — no websocket / job-manager side effects, so the
+    same call can be reused mid-training and at the end of training. Returns
+    True on success.
+    """
+    import subprocess
+    import sys
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    script_path = Path(__file__).resolve().parent.parent / "scripts" / "generate_diffusion_samples.py"
+    if not script_path.exists():
+        logger.warning(f"[samples] generator script not found at {script_path}; skipping")
+        return False
+
+    cmd = [
+        sys.executable, str(script_path),
+        "--base-model", base_model,
+        "--lora-dir", str(lora_dir),
+        "--out-dir", str(out_dir),
+        "--adapter", _adapter_family_short_name(adapter_family),
+        "--num-steps", str(int(getattr(config, "sample_num_steps", None) or 25)),
+        "--width", str(int(getattr(config, "image_resolution", None) or 1024)),
+        "--height", str(int(getattr(config, "image_resolution", None) or 1024)),
+    ]
+    sample_prompts = getattr(config, "sample_prompts", None)
+    if sample_prompts:
+        cmd += ["--prompts", json.dumps(sample_prompts)]
+
+    logger.info(f"[samples] launching subprocess: out_dir={out_dir}")
+    res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
+    if res.returncode != 0:
+        logger.warning(f"[samples] subprocess exit {res.returncode}\n"
+                       f"stdout: {res.stdout[-500:]}\nstderr: {res.stderr[-500:]}")
+        return False
+    logger.info(f"[samples] generated {out_dir}: "
+                f"{res.stdout.strip().splitlines()[-1] if res.stdout else 'ok'}")
+    return True
+
+
 def _generate_post_training_samples(
     *,
     job_id: str,
@@ -90,20 +139,13 @@ def _generate_post_training_samples(
     job_manager: JobManager,
     event_loop: Optional[Any] = None,
 ) -> None:
-    """Run scripts/generate_diffusion_samples.py as a subprocess.
+    """Run a final sample batch after training finishes.
 
-    Loads a fresh diffusers pipeline (the training process having released
-    its 38 GiB transformer means there's room for sampling now), generates
-    a small batch of preview images against a default prompt set, writes
-    them to ``<lora_dir>/samples/`` with a manifest. UI fetches them via
-    ``/jobs/{job_id}/samples``.
+    Training has released its 38 GiB transformer so there's room for a fresh
+    pipeline. Writes to ``<lora_dir>/samples/`` with a manifest; the
+    ``/jobs/{job_id}/samples`` endpoint surfaces these.
     """
-    import subprocess
-    import sys
-
     samples_dir = Path(lora_dir) / "samples"
-    samples_dir.mkdir(parents=True, exist_ok=True)
-
     job_manager.update_job(job_id, status="generating_samples", progress=0.97)
     send_websocket_update(
         websocket_manager.send_status_update(
@@ -112,34 +154,76 @@ def _generate_post_training_samples(
         ),
         event_loop,
     )
+    _run_sample_subprocess(
+        config=config, lora_dir=lora_dir, out_dir=samples_dir,
+        base_model=base_model, adapter_family=adapter_family,
+    )
 
-    script_path = Path(__file__).resolve().parent.parent / "scripts" / "generate_diffusion_samples.py"
-    if not script_path.exists():
-        logger.warning(f"sample generator script not found at {script_path}; skipping")
-        return
 
-    cmd = [
-        sys.executable, str(script_path),
-        "--base-model", base_model,
-        "--lora-dir", str(lora_dir),
-        "--out-dir", str(samples_dir),
-        "--adapter", _adapter_family_short_name(adapter_family),
-        "--num-steps", str(int(getattr(config, "sample_num_steps", None) or 25)),
-        "--width", str(int(getattr(config, "image_resolution", None) or 1024)),
-        "--height", str(int(getattr(config, "image_resolution", None) or 1024)),
-    ]
-    # Optional prompt override (Pydantic field added in 2.0 for power users)
-    sample_prompts = getattr(config, "sample_prompts", None)
-    if sample_prompts:
-        cmd += ["--prompts", json.dumps(sample_prompts)]
+class MidTrainingSampleCallback:
+    """Atelier callback that renders preview samples on every checkpoint.
 
-    logger.info(f"[samples] launching subprocess: {' '.join(cmd)}")
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=30 * 60)
-    if res.returncode != 0:
-        logger.warning(f"[samples] subprocess exit {res.returncode}\n"
-                       f"stdout: {res.stdout[-500:]}\nstderr: {res.stderr[-500:]}")
-        return
-    logger.info(f"[samples] generated {samples_dir}: {res.stdout.strip().splitlines()[-1] if res.stdout else 'ok'}")
+    Fires from ``on_save``. Materializes the current LoRA to a step-specific
+    snapshot dir, runs the sample subprocess against it, and emits a
+    websocket event so the UI gallery picks up the new images.
+
+    Atelier's ``_save_checkpoint`` blocks until callbacks return, so this
+    pauses training while sampling runs. On a 48 GB card with the script's
+    default model-CPU-offload the subprocess uses ~4 GB GPU peak alongside
+    the training transformer, adding ~30-60 s per checkpoint. Failures are
+    non-fatal — they get logged and training continues to the next save.
+    """
+    def __init__(self, *, job_id: str, config: Any, output_name: str,
+                 base_model: str, adapter_family: str,
+                 job_manager: JobManager, event_loop: Optional[Any] = None):
+        self.job_id = job_id
+        self.config = config
+        self.output_name = output_name
+        self.base_model = base_model
+        self.adapter_family = adapter_family
+        self.job_manager = job_manager
+        self.event_loop = event_loop
+
+    def on_save(self, trainer, path):
+        step = getattr(trainer, "global_step", 0)
+        if step <= 0:
+            return
+        try:
+            samples_root = Path("./models") / self.output_name / "samples"
+            snapshot_lora = samples_root / f"step-{step}" / "lora"
+            snapshot_out  = samples_root / f"step-{step}"
+
+            # Materialize a clean LoRA-only safetensors next to the images.
+            # The accelerator checkpoint at `path` includes optimizer state
+            # too — diffusers.load_lora_weights doesn't know how to read it.
+            trainer.save_model(str(snapshot_lora))
+
+            send_websocket_update(
+                websocket_manager.send_status_update(
+                    job_id=self.job_id, status="sampling",
+                    message=f"Generating preview samples at step {step}",
+                ),
+                self.event_loop,
+            )
+
+            ok = _run_sample_subprocess(
+                config=self.config,
+                lora_dir=str(snapshot_lora),
+                out_dir=snapshot_out,
+                base_model=self.base_model,
+                adapter_family=self.adapter_family,
+                timeout_s=15 * 60,
+            )
+            if ok:
+                send_websocket_update(
+                    websocket_manager.send_status_update(
+                        job_id=self.job_id, status="samples_ready",
+                        message=f"Step-{step} preview samples ready",
+                    ),
+                    self.event_loop,
+                )
+        except Exception as e:
+            logger.warning(f"[mid-samples] step {step}: {e}", exc_info=True)
 
 
 def _materialize_image_dataset(config: Any, uploaded_datasets: dict, job_id: str):
@@ -372,13 +456,24 @@ def run_diffusion_training_sync(
 
         # ── Build trainer + train ────────────────────────────────
         from atelier import AtelierTrainer
+        callbacks = [WebSocketCallback(job_id, job_manager, event_loop)]
+        # Mid-training samples opt-out: defaults to True when unset.
+        if getattr(config, "mid_training_samples", None) is not False:
+            callbacks.append(MidTrainingSampleCallback(
+                job_id=job_id, config=config,
+                output_name=config.output_name,
+                base_model=model_path,
+                adapter_family=adapter_cls.__name__,
+                job_manager=job_manager, event_loop=event_loop,
+            ))
+            logger.info("[mid-samples] enabled — preview images will render on every checkpoint")
         trainer = AtelierTrainer(
             adapter=adapter,
             config=atelier_config,
             loss_fn=loss_cls(),
             train_dataset=train_dataset,
             peft_config=peft_config,
-            callbacks=[WebSocketCallback(job_id, job_manager, event_loop)],
+            callbacks=callbacks,
         )
 
         # Capture W&B URL after accelerator init
