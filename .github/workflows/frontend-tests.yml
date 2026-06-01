@@ -35,6 +35,15 @@ jobs:
     - name: Run API unit tests
       run: node --test tests/frontend/test_api.mjs
 
+    - name: Run form_config parity tests
+      run: node --test tests/frontend/test_form_config.mjs
+
+    - name: Run UI helper unit tests
+      run: node --test tests/frontend/test_ui.mjs
+
+    - name: Run theme manager unit tests
+      run: node --test tests/frontend/test_theme.mjs
+
   integration-tests:
     name: Frontend Integration Tests
     runs-on: ubuntu-latest
