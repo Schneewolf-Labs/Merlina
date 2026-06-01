@@ -147,35 +147,25 @@
                 <h2>📚 Step 2: Configure Your Dataset</h2>
 
                 <!-- Training Mode Selection (drives required columns below) -->
-                <div class="spell-section" id="training-mode-section">
-                    <h3>🎯 What are you training?</h3>
-                    <small style="color: #888; font-size: 0.85em; display: block; margin-bottom: 10px;">
-                        Choose a training method first — it determines which columns your dataset needs.
-                    </small>
-                    <div class="form-group">
-                        <label>Training Method</label>
-                        <select id="training-mode" class="magic-select">
-                            <optgroup label="Text LLM">
-                                <option value="sft">SFT - Supervised Fine-Tuning</option>
-                                <option value="orpo" selected>ORPO - Odds Ratio Preference Optimization</option>
-                                <option value="dpo">DPO - Direct Preference Optimization</option>
-                                <option value="simpo">SimPO - Simple Preference Optimization</option>
-                                <option value="kto">KTO - Kahneman-Tversky Optimization</option>
-                                <option value="cpo">CPO - Contrastive Preference Optimization</option>
-                                <option value="ipo">IPO - Identity Preference Optimization</option>
-                            </optgroup>
-                            <optgroup label="Diffusion / Image LoRA">
-                                <option value="diffusion_qwen_image">Qwen-Image LoRA (text-to-image)</option>
-                                <option value="diffusion_qwen_edit">Qwen-Image-Edit LoRA (image-to-image)</option>
-                                <option value="diffusion_sdxl">SDXL LoRA</option>
-                            </optgroup>
-                        </select>
-                        <small id="training-mode-description" style="color: #888; font-size: 0.85em; display: block; margin-top: 8px;"></small>
-                    </div>
-                    <button type="button" id="apply-preset-btn" class="action-button" style="width: 100%; margin-top: 12px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: bold; padding: 12px;">
-                        📋 Apply Suggested Settings
-                    </button>
-                    <div id="preset-notes" style="display: none; margin-top: 10px; padding: 12px; background: #f0e6ff; border-radius: 8px; border-left: 3px solid var(--primary-purple); font-size: 0.85em; color: #444;"></div>
+                <div class="form-group" id="training-mode-section" style="margin-bottom: 20px;">
+                    <label>🎯 Training Method</label>
+                    <select id="training-mode" class="magic-select">
+                        <optgroup label="Text LLM">
+                            <option value="sft">SFT - Supervised Fine-Tuning</option>
+                            <option value="orpo" selected>ORPO - Odds Ratio Preference Optimization</option>
+                            <option value="dpo">DPO - Direct Preference Optimization</option>
+                            <option value="simpo">SimPO - Simple Preference Optimization</option>
+                            <option value="kto">KTO - Kahneman-Tversky Optimization</option>
+                            <option value="cpo">CPO - Contrastive Preference Optimization</option>
+                            <option value="ipo">IPO - Identity Preference Optimization</option>
+                        </optgroup>
+                        <optgroup label="Diffusion / Image LoRA">
+                            <option value="diffusion_qwen_image">Qwen-Image LoRA (text-to-image)</option>
+                            <option value="diffusion_qwen_edit">Qwen-Image-Edit LoRA (image-to-image)</option>
+                            <option value="diffusion_sdxl">SDXL LoRA</option>
+                        </optgroup>
+                    </select>
+                    <small style="color: #888; font-size: 0.85em;">Determines which columns your dataset needs.</small>
                 </div>
 
                 <!-- Datasets (unified: first card is always present, add more below) -->
@@ -439,26 +429,36 @@
                 </div>
 
                 <form id="training-form">
-                    <!-- Training Method (mirrors #training-mode in the Dataset section) -->
-                    <div class="form-group">
-                        <label>🎯 Training Method</label>
-                        <select id="training-mode-config" class="magic-select">
-                            <optgroup label="Text LLM">
-                                <option value="sft">SFT - Supervised Fine-Tuning</option>
-                                <option value="orpo" selected>ORPO - Odds Ratio Preference Optimization</option>
-                                <option value="dpo">DPO - Direct Preference Optimization</option>
-                                <option value="simpo">SimPO - Simple Preference Optimization</option>
-                                <option value="kto">KTO - Kahneman-Tversky Optimization</option>
-                                <option value="cpo">CPO - Contrastive Preference Optimization</option>
-                                <option value="ipo">IPO - Identity Preference Optimization</option>
-                            </optgroup>
-                            <optgroup label="Diffusion / Image LoRA">
-                                <option value="diffusion_qwen_image">Qwen-Image LoRA</option>
-                                <option value="diffusion_qwen_edit">Qwen-Image-Edit LoRA</option>
-                                <option value="diffusion_sdxl">SDXL LoRA</option>
-                            </optgroup>
-                        </select>
-                        <small style="color: #888; font-size: 0.85em;">Same setting as "What are you training?" on Step 2 — kept in sync.</small>
+                    <!-- Training Method -->
+                    <div class="spell-section" id="training-method-section">
+                        <h3>🎯 What are you training?</h3>
+                        <small style="color: #888; font-size: 0.85em; display: block; margin-bottom: 10px;">
+                            Choose a training method — this also determines which dataset columns are required.
+                        </small>
+                        <div class="form-group">
+                            <label>Training Method</label>
+                            <select id="training-mode-config" class="magic-select">
+                                <optgroup label="Text LLM">
+                                    <option value="sft">SFT - Supervised Fine-Tuning</option>
+                                    <option value="orpo" selected>ORPO - Odds Ratio Preference Optimization</option>
+                                    <option value="dpo">DPO - Direct Preference Optimization</option>
+                                    <option value="simpo">SimPO - Simple Preference Optimization</option>
+                                    <option value="kto">KTO - Kahneman-Tversky Optimization</option>
+                                    <option value="cpo">CPO - Contrastive Preference Optimization</option>
+                                    <option value="ipo">IPO - Identity Preference Optimization</option>
+                                </optgroup>
+                                <optgroup label="Diffusion / Image LoRA">
+                                    <option value="diffusion_qwen_image">Qwen-Image LoRA (text-to-image)</option>
+                                    <option value="diffusion_qwen_edit">Qwen-Image-Edit LoRA (image-to-image)</option>
+                                    <option value="diffusion_sdxl">SDXL LoRA</option>
+                                </optgroup>
+                            </select>
+                            <small id="training-mode-description" style="color: #888; font-size: 0.85em; display: block; margin-top: 8px;"></small>
+                        </div>
+                        <button type="button" id="apply-preset-btn" class="action-button" style="width: 100%; margin-top: 12px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: bold; padding: 12px;">
+                            📋 Apply Suggested Settings
+                        </button>
+                        <div id="preset-notes" style="display: none; margin-top: 10px; padding: 12px; background: #f0e6ff; border-radius: 8px; border-left: 3px solid var(--primary-purple); font-size: 0.85em; color: #444;"></div>
                     </div>
 
                     <!-- Diffusion-only fields (hidden unless training_mode starts with diffusion_) -->
