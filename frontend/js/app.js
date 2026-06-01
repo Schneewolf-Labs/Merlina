@@ -10,6 +10,7 @@ import { Validator, ValidationRules, debounce } from './validation.js';
 import { ThemeManager } from './theme.js';
 import { InferenceManager } from './inference.js';
 import { ExportManager } from './export.js';
+import { DiskManager } from './disk.js';
 import { buildTrainingConfig } from './form_config.js';
 import { initDiffusionDropzone, initDiffusionPlayground } from './diffusion.js';
 
@@ -45,6 +46,7 @@ class MerlinaApp {
         this.modelManager = new ModelManager();
         this.inferenceManager = new InferenceManager();
         this.exportManager = new ExportManager();
+        this.diskManager = new DiskManager();
 
         this.toast = new Toast();
 
@@ -57,6 +59,7 @@ class MerlinaApp {
         window.themeManager = this.themeManager;
         window.inferenceManager = this.inferenceManager;
         window.exportManager = this.exportManager;
+        window.diskManager = this.diskManager;
 
         // Initialize the app
         this.init();
@@ -121,6 +124,9 @@ class MerlinaApp {
 
         // Initialize the Export section (GGUF / HF / Artifacts tabs)
         this.exportManager.init();
+
+        // Initialize the Cleanup section (disk analysis + checkpoint pruning)
+        this.diskManager.init();
 
         // Initialize the diffusion image-dataset drag-drop UI.
         // Safe no-op when the diffusion fields aren't on this page.
@@ -712,6 +718,12 @@ class MerlinaApp {
         document.querySelectorAll('.section-nav-btn').forEach(btn => {
             btn.classList.toggle('active', btn.dataset.section === sectionId);
         });
+
+        // Lazy-load disk analysis the first time the Cleanup section opens.
+        if (sectionId === 'cleanup-section' && this.diskManager && !this._cleanupLoaded) {
+            this._cleanupLoaded = true;
+            this.diskManager.loadAnalysis();
+        }
 
         // Scroll to top
         window.scrollTo({ top: 0, behavior: 'smooth' });

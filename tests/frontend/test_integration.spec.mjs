@@ -314,6 +314,165 @@ test.describe('API endpoints', () => {
         const response = await request.get('/jobs');
         expect(response.ok()).toBeTruthy();
     });
+
+    test('disk analysis endpoint returns breakdown', async ({ request }) => {
+        const response = await request.get('/disk/analysis?keep=1');
+        expect(response.ok()).toBeTruthy();
+        const data = await response.json();
+        expect(data).toHaveProperty('results');
+        expect(data.results).toHaveProperty('jobs');
+        expect(Array.isArray(data.results.jobs)).toBeTruthy();
+        expect(data).toHaveProperty('models');
+    });
+
+    test('disk cleanup dry-run is non-destructive', async ({ request }) => {
+        const response = await request.post('/disk/cleanup', {
+            data: { keep: 1, purge_failed: false, apply: false },
+        });
+        expect(response.ok()).toBeTruthy();
+        const data = await response.json();
+        expect(data.applied).toBe(false);
+        expect(data).toHaveProperty('count');
+        expect(data).toHaveProperty('freed_human');
+    });
+
+    test('hf-cache analysis endpoint returns a shape', async ({ request }) => {
+        const response = await request.get('/disk/hf-cache?stale_days=90');
+        expect(response.ok()).toBeTruthy();
+        const data = await response.json();
+        expect(data).toHaveProperty('available');
+        expect(data).toHaveProperty('repos');
+        expect(Array.isArray(data.repos)).toBeTruthy();
+        expect(data).toHaveProperty('total_human');
+    });
+
+    test('hf-cache delete with empty selection is a safe no-op', async ({ request }) => {
+        const response = await request.post('/disk/hf-cache/delete', {
+            data: { repos: [], apply: false },
+        });
+        expect(response.ok()).toBeTruthy();
+        const data = await response.json();
+        expect(data.count).toBe(0);
+        expect(data.applied).toBe(false);
+    });
+
+    test('disk analysis annotates saved models with protected flag', async ({ request }) => {
+        const response = await request.get('/disk/analysis?keep=1');
+        const data = await response.json();
+        expect(data.models).toHaveProperty('items');
+        for (const m of data.models.items) {
+            expect(m).toHaveProperty('protected');
+            expect(m).toHaveProperty('modified_date');
+        }
+    });
+
+    test('models delete with empty selection is a safe no-op', async ({ request }) => {
+        const response = await request.post('/disk/models/delete', {
+            data: { names: [], apply: false },
+        });
+        expect(response.ok()).toBeTruthy();
+        const data = await response.json();
+        expect(data.count).toBe(0);
+        expect(data.applied).toBe(false);
+    });
+
+    test('disk artifacts endpoint returns gguf + wandb breakdown', async ({ request }) => {
+        const response = await request.get('/disk/artifacts');
+        expect(response.ok()).toBeTruthy();
+        const data = await response.json();
+        expect(data).toHaveProperty('gguf');
+        expect(Array.isArray(data.gguf.files)).toBeTruthy();
+        expect(data).toHaveProperty('wandb');
+        expect(data.wandb).toHaveProperty('run_count');
+    });
+
+    test('gguf delete with empty selection is a safe no-op', async ({ request }) => {
+        const response = await request.post('/disk/artifacts/gguf/delete', {
+            data: { files: [], apply: false },
+        });
+        expect(response.ok()).toBeTruthy();
+        const data = await response.json();
+        expect(data.count).toBe(0);
+        expect(data.applied).toBe(false);
+    });
+
+    test('wandb clear dry-run reports without deleting', async ({ request }) => {
+        const response = await request.post('/disk/artifacts/wandb/clear', {
+            data: { apply: false },
+        });
+        expect(response.ok()).toBeTruthy();
+        const data = await response.json();
+        expect(data.applied).toBe(false);
+        expect(data).toHaveProperty('count');
+    });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Cleanup & Analysis section (step 7)
+// ═════════════════════════════════════════════════════════════════════════════
+
+test.describe('Cleanup section', () => {
+    test('nav button switches to the cleanup section', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="cleanup-section"]').click();
+        await expect(page.locator('#cleanup-section')).toBeVisible();
+        await expect(page.getByText('Tidy the Workshop')).toBeVisible();
+    });
+
+    test('controls are present and Apply starts disabled', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="cleanup-section"]').click();
+        await expect(page.locator('#cleanup-keep')).toBeVisible();
+        await expect(page.locator('#cleanup-purge-failed')).toBeVisible();
+        await expect(page.locator('#cleanup-preview-btn')).toBeVisible();
+        // Apply is disabled until a preview produces something to delete.
+        await expect(page.locator('#cleanup-apply-btn')).toBeDisabled();
+    });
+
+    test('opening the section populates disk usage stats', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="cleanup-section"]').click();
+        // loadAnalysis() fills the results-total metric; wait for it to leave the "—" placeholder.
+        await expect(page.locator('#cleanup-results-total')).not.toHaveText('—', { timeout: 10000 });
+    });
+
+    test('HuggingFace cache tab reveals the shared-cache warning and controls', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="cleanup-section"]').click();
+        // Checkpoints panel is the default; HF panel hidden until its tab is clicked.
+        await expect(page.locator('#cleanup-panel-hfcache')).toBeHidden();
+        await page.locator('.cleanup-tab-btn[data-ctab="hfcache"]').click();
+        await expect(page.locator('#cleanup-panel-hfcache')).toBeVisible();
+        await expect(page.getByText('shared across your whole machine')).toBeVisible();
+        await expect(page.locator('#hf-stale-days')).toBeVisible();
+        // Delete stays disabled until repos are selected.
+        await expect(page.locator('#hf-delete-btn')).toBeDisabled();
+    });
+
+    test('Saved Models tab shows the permanence warning and a locked delete button', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="cleanup-section"]').click();
+        await expect(page.locator('#cleanup-panel-models')).toBeHidden();
+        await page.locator('.cleanup-tab-btn[data-ctab="models"]').click();
+        await expect(page.locator('#cleanup-panel-models')).toBeVisible();
+        await expect(page.getByText('Deleting a saved model is permanent')).toBeVisible();
+        // Delete stays disabled until a model is selected.
+        await expect(page.locator('#models-delete-btn')).toBeDisabled();
+    });
+
+    test('Other Artifacts tab shows GGUF and W&B sections', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="cleanup-section"]').click();
+        await expect(page.locator('#cleanup-panel-artifacts')).toBeHidden();
+        await page.locator('.cleanup-tab-btn[data-ctab="artifacts"]').click();
+        await expect(page.locator('#cleanup-panel-artifacts')).toBeVisible();
+        await expect(page.getByText('GGUF Exports')).toBeVisible();
+        await expect(page.getByText('Weights & Biases Logs')).toBeVisible();
+        // Both delete buttons start disabled (nothing selected / nothing clearable yet).
+        await expect(page.locator('#gguf-delete-btn')).toBeDisabled();
+        // GGUF total leaves the placeholder once the scan returns.
+        await expect(page.locator('#gguf-total')).not.toHaveText('—', { timeout: 10000 });
+    });
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

@@ -50,6 +50,16 @@ from src.config_manager import ConfigManager
 from src.job_queue import JobQueue, JobPriority
 from src.gpu_utils import get_gpu_manager
 from src.presets import get_preset, get_all_presets
+from src.disk_manager import (
+    analyze_artifacts,
+    analyze_disk,
+    analyze_hf_cache,
+    clear_wandb_runs,
+    delete_gguf_files,
+    delete_hf_repos,
+    delete_models,
+    run_cleanup,
+)
 
 # Import configuration
 from config import settings, resolve_hf_token, resolve_wandb_key, env_secret_status
@@ -1541,6 +1551,177 @@ async def get_stats():
         },
         "queue": job_queue.get_queue_stats()
     }
+
+
+def _job_status_map() -> dict:
+    """Map ``job_id -> status`` for every job, for disk cleanup safety checks.
+
+    The cleanup engine uses this to refuse to prune checkpoints belonging to a
+    job that is still active (training / queued / loading).
+    """
+    return {j.job_id: j.status for j in job_manager.list_jobs(limit=100000)}
+
+
+# Job statuses that are NOT terminal — their output model must be protected.
+_ACTIVE_JOB_STATUSES = {
+    "queued", "initializing", "loading_model", "loading_dataset", "training", "running",
+}
+
+
+def _protected_model_names() -> set:
+    """Names of saved models that must not be deleted.
+
+    A model is protected if it's the output of a still-running job or currently
+    loaded in the inference server — deleting either would break live state.
+    """
+    protected = set()
+    for j in job_manager.list_jobs(limit=100000):
+        if j.status in _ACTIVE_JOB_STATUSES and j.output_dir:
+            protected.add(os.path.basename(j.output_dir.rstrip("/")))
+    try:
+        with _inference_lock:
+            loaded = _inference_state.get("model_name")
+        if loaded:
+            protected.add(os.path.basename(str(loaded).rstrip("/")))
+    except Exception:  # noqa: BLE001 — inference state is best-effort here
+        pass
+    protected.discard("")
+    return protected
+
+
+@app.get("/disk/analysis")
+async def disk_analysis(keep: int = 1):
+    """Read-only breakdown of results/ and models/ disk usage.
+
+    ``keep`` controls how many checkpoints per job are treated as keepers when
+    computing the reclaimable estimate (default 1 = keep only the latest). Each
+    saved model is annotated with ``protected`` (in use by a job or inference).
+    """
+    keep = max(1, keep)
+    analysis = analyze_disk(
+        Path(settings.results_dir),
+        Path(settings.models_dir),
+        _job_status_map(),
+        keep=keep,
+    )
+    protected = _protected_model_names()
+    for item in analysis.get("models", {}).get("items", []):
+        item["protected"] = item["name"] in protected
+    return analysis
+
+
+class DiskCleanupRequest(BaseModel):
+    keep: int = Field(1, ge=1, description="Keep the newest N checkpoints per job")
+    purge_failed: bool = Field(False, description="Delete the entire results dir of FAILED jobs")
+    apply: bool = Field(False, description="Actually delete (False = dry-run preview)")
+
+
+@app.post("/disk/cleanup")
+async def disk_cleanup(req: DiskCleanupRequest):
+    """Prune old checkpoints. Dry-run unless ``apply=true``.
+
+    Never touches active jobs. Returns the list of (would-be) deletions and the
+    total bytes freed.
+    """
+    return run_cleanup(
+        Path(settings.results_dir),
+        _job_status_map(),
+        keep=req.keep,
+        purge_failed=req.purge_failed,
+        apply=req.apply,
+    )
+
+
+@app.get("/disk/hf-cache")
+async def disk_hf_cache(stale_days: int = 90):
+    """Read-only scan of the HuggingFace cache (~/.cache/huggingface/hub).
+
+    This cache is shared across every HF tool on the machine, so it's analysis
+    only — repos largest-first, with last-accessed dates and a stale flag for
+    anything untouched in ``stale_days`` days.
+    """
+    return await asyncio.to_thread(analyze_hf_cache, max(1, stale_days))
+
+
+class HFCacheDeleteRequest(BaseModel):
+    repos: list[dict] = Field(default_factory=list,
+                              description="Repos to delete, each {repo_id, repo_type}")
+    apply: bool = Field(False, description="Actually delete (False = dry-run preview)")
+
+
+@app.post("/disk/hf-cache/delete")
+async def disk_hf_cache_delete(req: HFCacheDeleteRequest):
+    """Delete selected HF cache repos via huggingface_hub. Dry-run unless apply.
+
+    The caller picks repos explicitly — there is no automatic pruning, since
+    Merlina can't know which models other tools still depend on.
+    """
+    return await asyncio.to_thread(delete_hf_repos, req.repos, req.apply)
+
+
+class ModelDeleteRequest(BaseModel):
+    names: list[str] = Field(default_factory=list, description="Model dir names under models/ to delete")
+    apply: bool = Field(False, description="Actually delete (False = dry-run preview)")
+
+
+@app.post("/disk/models/delete")
+async def disk_models_delete(req: ModelDeleteRequest):
+    """Delete saved models by name. Dry-run unless ``apply``.
+
+    Refuses any model that is an active job's output or currently loaded for
+    inference. Deletion is permanent for models that were never pushed to the
+    Hub — the UI warns accordingly.
+    """
+    return delete_models(_models_root(), req.names, apply=req.apply,
+                         protected=_protected_model_names())
+
+
+def _models_root() -> Path:
+    """Absolute path to the models directory."""
+    md = settings.models_dir
+    return md if md.is_absolute() else SCRIPT_DIR / md
+
+
+def _loaded_gguf_path() -> Optional[str]:
+    """Absolute path of the GGUF currently loaded for inference, if any."""
+    try:
+        with _inference_lock:
+            return _inference_state.get("gguf_path")
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@app.get("/disk/artifacts")
+async def disk_artifacts():
+    """Read-only breakdown of derived artifacts: GGUF exports + W&B run logs."""
+    wandb_dir = SCRIPT_DIR / "wandb"
+    return await asyncio.to_thread(analyze_artifacts, _models_root(), wandb_dir, _loaded_gguf_path())
+
+
+class GGUFDeleteRequest(BaseModel):
+    files: list[dict] = Field(default_factory=list, description="GGUF files to delete, each {model, file}")
+    apply: bool = Field(False, description="Actually delete (False = dry-run preview)")
+
+
+@app.post("/disk/artifacts/gguf/delete")
+async def disk_gguf_delete(req: GGUFDeleteRequest):
+    """Delete GGUF exports by {model, file}. Dry-run unless ``apply``.
+
+    GGUF is always regenerable from the saved model; refuses one that is
+    currently loaded for inference.
+    """
+    return delete_gguf_files(_models_root(), req.files, apply=req.apply,
+                             loaded_gguf=_loaded_gguf_path())
+
+
+class WandbClearRequest(BaseModel):
+    apply: bool = Field(False, description="Actually delete (False = dry-run preview)")
+
+
+@app.post("/disk/artifacts/wandb/clear")
+async def disk_wandb_clear(req: WandbClearRequest):
+    """Delete local W&B run logs except the active run. Dry-run unless apply."""
+    return clear_wandb_runs(SCRIPT_DIR / "wandb", apply=req.apply)
 
 
 @app.get("/queue/status")

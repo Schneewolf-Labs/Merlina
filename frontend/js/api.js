@@ -341,6 +341,54 @@ class MerlinaAPI {
         return this.fetch('/env/secrets');
     }
 
+    // Disk cleanup & analysis endpoints
+    static async getDiskAnalysis(keep = 1) {
+        return this.fetch(`/disk/analysis?keep=${keep}`, {}, LONG_TIMEOUT);
+    }
+
+    static async runDiskCleanup({ keep = 1, purge_failed = false, apply = false } = {}) {
+        return this.fetch('/disk/cleanup', {
+            method: 'POST',
+            body: JSON.stringify({ keep, purge_failed, apply })
+        }, LONG_TIMEOUT);
+    }
+
+    static async getHfCache(staleDays = 90) {
+        return this.fetch(`/disk/hf-cache?stale_days=${staleDays}`, {}, LONG_TIMEOUT);
+    }
+
+    static async deleteHfCache({ repos = [], apply = false } = {}) {
+        return this.fetch('/disk/hf-cache/delete', {
+            method: 'POST',
+            body: JSON.stringify({ repos, apply })
+        }, LONG_TIMEOUT);
+    }
+
+    static async deleteModels({ names = [], apply = false } = {}) {
+        return this.fetch('/disk/models/delete', {
+            method: 'POST',
+            body: JSON.stringify({ names, apply })
+        }, LONG_TIMEOUT);
+    }
+
+    static async getDiskArtifacts() {
+        return this.fetch('/disk/artifacts', {}, LONG_TIMEOUT);
+    }
+
+    static async deleteGguf({ files = [], apply = false } = {}) {
+        return this.fetch('/disk/artifacts/gguf/delete', {
+            method: 'POST',
+            body: JSON.stringify({ files, apply })
+        }, LONG_TIMEOUT);
+    }
+
+    static async clearWandb({ apply = false } = {}) {
+        return this.fetch('/disk/artifacts/wandb/clear', {
+            method: 'POST',
+            body: JSON.stringify({ apply })
+        }, LONG_TIMEOUT);
+    }
+
     // Inference endpoints
     static async listInferenceModels() {
         return this.fetch('/inference/models');

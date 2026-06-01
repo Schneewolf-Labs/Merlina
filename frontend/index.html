@@ -57,6 +57,10 @@
                 <span class="nav-step">6</span>
                 <span class="nav-label">Export</span>
             </button>
+            <button class="section-nav-btn" data-section="cleanup-section">
+                <span class="nav-step">7</span>
+                <span class="nav-label">Cleanup</span>
+            </button>
         </nav>
 
         <!-- Main Content -->
@@ -1493,6 +1497,233 @@
 
                         <div id="export-artifacts-summary" style="margin-bottom: 10px; font-size: 0.9em; color: #555;"></div>
                         <div id="export-artifacts-list"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Cleanup & Analysis (STEP 7) — reclaim disk from old checkpoints -->
+            <section id="cleanup-section" class="card nav-section" style="display: none;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <h2 style="margin: 0;">🧹 Step 7: Tidy the Workshop</h2>
+                    <button id="cleanup-refresh-btn" type="button" class="action-button" style="padding: 8px 16px; font-size: 0.9em; max-width: 160px;">
+                        🔄 Refresh
+                    </button>
+                </div>
+                <p style="color: #666; margin-top: 0;">
+                    Old training runs leave behind full-size checkpoints. Keep the latest of each
+                    finished run and reclaim the rest — active jobs are always left untouched.
+                </p>
+
+                <!-- Disk usage overview -->
+                <div class="spell-section" style="background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);">
+                    <h3 style="margin-top: 0;">💾 Disk Usage</h3>
+                    <div id="cleanup-fs-bar" class="progress-bar" style="margin-bottom: 8px;">
+                        <div id="cleanup-fs-fill" class="progress-fill" style="width: 0%;"></div>
+                        <span id="cleanup-fs-text" class="progress-text">—</span>
+                    </div>
+                    <div id="cleanup-stats" class="metrics-grid" style="margin-top: 12px;">
+                        <div class="metric-card">
+                            <span class="metric-label">Results total</span>
+                            <span id="cleanup-results-total" class="metric-value">—</span>
+                        </div>
+                        <div class="metric-card">
+                            <span class="metric-label">Reclaimable</span>
+                            <span id="cleanup-reclaimable" class="metric-value">—</span>
+                        </div>
+                        <div class="metric-card">
+                            <span class="metric-label">Models total</span>
+                            <span id="cleanup-models-total" class="metric-value">—</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Tabs: training checkpoints vs the shared HuggingFace cache -->
+                <div id="cleanup-tabs" role="tablist" style="display: flex; gap: 8px; margin: 20px 0 4px 0; border-bottom: 2px solid #e5e7eb;">
+                    <button type="button" class="cleanup-tab-btn active" data-ctab="checkpoints" role="tab" aria-selected="true"
+                            style="background: none; border: none; padding: 10px 16px; cursor: pointer; font-weight: 600; border-bottom: 3px solid transparent;">
+                        ✂️ Checkpoints
+                    </button>
+                    <button type="button" class="cleanup-tab-btn" data-ctab="hfcache" role="tab" aria-selected="false"
+                            style="background: none; border: none; padding: 10px 16px; cursor: pointer; font-weight: 600; border-bottom: 3px solid transparent;">
+                        🤗 HuggingFace Cache
+                    </button>
+                    <button type="button" class="cleanup-tab-btn" data-ctab="models" role="tab" aria-selected="false"
+                            style="background: none; border: none; padding: 10px 16px; cursor: pointer; font-weight: 600; border-bottom: 3px solid transparent;">
+                        📦 Saved Models
+                    </button>
+                    <button type="button" class="cleanup-tab-btn" data-ctab="artifacts" role="tab" aria-selected="false"
+                            style="background: none; border: none; padding: 10px 16px; cursor: pointer; font-weight: 600; border-bottom: 3px solid transparent;">
+                        🧩 Other Artifacts
+                    </button>
+                </div>
+
+                <!-- Panel: checkpoints -->
+                <div id="cleanup-panel-checkpoints" class="cleanup-panel" role="tabpanel">
+                <!-- Cleanup controls -->
+                <div class="spell-section">
+                    <h3 style="margin-top: 0;">✂️ Prune Checkpoints</h3>
+                    <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end;">
+                        <div class="form-group" style="margin: 0;">
+                            <label for="cleanup-keep">Keep latest per job</label>
+                            <input type="number" id="cleanup-keep" min="1" value="1" style="max-width: 100px;">
+                        </div>
+                        <div class="form-group" style="margin: 0;">
+                            <label style="display: flex; align-items: center; gap: 8px; cursor: pointer;">
+                                <input type="checkbox" id="cleanup-purge-failed" style="width: auto;">
+                                Also delete entire dirs of failed jobs
+                            </label>
+                        </div>
+                    </div>
+                    <div style="display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap;">
+                        <button id="cleanup-preview-btn" type="button" class="action-button" style="max-width: 220px;">
+                            🔍 Preview (dry run)
+                        </button>
+                        <button id="cleanup-apply-btn" type="button" class="action-button" style="max-width: 220px; background: #dc2626; color: white;" disabled>
+                            🗑️ Delete previewed items
+                        </button>
+                    </div>
+                    <div id="cleanup-result" style="margin-top: 16px;"></div>
+                </div>
+
+                <!-- Per-job breakdown -->
+                <div class="spell-section">
+                    <h3 style="margin-top: 0;">📊 Per-Job Breakdown</h3>
+                    <div id="cleanup-jobs"><p style="color: #888;">Loading…</p></div>
+                </div>
+                </div><!-- /cleanup-panel-checkpoints -->
+
+                <!-- Panel: HuggingFace cache -->
+                <div id="cleanup-panel-hfcache" class="cleanup-panel" role="tabpanel" style="display: none;">
+                    <div class="spell-section" style="background: #fffbeb; border-left: 3px solid #f59e0b;">
+                        <strong>⚠️ This cache is shared across your whole machine.</strong>
+                        <p style="margin: 6px 0 0 0; color: #92400e; font-size: 0.9em;">
+                            Other tools (ComfyUI, other trainers, scripts) pull models from this same cache.
+                            Everything here is re-downloadable from the Hub, but deleting a model another tool
+                            still needs will force a re-download. Only remove repos you're sure are unused.
+                        </p>
+                    </div>
+
+                    <div class="spell-section">
+                        <h3 style="margin-top: 0;">🤗 Cached Repos</h3>
+                        <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; margin-bottom: 12px;">
+                            <div class="form-group" style="margin: 0;">
+                                <label for="hf-stale-days">Stale after (days)</label>
+                                <input type="number" id="hf-stale-days" min="1" value="90" style="max-width: 100px;">
+                            </div>
+                            <button id="hf-refresh-btn" type="button" class="action-button" style="max-width: 140px;">🔄 Scan</button>
+                            <button id="hf-preselect-btn" type="button" class="action-button" style="max-width: 200px;">✓ Select stale</button>
+                        </div>
+                        <div id="hf-cache-stats" class="metrics-grid" style="margin-bottom: 12px;">
+                            <div class="metric-card">
+                                <span class="metric-label">Cache total</span>
+                                <span id="hf-cache-total" class="metric-value">—</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-label">Stale (reclaimable)</span>
+                                <span id="hf-cache-stale" class="metric-value">—</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-label">Selected</span>
+                                <span id="hf-selected-size" class="metric-value">0 B</span>
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;">
+                            <button id="hf-delete-btn" type="button" class="action-button" style="max-width: 240px; background: #dc2626; color: white;" disabled>
+                                🗑️ Delete selected repos
+                            </button>
+                        </div>
+                        <div id="hf-result" style="margin-bottom: 12px;"></div>
+                        <div id="hf-cache-table"><p style="color: #888;">Click “Scan” to inspect the cache.</p></div>
+                    </div>
+                </div>
+
+                <!-- Panel: saved models -->
+                <div id="cleanup-panel-models" class="cleanup-panel" role="tabpanel" style="display: none;">
+                    <div class="spell-section" style="background: #fef2f2; border-left: 3px solid #dc2626;">
+                        <strong>⚠️ Deleting a saved model is permanent.</strong>
+                        <p style="margin: 6px 0 0 0; color: #991b1b; font-size: 0.9em;">
+                            These are your trained outputs under <code>./models/</code>. Unlike the HuggingFace
+                            cache, a model that was never pushed to the Hub <strong>cannot be recovered</strong>.
+                            Models in use (an active job's output, or one loaded for inference) are locked 🔒.
+                        </p>
+                    </div>
+
+                    <div class="spell-section">
+                        <h3 style="margin-top: 0;">📦 Saved Models</h3>
+                        <div class="metrics-grid" style="margin-bottom: 12px;">
+                            <div class="metric-card">
+                                <span class="metric-label">Models total</span>
+                                <span id="models-total" class="metric-value">—</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-label">Selected</span>
+                                <span id="models-selected-size" class="metric-value">0 B</span>
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;">
+                            <button id="models-delete-btn" type="button" class="action-button" style="max-width: 240px; background: #dc2626; color: white;" disabled>
+                                🗑️ Delete selected models
+                            </button>
+                        </div>
+                        <div id="models-result" style="margin-bottom: 12px;"></div>
+                        <div id="models-table"><p style="color: #888;">Loading…</p></div>
+                    </div>
+                </div>
+
+                <!-- Panel: other artifacts (GGUF exports + W&B logs) -->
+                <div id="cleanup-panel-artifacts" class="cleanup-panel" role="tabpanel" style="display: none;">
+                    <div class="spell-section">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <h3 style="margin: 0;">🧊 GGUF Exports</h3>
+                            <span style="font-size: 0.85em; color: #16a34a;">always regenerable from the model</span>
+                        </div>
+                        <p style="color: #666; font-size: 0.9em; margin: 6px 0 12px 0;">
+                            Quantized GGUF files produced for llama.cpp inference. Safe to delete — re-export
+                            anytime from the model. One loaded for inference is locked 🔒.
+                        </p>
+                        <div class="metrics-grid" style="margin-bottom: 12px;">
+                            <div class="metric-card">
+                                <span class="metric-label">GGUF total</span>
+                                <span id="gguf-total" class="metric-value">—</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-label">Selected</span>
+                                <span id="gguf-selected-size" class="metric-value">0 B</span>
+                            </div>
+                        </div>
+                        <div style="display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;">
+                            <button id="gguf-delete-btn" type="button" class="action-button" style="max-width: 240px; background: #dc2626; color: white;" disabled>
+                                🗑️ Delete selected GGUF
+                            </button>
+                        </div>
+                        <div id="gguf-result" style="margin-bottom: 12px;"></div>
+                        <div id="gguf-table"><p style="color: #888;">Loading…</p></div>
+                    </div>
+
+                    <div class="spell-section">
+                        <h3 style="margin-top: 0;">📈 Weights & Biases Logs</h3>
+                        <p style="color: #666; font-size: 0.9em; margin: 6px 0 12px 0;">
+                            Local mirrors of training run logs under <code>wandb/</code>. Metrics already live on
+                            the W&amp;B server; the active run is kept.
+                        </p>
+                        <div class="metrics-grid" style="margin-bottom: 12px;">
+                            <div class="metric-card">
+                                <span class="metric-label">Logs total</span>
+                                <span id="wandb-total" class="metric-value">—</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-label">Runs</span>
+                                <span id="wandb-runs" class="metric-value">—</span>
+                            </div>
+                            <div class="metric-card">
+                                <span class="metric-label">Clearable</span>
+                                <span id="wandb-reclaimable" class="metric-value">—</span>
+                            </div>
+                        </div>
+                        <button id="wandb-clear-btn" type="button" class="action-button" style="max-width: 240px; background: #dc2626; color: white;" disabled>
+                            🗑️ Clear W&amp;B logs
+                        </button>
+                        <div id="wandb-result" style="margin-top: 12px;"></div>
                     </div>
                 </div>
             </section>
