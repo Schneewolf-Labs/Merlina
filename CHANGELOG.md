@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.0.3] - 2026-06-02
+
+### Added
+- **Disk manager** (`src/disk_manager.py`, `frontend/js/disk.js`): monitor and clean up model checkpoints, training artifacts, and cached data directly from the UI. Includes `scripts/cleanup_checkpoints.py` for CLI use.
+- **Training method selector moved to training tab**: "What are you training?" full block (description, Apply Suggested Settings, preset notes) now lives at the top of Step 3. Dataset tab retains a compact select-only control.
+
+
+
 ## [2.0.2] - 2026-06-02
 
 ### Added
