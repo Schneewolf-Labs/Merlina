@@ -7,7 +7,7 @@ MINOR version: Backwards-compatible functionality additions
 PATCH version: Backwards-compatible bug fixes
 """
 
-__version__ = "2.0.1"
+__version__ = "2.0.2"
 __version_info__ = tuple(int(i) for i in __version__.split("."))
 
 # Version metadata
@@ -17,7 +17,7 @@ VERSION_PATCH = __version_info__[2]
 
 # Release information
 RELEASE_NAME = "Workshop"  # Codename for this release
-RELEASE_DATE = "2026-05-29"  # Release date of current version
+RELEASE_DATE = "2026-06-02"  # Release date of current version
 
 def get_version() -> str:
     """Returns the current version string."""
