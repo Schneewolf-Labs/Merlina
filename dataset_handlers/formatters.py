@@ -284,16 +284,31 @@ class TokenizerFormatter(DatasetFormatter):
     """
     Format dataset using the tokenizer's chat template from tokenizer_config.json.
     This automatically uses the correct format for the model being trained.
+
+    Supports per-row `enable_thinking` selection (auto_detect_thinking=True):
+    rows that carry reasoning (reasoning column or embedded <think>...</think>)
+    are rendered with enable_thinking=True; rows without reasoning are rendered
+    with enable_thinking=False. This bakes the empty-<think></think> wrapper
+    into the prompt prefix on non-reasoning rows so the model only trains on
+    the bare answer instead of learning to emit </think> itself.
     """
 
-    def __init__(self, tokenizer: Any):
+    def __init__(self, tokenizer: Any, enable_thinking: bool = True,
+                 auto_detect_thinking: bool = True):
         """
         Initialize tokenizer-based formatter.
 
         Args:
             tokenizer: HuggingFace tokenizer with chat_template support
+            enable_thinking: Static fallback flag passed to apply_chat_template
+                when auto_detect_thinking is False (or when the row has no
+                reasoning and auto-detect is on, we pass False explicitly).
+            auto_detect_thinking: Detect reasoning presence per row and override
+                enable_thinking accordingly (recommended).
         """
         self.tokenizer = tokenizer
+        self.enable_thinking = enable_thinking
+        self.auto_detect_thinking = auto_detect_thinking
 
         # Check if tokenizer has chat template
         if not hasattr(tokenizer, 'chat_template') or tokenizer.chat_template is None:
@@ -304,7 +319,26 @@ class TokenizerFormatter(DatasetFormatter):
             self.has_chat_template = False
         else:
             self.has_chat_template = True
-            logger.info(f"Using tokenizer chat template for formatting")
+            logger.info(
+                f"Using tokenizer chat template for formatting "
+                f"(auto_detect_thinking={auto_detect_thinking}, "
+                f"static enable_thinking={enable_thinking})"
+            )
+
+    def _row_has_reasoning(self, row: dict) -> bool:
+        """Return True iff this row carries reasoning content the model should
+        train to fill into a <think> wrapper. Signals (any of):
+          - non-empty `reasoning` column
+          - <think>...</think> embedded in any of prompt/chosen/rejected/system
+        """
+        reasoning = _safe_str(row.get('reasoning'))
+        if reasoning.strip():
+            return True
+        for k in ('prompt', 'chosen', 'rejected', 'system'):
+            v = _safe_str(row.get(k))
+            if '<think>' in v and '</think>' in v:
+                return True
+        return False
 
     def format(self, row: dict) -> dict:
         """
@@ -336,6 +370,16 @@ class TokenizerFormatter(DatasetFormatter):
                 "rejected": rejected
             }
 
+        # Per-row enable_thinking selection: when auto-detect is on, render
+        # with thinking enabled iff the row carries reasoning content. This
+        # keeps the empty-<think></think> wrapper INSIDE the prompt prefix
+        # for non-reasoning rows, so the response extraction yields just the
+        # bare answer and the model never trains to emit </think> itself.
+        if self.auto_detect_thinking:
+            row_enable_thinking = self._row_has_reasoning(row)
+        else:
+            row_enable_thinking = bool(self.enable_thinking)
+
         # Build message list for prompt (without assistant response)
         messages_prompt = []
         if system.strip():
@@ -348,7 +392,8 @@ class TokenizerFormatter(DatasetFormatter):
             formatted_prompt = self.tokenizer.apply_chat_template(
                 messages_prompt,
                 tokenize=False,
-                add_generation_prompt=True
+                add_generation_prompt=True,
+                enable_thinking=row_enable_thinking,
             )
         except Exception as e:
             logger.warning(f"Failed to apply chat template: {e}. Using fallback.")
@@ -365,7 +410,8 @@ class TokenizerFormatter(DatasetFormatter):
             full_chosen = self.tokenizer.apply_chat_template(
                 messages_chosen,
                 tokenize=False,
-                add_generation_prompt=False
+                add_generation_prompt=False,
+                enable_thinking=row_enable_thinking,
             )
             # Extract just the response part (everything after the prompt)
             formatted_chosen = full_chosen[len(formatted_prompt):]
@@ -379,7 +425,8 @@ class TokenizerFormatter(DatasetFormatter):
             full_rejected = self.tokenizer.apply_chat_template(
                 messages_rejected,
                 tokenize=False,
-                add_generation_prompt=False
+                add_generation_prompt=False,
+                enable_thinking=row_enable_thinking,
             )
             formatted_rejected = full_rejected[len(formatted_prompt):]
         except Exception as e:
@@ -483,7 +530,8 @@ def get_formatter(
     format_type: str,
     custom_templates: Optional[dict] = None,
     tokenizer: Optional[Any] = None,
-    enable_thinking: Optional[bool] = None
+    enable_thinking: Optional[bool] = None,
+    auto_detect_thinking: bool = True,
 ) -> DatasetFormatter:
     """
     Factory function to get the appropriate formatter.
@@ -494,7 +542,14 @@ def get_formatter(
                          Dict with keys: prompt_template, chosen_template, rejected_template
         tokenizer: Required if format_type is 'tokenizer'
                   HuggingFace tokenizer with chat_template support
-        enable_thinking: Optional for 'qwen3' format - controls thinking mode (default: True)
+        enable_thinking: Optional for 'qwen3' format - controls thinking mode (default: True).
+                        Also serves as the static fallback for 'tokenizer' format when
+                        auto_detect_thinking is False.
+        auto_detect_thinking: For 'tokenizer' format - render each row's prompt with
+                             enable_thinking matched to whether the row carries reasoning
+                             (reasoning column or embedded <think>...</think>). Prevents
+                             training on the empty-<think></think> wrapper for
+                             non-reasoning rows. Default True.
 
     Returns:
         DatasetFormatter instance
@@ -522,7 +577,12 @@ def get_formatter(
         if tokenizer is None:
             raise ValueError("tokenizer required for 'tokenizer' format type")
 
-        return TokenizerFormatter(tokenizer=tokenizer)
+        static_thinking = enable_thinking if enable_thinking is not None else True
+        return TokenizerFormatter(
+            tokenizer=tokenizer,
+            enable_thinking=static_thinking,
+            auto_detect_thinking=auto_detect_thinking,
+        )
 
     elif format_type == 'custom':
         if not custom_templates:

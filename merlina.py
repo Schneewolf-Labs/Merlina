@@ -212,6 +212,27 @@ class DatasetFormat(BaseModel):
         description="Enable thinking mode for Qwen3 format (default: True)"
     )
 
+    # Per-row thinking detection (applies to qwen3 and tokenizer formats whose
+    # chat_template supports the enable_thinking kwarg). When True, the
+    # formatter renders each row's prompt with enable_thinking matched to
+    # whether the row actually carries reasoning content (reasoning column or
+    # <think>...</think> embedded in prompt/response). This bakes the empty-
+    # <think></think> wrapper into the *prompt prefix* for non-reasoning rows
+    # so the model never learns to emit a closing </think> as part of its
+    # answer (the failure mode behind the broken hybrid thinking gate in
+    # A3-Instruct). When False, the static enable_thinking flag is used for
+    # every row (legacy behavior).
+    auto_detect_thinking: bool = Field(
+        True,
+        description=(
+            "Auto-detect <think> per row: reasoning column or embedded "
+            "<think>...</think> in prompt/response data sets enable_thinking "
+            "per row, so the model never trains on the empty-<think></think> "
+            "wrapper that the chat template auto-injects on non-reasoning "
+            "rows. When off, uses the static enable_thinking flag for all rows."
+        )
+    )
+
 
 class DatasetConfig(BaseModel):
     """Complete dataset configuration"""
@@ -1948,7 +1969,8 @@ async def preview_dataset(config: DatasetConfig, offset: int = 0, limit: int = 1
         formatter = get_formatter(
             format_type=formatter_type,
             custom_templates=config.format.custom_templates,
-            enable_thinking=config.format.enable_thinking
+            enable_thinking=config.format.enable_thinking,
+            auto_detect_thinking=config.format.auto_detect_thinking,
         )
 
         # Create pipeline (includes any additional datasets the user added)
@@ -2021,13 +2043,15 @@ async def preview_formatted_dataset(config: DatasetConfig, offset: int = 0, limi
                 formatter = get_formatter(
                     format_type=formatter_type,
                     custom_templates=config.format.custom_templates,
-                    enable_thinking=config.format.enable_thinking
+                    enable_thinking=config.format.enable_thinking,
+                    auto_detect_thinking=config.format.auto_detect_thinking,
                 )
         else:
             formatter = get_formatter(
                 format_type=formatter_type,
                 custom_templates=config.format.custom_templates,
-                enable_thinking=config.format.enable_thinking
+                enable_thinking=config.format.enable_thinking,
+                auto_detect_thinking=config.format.auto_detect_thinking,
             )
 
         # Create pipeline (includes any additional datasets the user added)
@@ -2082,7 +2106,8 @@ async def get_dataset_stats(config: DatasetConfig):
         formatter = get_formatter(
             format_type=formatter_type,
             custom_templates=config.format.custom_templates,
-            enable_thinking=config.format.enable_thinking
+            enable_thinking=config.format.enable_thinking,
+            auto_detect_thinking=config.format.auto_detect_thinking,
         )
 
         pipeline = DatasetPipeline(
