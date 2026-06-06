@@ -493,8 +493,12 @@ class DatasetManager {
         const formatType = e.target.value;
         const customConfig = document.getElementById('custom-format-config');
         const qwen3Config = document.getElementById('qwen3-format-config');
+        const autoThinkingConfig = document.getElementById('auto-thinking-config');
         if (customConfig) customConfig.style.display = formatType === 'custom' ? 'block' : 'none';
         if (qwen3Config) qwen3Config.style.display = formatType === 'qwen3' ? 'block' : 'none';
+        // auto-detect-thinking applies whenever the chat template uses enable_thinking
+        if (autoThinkingConfig) autoThinkingConfig.style.display =
+            (formatType === 'qwen3' || formatType === 'tokenizer') ? 'block' : 'none';
     }
 
     async handlePreview() {
@@ -731,6 +735,11 @@ class DatasetManager {
         }
         if (formatType === 'qwen3') {
             format.enable_thinking = document.getElementById('enable-thinking')?.checked ?? true;
+        }
+        // Auto-detect thinking is independent of static enable_thinking; surfaces
+        // whenever the chat template supports the enable_thinking kwarg.
+        if (formatType === 'qwen3' || formatType === 'tokenizer') {
+            format.auto_detect_thinking = document.getElementById('auto-detect-thinking')?.checked ?? true;
         }
 
         const config = {

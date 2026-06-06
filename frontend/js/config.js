@@ -480,6 +480,9 @@ class ConfigManager {
                 if (config.dataset.format.enable_thinking !== undefined) {
                     this.setCheckboxValue('enable-thinking', config.dataset.format.enable_thinking);
                 }
+                if (config.dataset.format.auto_detect_thinking !== undefined) {
+                    this.setCheckboxValue('auto-detect-thinking', config.dataset.format.auto_detect_thinking);
+                }
 
                 if (config.dataset.format.custom_templates) {
                     const templates = config.dataset.format.custom_templates;

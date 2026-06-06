@@ -139,6 +139,12 @@ export function buildDatasetConfig({ includeTrainingMode = true } = {}) {
             rejected_template: str('custom-rejected-template', ''),
         };
     }
+    // Auto-detect-thinking: surfaces whenever the chat template supports the
+    // enable_thinking kwarg (qwen3 + tokenizer). Independent of static
+    // enable_thinking — when on, formatter picks per row from reasoning signal.
+    if (formatType === 'qwen3' || formatType === 'tokenizer') {
+        format.auto_detect_thinking = bool('auto-detect-thinking', true);
+    }
 
     const config = {
         source,

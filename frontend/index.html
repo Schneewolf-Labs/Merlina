@@ -259,6 +259,22 @@
                         </div>
                     </div>
 
+                    <!-- Tokenizer / Qwen3 Auto-Detect Thinking (applies whenever the chat template supports enable_thinking) -->
+                    <div id="auto-thinking-config" style="display: none; margin-top: 15px;">
+                        <div class="form-group">
+                            <label class="magic-checkbox">
+                                <input type="checkbox" id="auto-detect-thinking" checked>
+                                <span>Auto-detect Thinking per Row 🪄</span>
+                            </label>
+                            <small style="color: #888; font-size: 0.85em; display: block; margin-top: 5px;">
+                                Detect &lt;think&gt; per row: render with thinking <em>enabled</em> when the row has a reasoning column or
+                                embedded &lt;think&gt;…&lt;/think&gt; in prompt/response, and <em>disabled</em> when it doesn't. This bakes the
+                                empty &lt;think&gt;&lt;/think&gt; wrapper into the prompt prefix on non-reasoning rows so the model never
+                                trains on emitting a closing &lt;/think&gt; itself. Recommended for hybrid thinking/non-thinking corpora.
+                            </small>
+                        </div>
+                    </div>
+
                     <!-- Custom Template Config -->
                     <div id="custom-format-config" style="display: none; margin-top: 15px;">
                         <div class="form-group">
