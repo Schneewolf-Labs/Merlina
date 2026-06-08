@@ -18,6 +18,10 @@ export default defineConfig({
         navigationTimeout: 10000,
         screenshot: 'only-on-failure',
         trace: 'retain-on-failure',
+        launchOptions: {
+            executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH || '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage', '--headless=new'],
+        },
     },
 
     webServer: {

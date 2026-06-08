@@ -466,8 +466,8 @@ test.describe('Cleanup section', () => {
         await expect(page.locator('#cleanup-panel-artifacts')).toBeHidden();
         await page.locator('.cleanup-tab-btn[data-ctab="artifacts"]').click();
         await expect(page.locator('#cleanup-panel-artifacts')).toBeVisible();
-        await expect(page.getByText('GGUF Exports')).toBeVisible();
-        await expect(page.getByText('Weights & Biases Logs')).toBeVisible();
+        await expect(page.locator('#cleanup-panel-artifacts h3').filter({ hasText: 'GGUF Exports' })).toBeVisible();
+        await expect(page.locator('#cleanup-panel-artifacts h3').filter({ hasText: 'Weights & Biases' })).toBeVisible();
         // Both delete buttons start disabled (nothing selected / nothing clearable yet).
         await expect(page.locator('#gguf-delete-btn')).toBeDisabled();
         // GGUF total leaves the placeholder once the scan returns.

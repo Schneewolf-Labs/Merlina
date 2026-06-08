@@ -43,7 +43,11 @@ mock_transformers = MagicMock()
 mock_transformers.PreTrainedTokenizerBase = FakeTokenizerBase
 sys.modules['transformers'] = mock_transformers
 
-for module in ['trl', 'peft', 'accelerate', 'bitsandbytes', 'wandb', 'psutil', 'pynvml']:
+for module in [
+    'trl', 'peft', 'accelerate', 'bitsandbytes', 'wandb', 'psutil', 'pynvml',
+    'datasets', 'datasets.arrow_dataset', 'datasets.load',
+    'pyarrow', 'huggingface_hub', 'artemis_vlm', 'grimoire',
+]:
     sys.modules[module] = MagicMock()
 
 # ── Start the actual server ──────────────────────────────────────────────────
