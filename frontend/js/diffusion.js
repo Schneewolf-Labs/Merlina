@@ -421,10 +421,11 @@ export async function renderJobSamples(jobId) {
     const hasFlat = Array.isArray(data?.samples) && data.samples.length > 0;
 
     if (!hasFlat && steps.length === 0) {
-        // Show the section only if we got back a structured response (meaning
-        // the job exists) so users get the "no samples yet" hint instead of
-        // a blank space mid-modal.
-        if (data && typeof data === 'object') {
+        // Only show the "no samples yet" hint for diffusion jobs that are
+        // still running (no reason means the samples dir exists but is empty).
+        // Non-diffusion jobs include a reason string — keep the section hidden.
+        const isDiffusionJob = data && typeof data === 'object' && !data.reason;
+        if (isDiffusionJob) {
             section.style.display = 'block';
             if (empty) empty.style.display = 'block';
         }
