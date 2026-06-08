@@ -32,6 +32,13 @@ import torch
 import wandb
 from datasets import load_dataset, Dataset
 from transformers import AutoTokenizer
+from PIL import Image as _PILImage
+
+# Doc/chart corpora (pixmo-docs, InfoVQA) carry the occasional giant scan
+# (>178.9M px) that trips PIL's DecompressionBomb *hard error* at decode.
+# The Qwen3-VL image processor downscales via max_pixels anyway, so the
+# bomb check only blocks an image we were going to shrink. Disable it.
+_PILImage.MAX_IMAGE_PIXELS = None
 
 from grimoire import GrimoireTrainer
 
@@ -233,7 +240,13 @@ def _load_stage2_dataset(config: Any) -> Tuple[Dataset, Optional[Dataset]]:
     max_seq_len = getattr(config, "max_seq_length", None) or 4096
     max_chars = max_seq_len * 4
     before = len(raw)
-    raw = raw.filter(lambda r: len(r["messages"]) <= max_chars, num_proc=4)
+    # Filter on the `messages` column ALONE — reading the column directly
+    # returns the raw JSON strings without formatting (and crucially WITHOUT
+    # decoding the Image column, which `.filter(lambda r: ...)` does eagerly:
+    # that both crashed on >178.9M-px scans and crawled at ~100 rows/s while
+    # needlessly decoding all 241K images just to count text length).
+    keep_idx = [i for i, m in enumerate(raw["messages"]) if len(m) <= max_chars]
+    raw = raw.select(keep_idx)
     logger.info(
         f"  length filter (<= ~{max_seq_len} tok / {max_chars} chars): "
         f"{before} -> {len(raw)} rows ({before - len(raw)} dropped)"
