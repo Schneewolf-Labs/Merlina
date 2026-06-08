@@ -2,9 +2,26 @@
 import { defineConfig } from '@playwright/test';
 import { fileURLToPath } from 'url';
 import path from 'path';
+import fs from 'fs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, '..', '..');
+
+// Resolve a browser executable only when the env var or well-known fallback
+// path actually exists — otherwise leave executablePath unset so playwright
+// uses its own bundled browser.
+function resolveExecutablePath() {
+    const candidates = [
+        process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH,
+        '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
+    ].filter(Boolean);
+    for (const p of candidates) {
+        if (fs.existsSync(p)) return p;
+    }
+    return undefined;
+}
+
+const executablePath = resolveExecutablePath();
 
 export default defineConfig({
     testDir: '.',
@@ -18,6 +35,10 @@ export default defineConfig({
         navigationTimeout: 10000,
         screenshot: 'only-on-failure',
         trace: 'retain-on-failure',
+        launchOptions: {
+            ...(executablePath ? { executablePath } : {}),
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-gpu', '--disable-dev-shm-usage'],
+        },
     },
 
     webServer: {
