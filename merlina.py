@@ -2394,12 +2394,13 @@ async def preview_image_dataset(
     total = 0
     try:
         with open(jsonl) as f:
-            for i, line in enumerate(f):
+            for line in f:
                 line = line.strip()
                 if not line:
                     continue
+                row_index = total
                 total += 1
-                if i < offset:
+                if row_index < offset:
                     continue
                 if len(rows_out) >= limit:
                     continue
@@ -2422,7 +2423,7 @@ async def preview_image_dataset(
                 else:
                     p = p.resolve()
                 rows_out.append({
-                    "row_index":      i,
+                    "row_index":      row_index,
                     "prompt":         (row.get(caption_field) or "") if caption_field else "",
                     "image_path":     str(p),
                     "image_url":      (

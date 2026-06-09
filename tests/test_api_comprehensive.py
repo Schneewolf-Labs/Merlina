@@ -824,6 +824,32 @@ class TestDatasetManagement:
             assert "datasets" in data
             assert len(data["datasets"]) > 0
 
+    def test_preview_images_pagination_skips_blank_lines(self, client, tmp_path):
+        """GET /dataset/preview-images paginates by data row, not file line.
+
+        Regression test: blank lines in the JSONL used to shift offset/limit
+        and row_index because pagination compared against the raw line number.
+        """
+        jsonl = tmp_path / "images.jsonl"
+        jsonl.write_text(
+            "\n"  # leading blank line shifts file line numbers off data rows
+            '{"image": "img0.png", "prompt": "p0"}\n'
+            '{"image": "img1.png", "prompt": "p1"}\n'
+            "\n"
+            '{"image": "img2.png", "prompt": "p2"}\n'
+        )
+
+        response = client.get(
+            "/dataset/preview-images",
+            params={"jsonl_path": str(jsonl), "offset": 1, "limit": 10},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total"] == 3
+        assert data["returned"] == 2
+        assert [r["row_index"] for r in data["rows"]] == [1, 2]
+        assert [r["prompt"] for r in data["rows"]] == ["p1", "p2"]
+
 
 # ============================================================================
 # Test GPU Management Endpoints

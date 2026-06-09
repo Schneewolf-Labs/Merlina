@@ -1188,7 +1188,9 @@ async def run_training_async(
         uploaded_datasets: Dictionary of uploaded datasets
     """
     loop = asyncio.get_running_loop()
-    await loop.run_in_executor(None, run_training_sync, job_id, config, job_manager, uploaded_datasets)
+    await loop.run_in_executor(
+        None, run_training_sync, job_id, config, job_manager, uploaded_datasets, loop
+    )
 
 
 def _resolve_sibling_runner(config: Any):
