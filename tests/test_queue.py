@@ -219,6 +219,33 @@ def test_with_job_manager():
     print("\n✓ Test 5 passed!")
 
 
+def test_wait_for_completion_timeout():
+    """Test that wait_for_completion honors its timeout"""
+    print("\n" + "="*60)
+    print("TEST 6: wait_for_completion timeout")
+    print("="*60)
+
+    queue = JobQueue(max_concurrent_jobs=1)
+
+    # A job longer than the timeout: wait should give up and return False
+    queue.submit("slow-job", {"duration": 3}, simple_task, JobPriority.NORMAL)
+
+    start = time.monotonic()
+    finished = queue.wait_for_completion(timeout=0.5)
+    elapsed = time.monotonic() - start
+    print(f"\nwait_for_completion(timeout=0.5) -> {finished} after {elapsed:.2f}s")
+    assert finished is False, "expected timeout before the job finished"
+    assert elapsed < 2.5, f"timeout did not fire promptly (took {elapsed:.2f}s)"
+
+    # With a generous timeout the job finishes and we get True
+    finished = queue.wait_for_completion(timeout=30)
+    print(f"wait_for_completion(timeout=30) -> {finished}")
+    assert finished is True, "expected completion within the timeout"
+
+    queue.shutdown(wait=True)
+    print("\n✓ Test 6 passed!")
+
+
 def run_all_tests():
     """Run all tests"""
     print("\n" + "🧪 "*20)
@@ -231,6 +258,7 @@ def run_all_tests():
         test_job_cancellation()
         test_concurrent_execution()
         test_with_job_manager()
+        test_wait_for_completion_timeout()
 
         print("\n" + "✅ "*20)
         print("ALL TESTS PASSED!")

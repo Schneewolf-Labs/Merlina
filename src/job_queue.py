@@ -365,14 +365,28 @@ class JobQueue:
                 for job_id, thread in self._running_jobs.items()
             ]
 
-    def wait_for_completion(self, timeout: Optional[float] = None):
+    def wait_for_completion(self, timeout: Optional[float] = None) -> bool:
         """
         Wait for all jobs to complete.
 
         Args:
-            timeout: Maximum time to wait in seconds
+            timeout: Maximum time to wait in seconds (None = wait forever)
+
+        Returns:
+            True if all jobs completed, False if the timeout expired first
         """
-        self._queue.join()
+        if timeout is None:
+            self._queue.join()
+            return True
+
+        deadline = time.monotonic() + timeout
+        with self._queue.all_tasks_done:
+            while self._queue.unfinished_tasks:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._queue.all_tasks_done.wait(remaining)
+        return True
 
     def shutdown(self, wait: bool = True):
         """

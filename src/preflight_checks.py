@@ -549,11 +549,12 @@ class PreflightValidator:
         """Validate training hyperparameters using configurable thresholds."""
         issues = []
 
-        # Check LoRA config using constants
-        if config.lora_r > MAX_RECOMMENDED_LORA_RANK:
-            self.warnings.append(
-                f"LoRA rank ({config.lora_r}) is very high. Consider using 64-128 for most cases."
-            )
+        # Check LoRA config using constants (only when LoRA is enabled)
+        if getattr(config, "use_lora", True):
+            if config.lora_r > MAX_RECOMMENDED_LORA_RANK:
+                self.warnings.append(
+                    f"LoRA rank ({config.lora_r}) is very high. Consider using 64-128 for most cases."
+                )
 
             if config.lora_r < 8:
                 self.warnings.append(

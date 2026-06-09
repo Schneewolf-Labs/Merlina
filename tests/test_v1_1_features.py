@@ -213,6 +213,58 @@ def test_preflight_validation():
     return True
 
 
+def test_preflight_lora_warnings():
+    """Test that LoRA hyperparameter warnings fire independently.
+
+    Regression test: the low-rank and alpha<rank warnings used to be nested
+    inside the high-rank branch, so they could never fire for normal ranks.
+    """
+    print("="*60)
+    print("TEST: Pre-flight LoRA warnings")
+    print("="*60)
+
+    from types import SimpleNamespace
+    from src.preflight_checks import PreflightValidator
+
+    def make_config(**overrides):
+        base = dict(
+            use_lora=True,
+            lora_r=64,
+            lora_alpha=128,
+            batch_size=1,
+            gradient_accumulation_steps=16,
+            learning_rate=5e-6,
+            max_length=512,
+            max_prompt_length=256,
+            output_name="test_model",
+        )
+        base.update(overrides)
+        return SimpleNamespace(**base)
+
+    # alpha < rank should warn even when rank is in the normal range
+    validator = PreflightValidator()
+    validator._check_training_config(make_config(lora_r=64, lora_alpha=32))
+    assert any("alpha" in w for w in validator.warnings), \
+        f"expected alpha<rank warning, got: {validator.warnings}"
+
+    # very low rank should warn even when rank is not very high
+    validator = PreflightValidator()
+    validator._check_training_config(make_config(lora_r=4, lora_alpha=8))
+    assert any("very low" in w and "rank" in w for w in validator.warnings), \
+        f"expected low-rank warning, got: {validator.warnings}"
+
+    # no LoRA warnings when LoRA is disabled
+    validator = PreflightValidator()
+    validator._check_training_config(
+        make_config(use_lora=False, lora_r=4, lora_alpha=2)
+    )
+    assert not any("LoRA" in w for w in validator.warnings), \
+        f"expected no LoRA warnings with use_lora=False, got: {validator.warnings}"
+
+    print("\n✅ Pre-flight LoRA warning tests passed!\n")
+    return True
+
+
 def test_imports():
     """Test that all core modules can be imported"""
     print("="*60)
@@ -254,6 +306,7 @@ def main():
         ("Job Manager", test_job_manager),
         ("WebSocket Manager", test_websocket_manager),
         ("Pre-flight Validation", test_preflight_validation),
+        ("Pre-flight LoRA Warnings", test_preflight_lora_warnings),
     ]
 
     results = {}
