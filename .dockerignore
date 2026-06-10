@@ -1,0 +1,32 @@
+# VCS and CI
+.git
+.github
+
+# Secrets — never bake into the image; pass via env_file/-e at runtime
+.env
+
+# Runtime state (mounted as volumes instead)
+data/
+models/
+results/
+wandb/
+*.db
+
+# Build/test artifacts
+dist/
+build/
+*.egg-info/
+htmlcov/
+.coverage
+.pytest_cache/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Frontend test tooling
+tests/frontend/node_modules/
+
+# Docs/notebooks not needed at runtime
+notebooks/
+docs/

@@ -1,0 +1,146 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "merlina"
+dynamic = ["version"]
+description = "Magical LLM fine-tuning with a delightful web interface - ORPO, DPO, SimPO, CPO, IPO, KTO, SFT, VLM and diffusion training"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Schneewolf Labs" },
+]
+keywords = [
+    "llm",
+    "fine-tuning",
+    "training",
+    "orpo",
+    "dpo",
+    "lora",
+    "peft",
+    "machine-learning",
+    "web-ui",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+# IMPORTANT: torch, torchvision, torchaudio, and xformers are intentionally
+# NOT dependencies. GPU environments (RunPod, Colab, Lambda, etc.) ship
+# pre-installed CUDA-matched builds that pip would silently replace with
+# generic PyPI builds. Install torch first if you don't have it:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+# Requires torch >= 2.5.0 (for transformers 5.x compatibility). torchvision is
+# required for VLM training. Keep this list in sync with requirements.txt.
+dependencies = [
+    # Web framework
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.0.0",
+    "pydantic-settings>=2.0.0",
+    "python-multipart>=0.0.6",
+    # ML/Training
+    "transformers>=5.0.0",
+    "accelerate>=0.24.0",
+    "grimoire-rl>=1.2.0",
+    "peft>=0.6.0",
+    "bitsandbytes>=0.41.0",
+    "datasets>=2.14.0",
+    # Utilities
+    "wandb>=0.15.0",
+    "huggingface-hub>=0.19.0",
+    "sentencepiece>=0.1.99",
+    "protobuf>=3.20.0",
+    "scipy>=1.10.0",
+    "einops>=0.7.0",
+    "Pillow>=10.0.0",
+    "ninja>=1.11.0",
+    "packaging>=23.0",
+    "pynvml>=11.5.0",
+]
+
+[project.optional-dependencies]
+# ArtemisVLM model classes; only imported when training_mode starts with "vlm_"
+vlm = [
+    "artemis-vlm>=0.1.2",
+]
+# Diffusion image-LoRA training (src/training_runner_diffusion.py)
+diffusion = [
+    "atelier-diffusion>=0.1.1",
+    "diffusers>=0.34.0",
+]
+all = [
+    "merlina[vlm,diffusion]",
+]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.11.0",
+    "httpx>=0.24.0",
+    "websockets>=11.0.0",
+    "pytest-cov>=4.1.0",
+    "pytest-timeout>=2.1.0",
+]
+
+[project.scripts]
+merlina = "merlina_cli:main"
+
+[project.urls]
+Homepage = "https://github.com/Schneewolf-Labs/Merlina"
+Documentation = "https://github.com/Schneewolf-Labs/Merlina/tree/main/docs"
+Repository = "https://github.com/Schneewolf-Labs/Merlina"
+Changelog = "https://github.com/Schneewolf-Labs/Merlina/blob/main/CHANGELOG.md"
+Issues = "https://github.com/Schneewolf-Labs/Merlina/issues"
+
+[tool.hatch.version]
+path = "version.py"
+
+# Merlina uses a flat repository layout (merlina.py, config.py, version.py at
+# the root, with `src` and `dataset_handlers` packages and a static `frontend`
+# directory resolved relative to merlina.py). The wheel ships that layout
+# as-is so imports work identically from a clone and from site-packages.
+# Note: this installs `src`, `config`, and `version` as top-level names, so
+# Merlina is best installed in its own virtualenv (the normal setup for a
+# training box). Namespacing everything under a single package is planned.
+[tool.hatch.build.targets.wheel]
+packages = ["src", "dataset_handlers"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"merlina.py" = "merlina.py"
+"merlina_cli.py" = "merlina_cli.py"
+"config.py" = "config.py"
+"version.py" = "version.py"
+"frontend" = "frontend"
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "merlina.py",
+    "merlina_cli.py",
+    "config.py",
+    "version.py",
+    "bump_version.py",
+    "src",
+    "dataset_handlers",
+    "frontend",
+    "docs",
+    "examples",
+    "scripts",
+    "tests",
+    "README.md",
+    "CHANGELOG.md",
+    "API.md",
+    "LICENSE",
+    "requirements.txt",
+    "pytest.ini",
+    ".env.example",
+]
