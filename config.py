@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     cuda_visible_devices: Optional[str] = None
     log_level: str = "INFO"
 
+    # Offline mode: never hit the HuggingFace Hub. Exports HF_HUB_OFFLINE /
+    # TRANSFORMERS_OFFLINE so transformers/datasets/huggingface_hub resolve
+    # everything from the local cache. Models and datasets must already be
+    # downloaded (or referenced by local path).
+    offline_mode: bool = False
+
     # ==========================================
     # Security & Limits
     # ==========================================
@@ -100,6 +106,14 @@ class Settings(BaseSettings):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        # Apply offline mode before any HF library reads the environment
+        if self.offline_mode:
+            os.environ["HF_HUB_OFFLINE"] = "1"
+            os.environ["TRANSFORMERS_OFFLINE"] = "1"
+            logger.info(
+                "Offline mode enabled: HuggingFace Hub access disabled, "
+                "models and datasets will be loaded from the local cache only"
+            )
         # Apply and validate CUDA_VISIBLE_DEVICES if set
         if self.cuda_visible_devices:
             validation_result = validate_cuda_visible_devices(self.cuda_visible_devices)

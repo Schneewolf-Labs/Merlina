@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Offline support for choosing LLMs** (#80): new `GET /models/local` endpoint lists base models already on disk (HuggingFace cache + full models in `./models`), surfaced in the UI as a "Local Models" picker with inline suggestions on the base-model input. New `OFFLINE_MODE` setting exports `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` so training, preview, and dataset loading resolve entirely from the local cache, and pre-flight checks now fail fast when a HuggingFace model id isn't cached while offline.
+
 ## [2.0.3] - 2026-06-02
 
 ### Added

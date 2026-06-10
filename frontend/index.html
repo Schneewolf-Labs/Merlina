@@ -72,9 +72,20 @@
                 <div class="spell-section">
                     <h3>🤖 Model Configuration</h3>
                     <div class="form-group">
-                        <label>📚 Base Model (HuggingFace Tag)</label>
-                        <input type="text" id="base-model" placeholder="meta-llama/Meta-Llama-3-8B-Instruct" class="magic-input" required>
-                        <small style="color: #888; font-size: 0.85em;">Examples: meta-llama/Llama-3.2-3B-Instruct, mistralai/Mistral-7B-Instruct-v0.3, Qwen/Qwen2.5-7B-Instruct</small>
+                        <label>📚 Base Model (HuggingFace Tag or Local Path)</label>
+                        <input type="text" id="base-model" list="local-models-list" placeholder="meta-llama/Meta-Llama-3-8B-Instruct" class="magic-input" required>
+                        <datalist id="local-models-list"></datalist>
+                        <small style="color: #888; font-size: 0.85em;">Examples: meta-llama/Llama-3.2-3B-Instruct, mistralai/Mistral-7B-Instruct-v0.3, ./models/my-merged-model</small>
+                    </div>
+                    <div class="form-group">
+                        <label>📂 Local Models <span id="offline-mode-badge" style="display: none; background: var(--primary-purple); color: white; padding: 2px 8px; border-radius: 10px; font-size: 0.8em; margin-left: 8px;">🔌 Offline Mode</span></label>
+                        <div style="display: flex; gap: 8px;">
+                            <select id="local-model-select" class="magic-select" style="flex: 1;">
+                                <option value="">— Select a model already on this machine —</option>
+                            </select>
+                            <button type="button" id="refresh-local-models" class="action-button" title="Refresh local model list">🔄</button>
+                        </div>
+                        <small style="color: #888; font-size: 0.85em;">Models from the HuggingFace cache and ./models — no internet needed</small>
                     </div>
                     <div class="form-group">
                         <label>🧠 Model Type</label>

@@ -50,6 +50,7 @@ from src.config_manager import ConfigManager
 from src.job_queue import JobQueue, JobPriority
 from src.gpu_utils import get_gpu_manager
 from src.presets import get_preset, get_all_presets
+from src.local_models import list_local_models
 from src.disk_manager import (
     analyze_artifacts,
     analyze_disk,
@@ -3165,6 +3166,22 @@ async def list_cached_models():
         "cached_models": list(tokenizer_cache.keys()),
         "count": len(tokenizer_cache)
     }
+
+
+@app.get("/models/local")
+async def list_local_base_models():
+    """
+    List base models available locally for offline training.
+
+    Combines model repos from the HuggingFace cache (previously downloaded)
+    with full models in Merlina's models directory, so users can pick a
+    base model without internet access.
+    """
+    if settings.models_dir.is_absolute():
+        models_dir = settings.models_dir
+    else:
+        models_dir = SCRIPT_DIR / settings.models_dir
+    return await asyncio.to_thread(list_local_models, models_dir)
 
 
 class ModelLayersRequest(BaseModel):
