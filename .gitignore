@@ -1,9 +1,11 @@
 .env
 
-# Node.js (installed by CI for Playwright tests)
+# Node.js (installed by CI for Playwright tests). Anchored to repo root
+# so legitimate sub-package.json files (e.g. frontend/js/package.json,
+# which marks that directory as ESM for older Node versions) stay tracked.
 node_modules/
-package.json
-package-lock.json
+/package.json
+/package-lock.json
 
 # Playwright test artifacts
 test-results/
