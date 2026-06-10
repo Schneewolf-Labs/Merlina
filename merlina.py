@@ -4214,7 +4214,9 @@ async def inference_stream(websocket: WebSocket):
         logger.error(f"Inference WebSocket error: {e}")
 
 
-if __name__ == "__main__":
+def main():
+    """Start the Merlina server. Used by `python merlina.py` and the
+    `merlina` console script (see merlina_cli.py)."""
     import uvicorn
     from config import validate_cuda_visible_devices
 
@@ -4255,3 +4257,7 @@ if __name__ == "__main__":
         logger.warning("CUDA not available - GPU training will not work")
 
     uvicorn.run(app, host=settings.host, port=settings.port)
+
+
+if __name__ == "__main__":
+    main()

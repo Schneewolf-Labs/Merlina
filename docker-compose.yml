@@ -1,0 +1,34 @@
+# Merlina - Magical Model Training
+#
+# Requires the NVIDIA Container Toolkit for GPU access:
+#   https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html
+#
+# Start:  docker compose up -d
+# Logs:   docker compose logs -f
+# UI:     http://localhost:8000
+
+services:
+  merlina:
+    image: ghcr.io/schneewolf-labs/merlina:latest
+    build: .
+    ports:
+      - "8000:8000"
+    env_file:
+      # Optional .env for HF_TOKEN, WANDB_API_KEY, etc. (see .env.example)
+      - path: .env
+        required: false
+    volumes:
+      # Jobs DB, uploads, and HF model cache
+      - ./data:/app/data
+      # Trained models / LoRA adapters / GGUF exports
+      - ./models:/app/models
+      # Per-job training artifacts and checkpoints
+      - ./results:/app/results
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
