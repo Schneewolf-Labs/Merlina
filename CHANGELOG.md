@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Offline support for choosing LLMs** (#80): new `GET /models/local` endpoint lists base models already on disk (HuggingFace cache + full models in `./models`), surfaced in the UI as a "Local Models" picker with inline suggestions on the base-model input. New `OFFLINE_MODE` setting exports `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` so training, preview, and dataset loading resolve entirely from the local cache, and pre-flight checks now fail fast when a HuggingFace model id isn't cached while offline.
+- **pip packaging** (`pyproject.toml`): Merlina is now installable as a package — `pip install merlina` (extras: `[vlm]`, `[diffusion]`, `[all]`, `[dev]`) with a `merlina` console command (`merlina serve`, `merlina --version`, see `merlina_cli.py`). The wheel bundles the web frontend; the missing-torch case prints install instructions instead of a traceback.
+- **PyPI publish workflow** (`.github/workflows/publish.yml`): builds, smoke-tests, and publishes on GitHub releases via PyPI trusted publishing (requires one-time trusted-publisher registration on pypi.org).
+- **Docker support**: `Dockerfile` on the official PyTorch CUDA 12.8 runtime image, `docker-compose.yml` with NVIDIA GPU passthrough and persistent volumes, `.dockerignore`, and a GHCR build/push workflow (`.github/workflows/docker.yml`) publishing `ghcr.io/schneewolf-labs/merlina`.
+- **RunPod support**: `scripts/runpod_setup.sh` one-line setup for PyTorch pods (persists state to `/workspace`) and a deployment guide (`docs/user/runpod.md`) covering both the script and the GHCR image as a custom template.
+- **Google Colab notebook** (`notebooks/Merlina_Colab.ipynb`): runs the full UI on a free Colab GPU via Colab's built-in port proxy.
+
+### Changed
+- README Quick Start now offers pip / Docker / RunPod / Colab / from-source install paths.
+- `merlina.py`'s `__main__` startup block is now a callable `main()` (used by both `python merlina.py` and the `merlina` console script). No behavior change.
 
 ## [2.0.3] - 2026-06-02
 

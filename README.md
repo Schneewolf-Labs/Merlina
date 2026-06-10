@@ -31,42 +31,57 @@ Train LLMs with ORPO, DPO, SimPO, CPO, IPO, KTO, and SFT using a delightful web 
 
 ## Quick Start
 
-### 1. Clone and Install
+Pick your path — all of them end at the same web UI:
+
+| | |
+|---|---|
+| 🐍 **pip** | `pip install merlina` then `merlina serve` |
+| 🐳 **Docker** | `docker compose up` with GPU passthrough |
+| ☁️ **RunPod** | One-line setup script or GHCR image — [guide](docs/user/runpod.md) |
+| 📓 **Colab** | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Schneewolf-Labs/Merlina/blob/main/notebooks/Merlina_Colab.ipynb) free GPU, three cells |
+| 🛠️ **From source** | `git clone` + `pip install -r requirements.txt` (below) |
+
+> **About torch:** Merlina deliberately does **not** install
+> torch/torchvision/torchaudio — GPU environments (RunPod, Colab, Lambda,
+> etc.) ship CUDA-matched builds that pip would silently replace with broken
+> generic ones. If you don't have torch yet, install it first:
+> ```bash
+> pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+> ```
+> torchvision is required for VLM training (Qwen-VL, LLaVA, etc.) — without
+> it the model still trains, but the image-processor files are silently
+> skipped and the uploaded checkpoint misses the vision side of the processor.
+
+### Option A: pip install
+
+```bash
+pip install merlina          # add [vlm] / [diffusion] / [all] extras as needed
+merlina serve                # then open http://localhost:8000
+```
+
+### Option B: Docker
+
+Requires the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) for GPU access.
+
+```bash
+docker run --gpus all -p 8000:8000 \
+  -v ./data:/app/data -v ./models:/app/models \
+  ghcr.io/schneewolf-labs/merlina:latest
+```
+
+Or clone the repo and `docker compose up -d` (see `docker-compose.yml` for
+volumes and `.env` wiring).
+
+### Option C: From source
 
 ```bash
 git clone https://github.com/Schneewolf-Labs/Merlina.git
 cd Merlina
 
 pip install -r requirements.txt
-```
 
-> **GPU environments (RunPod, Colab, Lambda, etc.):** These come with torch
-> pre-installed and matched to CUDA. The `requirements.txt` intentionally
-> excludes torch/torchvision/torchaudio so it won't break your existing setup.
-> Just run `pip install -r requirements.txt` and you're good to go.
->
-> **No torch pre-installed?** Install it first with the correct CUDA version:
-> ```bash
-> pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-> pip install -r requirements.txt
-> ```
->
-> **Training a VLM (Qwen-VL, LLaVA, etc.)?** The image processor pipeline needs
-> `Pillow` (listed in `requirements.txt`) and `torchvision` (part of the torch
-> install above). Without them the model still trains, but Merlina silently
-> skips saving `preprocessor_config.json` and image-processor files, leaving
-> the uploaded checkpoint missing the vision side of the processor.
+cp .env.example .env   # optional: HF token, W&B key, etc.
 
-### 2. Configure (Optional)
-
-```bash
-cp .env.example .env
-# Edit .env with your settings (HF token, W&B key, etc.)
-```
-
-### 3. Run Merlina
-
-```bash
 python merlina.py
 ```
 
