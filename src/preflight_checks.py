@@ -496,7 +496,29 @@ class PreflightValidator:
                 "has_config": config_file.exists()
             }
         else:
-            # HuggingFace model - check for gated models using constants
+            # HuggingFace model ID. In offline mode the Hub is unreachable,
+            # so the model must already be in the local cache — an uncached
+            # id is a guaranteed download failure, caught here instead of
+            # mid-job. Gated-model token checks only matter when a download
+            # could actually happen, so they're skipped offline.
+            from src.local_models import is_model_cached, offline_mode_active
+
+            if offline_mode_active():
+                cached = is_model_cached(model_path)
+                if not cached:
+                    self.errors.append(
+                        f"Offline mode is enabled but model '{model_path}' was not found "
+                        "in the local HuggingFace cache. Download it first (disable offline "
+                        "mode), use a local directory path, or pick a model from GET /models/local."
+                    )
+                return {
+                    "model": model_path,
+                    "is_local": False,
+                    "offline_mode": True,
+                    "cached": cached
+                }
+
+            # Online: check for gated models using constants
             model_is_gated = is_gated_model(model_path)
 
             if model_is_gated and not config.hf_token:

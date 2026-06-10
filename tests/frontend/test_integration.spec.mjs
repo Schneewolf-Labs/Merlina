@@ -315,6 +315,16 @@ test.describe('API endpoints', () => {
         expect(response.ok()).toBeTruthy();
     });
 
+    test('local models endpoint returns offline discovery shape', async ({ request }) => {
+        const response = await request.get('/models/local');
+        expect(response.ok()).toBeTruthy();
+        const data = await response.json();
+        expect(data).toHaveProperty('offline_mode');
+        expect(data).toHaveProperty('models');
+        expect(Array.isArray(data.models)).toBeTruthy();
+        expect(data).toHaveProperty('count');
+    });
+
     test('disk analysis endpoint returns breakdown', async ({ request }) => {
         const response = await request.get('/disk/analysis?keep=1');
         expect(response.ok()).toBeTruthy();
@@ -555,5 +565,63 @@ test.describe('Dataset format', () => {
         if (await customConfig.count() > 0) {
             await expect(customConfig).toBeVisible();
         }
+    });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Local model picker (offline support — issue #80)
+// ═════════════════════════════════════════════════════════════════════════════
+
+test.describe('Local model picker', () => {
+    const mockLocalModels = {
+        offline_mode: false,
+        count: 2,
+        models: [
+            { model_id: 'org/cached-model', source: 'hf_cache', size_bytes: 1234 },
+            { model_id: '/srv/models/my-merged-model', name: 'my-merged-model', source: 'models_dir' },
+        ],
+    };
+
+    test('picker and refresh button are visible in model section', async ({ page }) => {
+        await page.goto('/');
+        await expect(page.locator('#local-model-select')).toBeVisible();
+        await expect(page.locator('#refresh-local-models')).toBeVisible();
+        // Datalist is attached to the base model input for inline suggestions
+        await expect(page.locator('#base-model')).toHaveAttribute('list', 'local-models-list');
+    });
+
+    test('picker populates from /models/local grouped by source', async ({ page }) => {
+        await page.route('**/models/local', route => route.fulfill({ json: mockLocalModels }));
+        await page.goto('/');
+
+        const select = page.locator('#local-model-select');
+        await expect(select.locator('option[value="org/cached-model"]')).toHaveCount(1);
+        await expect(select.locator('option[value="/srv/models/my-merged-model"]')).toHaveCount(1);
+        const groups = await select.locator('optgroup').allTextContents();
+        expect(groups.length).toBe(2);
+    });
+
+    test('selecting a local model fills the base model input', async ({ page }) => {
+        await page.route('**/models/local', route => route.fulfill({ json: mockLocalModels }));
+        await page.goto('/');
+
+        await page.locator('#local-model-select option[value="org/cached-model"]').waitFor({ state: 'attached' });
+        await page.locator('#local-model-select').selectOption('org/cached-model');
+        await expect(page.locator('#base-model')).toHaveValue('org/cached-model');
+    });
+
+    test('offline badge appears when server is in offline mode', async ({ page }) => {
+        await page.route('**/models/local', route => route.fulfill({
+            json: { ...mockLocalModels, offline_mode: true },
+        }));
+        await page.goto('/');
+        await expect(page.locator('#offline-mode-badge')).toBeVisible();
+    });
+
+    test('offline badge stays hidden when online', async ({ page }) => {
+        await page.route('**/models/local', route => route.fulfill({ json: mockLocalModels }));
+        await page.goto('/');
+        await expect(page.locator('#local-model-select option[value="org/cached-model"]')).toHaveCount(1);
+        await expect(page.locator('#offline-mode-badge')).toBeHidden();
     });
 });

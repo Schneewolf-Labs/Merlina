@@ -11,6 +11,7 @@ class ModelManager {
     constructor() {
         this.toast = new Toast();
         this.setupEventListeners();
+        this.loadLocalModels();
     }
 
     /**
@@ -21,6 +22,89 @@ class ModelManager {
         const preloadBtn = document.getElementById('preload-model-button');
         if (preloadBtn) {
             preloadBtn.addEventListener('click', () => this.preloadModel());
+        }
+
+        // Local model picker: selecting an entry fills the base model input
+        const localSelect = document.getElementById('local-model-select');
+        if (localSelect) {
+            localSelect.addEventListener('change', () => {
+                const baseModelInput = document.getElementById('base-model');
+                if (localSelect.value && baseModelInput) {
+                    baseModelInput.value = localSelect.value;
+                    baseModelInput.dispatchEvent(new Event('change', { bubbles: true }));
+                }
+            });
+        }
+
+        const refreshBtn = document.getElementById('refresh-local-models');
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', () => this.loadLocalModels(true));
+        }
+    }
+
+    /**
+     * Load locally available models (HF cache + ./models) into the picker
+     * so users can choose a base model without internet access.
+     */
+    async loadLocalModels(notify = false) {
+        const localSelect = document.getElementById('local-model-select');
+        const datalist = document.getElementById('local-models-list');
+        const offlineBadge = document.getElementById('offline-mode-badge');
+
+        try {
+            const data = await MerlinaAPI.getLocalModels();
+
+            if (offlineBadge) {
+                offlineBadge.style.display = data.offline_mode ? 'inline-block' : 'none';
+            }
+
+            const models = data.models || [];
+
+            if (localSelect) {
+                localSelect.innerHTML = '';
+                const placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.textContent = models.length
+                    ? '— Select a model already on this machine —'
+                    : '— No local models found —';
+                localSelect.appendChild(placeholder);
+
+                const groups = [
+                    { source: 'hf_cache', label: '🤗 HuggingFace Cache' },
+                    { source: 'models_dir', label: '📦 Merlina Models Folder' },
+                ];
+                for (const { source, label } of groups) {
+                    const entries = models.filter(m => m.source === source);
+                    if (!entries.length) continue;
+                    const optgroup = document.createElement('optgroup');
+                    optgroup.label = label;
+                    for (const m of entries) {
+                        const option = document.createElement('option');
+                        option.value = m.model_id;
+                        option.textContent = m.name || m.model_id;
+                        optgroup.appendChild(option);
+                    }
+                    localSelect.appendChild(optgroup);
+                }
+            }
+
+            if (datalist) {
+                datalist.innerHTML = '';
+                for (const m of models) {
+                    const option = document.createElement('option');
+                    option.value = m.model_id;
+                    datalist.appendChild(option);
+                }
+            }
+
+            if (notify) {
+                this.toast.success(`Found ${models.length} local model${models.length === 1 ? '' : 's'}`);
+            }
+        } catch (error) {
+            console.error('Failed to load local models:', error);
+            if (notify) {
+                this.toast.error(`Failed to load local models: ${error.message}`);
+            }
         }
     }
 

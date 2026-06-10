@@ -215,6 +215,10 @@ class MerlinaAPI {
         }, LONG_TIMEOUT); // Model preloading can take a while
     }
 
+    static async getLocalModels() {
+        return this.fetch('/models/local');
+    }
+
     // Dataset endpoints
     static async uploadDataset(file, onProgress = null) {
         const formData = new FormData();

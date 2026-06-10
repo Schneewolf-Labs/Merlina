@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Offline support for choosing LLMs** (#80): new `GET /models/local` endpoint lists base models already on disk (HuggingFace cache + full models in `./models`), surfaced in the UI as a "Local Models" picker with inline suggestions on the base-model input. New `OFFLINE_MODE` setting exports `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` so training, preview, and dataset loading resolve entirely from the local cache, and pre-flight checks now fail fast when a HuggingFace model id isn't cached while offline.
 - **pip packaging** (`pyproject.toml`): Merlina is now installable as a package — `pip install merlina` (extras: `[vlm]`, `[diffusion]`, `[all]`, `[dev]`) with a `merlina` console command (`merlina serve`, `merlina --version`, see `merlina_cli.py`). The wheel bundles the web frontend; the missing-torch case prints install instructions instead of a traceback.
 - **PyPI publish workflow** (`.github/workflows/publish.yml`): builds, smoke-tests, and publishes on GitHub releases via PyPI trusted publishing (requires one-time trusted-publisher registration on pypi.org).
 - **Docker support**: `Dockerfile` on the official PyTorch CUDA 12.8 runtime image, `docker-compose.yml` with NVIDIA GPU passthrough and persistent volumes, `.dockerignore`, and a GHCR build/push workflow (`.github/workflows/docker.yml`) publishing `ghcr.io/schneewolf-labs/merlina`.
