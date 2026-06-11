@@ -50,7 +50,7 @@ from grimoire.losses import SFTLoss, ORPOLoss, DPOLoss, SimPOLoss, CPOLoss, IPOL
 from grimoire.data import tokenize_sft, tokenize_preference, tokenize_kto
 
 from huggingface_hub import HfApi
-from src.model_card import generate_model_readme, upload_model_readme, generate_wandb_run_name
+from src.model_card import generate_model_readme, upload_model_readme, generate_wandb_run_name, upload_config_image
 
 from dataset_handlers import (
     DatasetPipeline,
@@ -323,6 +323,10 @@ def _run_background_upload(
             config, training_mode, is_vlm=is_vlm, is_diffusion=is_diffusion,
         )
         upload_model_readme(full_repo_id, readme_content, config.hf_token)
+
+        # Optionally publish the shareable config image (QR + PNG metadata).
+        # Best-effort and self-gated on config.share_config_image.
+        upload_config_image(full_repo_id, config, config.hf_token)
 
         # Record the upload in the per-model sidecar so the Export UI
         # can show "already uploaded ✓" and surface history.

@@ -124,7 +124,7 @@ def _do_hub_upload(config, final_output_dir: str, training_mode: str, job_id: st
     """Upload model to HuggingFace Hub (subprocess version, no WebSocket)."""
     from huggingface_hub import HfApi
     from peft import PeftModel
-    from src.model_card import generate_model_readme, upload_model_readme
+    from src.model_card import generate_model_readme, upload_model_readme, upload_config_image
 
     api = HfApi()
     api.create_repo(
@@ -192,6 +192,10 @@ def _do_hub_upload(config, final_output_dir: str, training_mode: str, job_id: st
 
     readme_content = generate_model_readme(config, training_mode)
     upload_model_readme(config.output_name, readme_content, config.hf_token)
+
+    # Optionally publish the shareable config image (QR + PNG metadata).
+    # Best-effort and self-gated on config.share_config_image.
+    upload_config_image(config.output_name, config, config.hf_token)
 
     logger.info(f"Model published at: https://huggingface.co/{config.output_name}")
     if job_manager:

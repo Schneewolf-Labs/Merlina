@@ -468,6 +468,31 @@ describe('buildTrainingConfig — share_config toggle', () => {
     });
 });
 
+// ─── share_config_image flag (QR / PNG-metadata artifact) ───────────────────
+
+describe('buildTrainingConfig — share_config_image toggle', () => {
+    it('defaults to false when checkbox is missing', () => {
+        const s = fullFormState();
+        delete s.inputs['share-config-image'];
+        setState(s);
+        const config = buildTrainingConfig();
+        assert.equal(config.share_config_image, false);
+    });
+
+    it('respects checked state', () => {
+        setState(fullFormState({ extras: { 'share-config-image': true } }));
+        const config = buildTrainingConfig();
+        assert.equal(config.share_config_image, true);
+    });
+
+    it('is independent of share_config', () => {
+        setState(fullFormState({ extras: { 'share-config': false, 'share-config-image': true } }));
+        const config = buildTrainingConfig();
+        assert.equal(config.share_config, false);
+        assert.equal(config.share_config_image, true);
+    });
+});
+
 // ─── target_modules normalization ───────────────────────────────────────────
 
 describe('buildTrainingConfig — target_modules', () => {

@@ -41,6 +41,11 @@ protobuf>=3.20.0
 scipy>=1.10.0
 einops>=0.7.0
 Pillow>=10.0.0    # Required for VLM image processors (Qwen-VL, LLaVA, etc.)
+# Generates the shareable config QR image (merlina_config.png). Pure-Python,
+# depends only on Pillow (already required above). Decoding the embedded QR is
+# optional (uses OpenCV when present); the PNG-metadata channel needs only
+# Pillow, so QR decoding is never a hard requirement.
+qrcode>=7.4.2
 
 # Optional but recommended
 # xformers is tightly coupled to torch+CUDA. Install manually after torch:
