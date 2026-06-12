@@ -289,6 +289,10 @@ export function buildTrainingConfig({ gpuManager = null, includeSecrets = true }
         // uploaded model's README so others can reproduce the training run.
         share_config: bool('share-config', true),
 
+        // Publish a scannable QR image (merlina_config.png) that also carries
+        // the full config in its PNG metadata. Independent of share_config.
+        share_config_image: bool('share-config-image', false),
+
         // Diffusion / image-LoRA fields. All Optional in the backend
         // Pydantic schema so text/VLM jobs ignore them entirely. Read
         // unconditionally; saved presets still capture them so a

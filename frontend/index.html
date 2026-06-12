@@ -449,10 +449,14 @@
                         <button type="button" id="load-from-job-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
                             🔄 From Job
                         </button>
+                        <button type="button" id="load-from-image-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
+                            🔳 From Image
+                        </button>
                         <button type="button" id="manage-configs-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
                             🗂️ Manage
                         </button>
                     </div>
+                    <input type="file" id="load-config-image-input" accept="image/png,.png" style="display: none;">
 
                     <small style="color: rgba(255,255,255,0.9); display: block; text-align: center;">
                         Save your current settings or load from a previous job
@@ -1085,6 +1089,15 @@
                                 </label>
                                 <small style="color: #888; font-size: 0.85em; display: block; margin-left: 30px; margin-top: 5px;">
                                     Embeds the (secret-stripped) training config in the model's README so others can reproduce your run with one click. Uncheck to keep your hyperparameters private.
+                                </small>
+
+                                <!-- Share Config Image (QR) Toggle -->
+                                <label class="magic-checkbox" style="margin-top: 15px;">
+                                    <input type="checkbox" id="share-config-image">
+                                    <span>🔳 Share Config as QR Image</span>
+                                </label>
+                                <small style="color: #888; font-size: 0.85em; display: block; margin-left: 30px; margin-top: 5px;">
+                                    Uploads a <code>merlina_config.png</code> — a scannable QR code that also carries the full (secret-stripped) config in its metadata. Others can reproduce your run by scanning it or loading it via <em>Load Config → From Image</em>, without the giant JSON block. Works with or without the README option above.
                                 </small>
                             </div>
                         </div>

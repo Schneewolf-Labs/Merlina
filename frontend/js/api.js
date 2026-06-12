@@ -322,6 +322,28 @@ class MerlinaAPI {
         return this.fetch(`/configs/${name}`, { method: 'DELETE' });
     }
 
+    // Decode a training config from a merlina_config.png (QR / PNG metadata).
+    static async decodeConfigImage(file) {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const response = await fetch(`${API_URL}/configs/decode-image`, {
+            method: 'POST',
+            body: formData,
+        });
+
+        let data;
+        try {
+            data = await response.json();
+        } catch {
+            throw new APIError('Invalid response from server', ErrorType.SERVER);
+        }
+        if (!response.ok) {
+            throw new APIError(data.detail || 'Failed to decode config image', ErrorType.SERVER);
+        }
+        return data;
+    }
+
     // Job config endpoint (for loading config from previous job)
     static async getJobConfig(jobId) {
         return this.fetch(`/jobs/${jobId}/config`);

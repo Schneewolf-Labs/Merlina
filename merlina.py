@@ -579,6 +579,16 @@ class TrainingConfig(BaseModel):
             "Disable to keep your hyperparameters private."
         ),
     )
+    share_config_image: bool = Field(
+        False,
+        description=(
+            "Publish a merlina_config.png alongside the model — a scannable "
+            "QR code of the (secret-stripped) training config that also "
+            "carries the full config in its PNG metadata. Lets others "
+            "reproduce the run by scanning or loading the image, without the "
+            "giant JSON block in the README. Independent of share_config."
+        ),
+    )
 
     @model_validator(mode="after")
     def _fill_secrets_from_env(self):
@@ -3089,6 +3099,43 @@ async def import_config(request: ImportConfigRequest):
     except Exception as e:
         logger.error(f"Failed to import configuration: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to import configuration: {str(e)}")
+
+
+@app.post("/configs/decode-image")
+async def decode_config_image(file: FastAPIUploadFile = File(...)):
+    """
+    Decode a training config from a Merlina config image (merlina_config.png).
+
+    Reads the config envelope from the PNG's tEXt metadata (lossless), or
+    falls back to decoding the embedded QR code. Returns the envelope under
+    ``config`` so the frontend can drop it straight into the form — same
+    shape as ``GET /configs/{name}``.
+    """
+    try:
+        content = await file.read()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not read uploaded file: {e}")
+
+    from src.config_image import extract_config_envelope_from_png
+
+    envelope = extract_config_envelope_from_png(content)
+    if not envelope:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "No Merlina training config found in this image. Make sure it's "
+                "a merlina_config.png (the config lives in the PNG metadata or "
+                "the QR code)."
+            ),
+        )
+
+    name = ""
+    meta = envelope.get("_metadata") if isinstance(envelope, dict) else None
+    if isinstance(meta, dict):
+        name = meta.get("name") or ""
+
+    logger.info(f"Decoded training config from image '{file.filename}' (name: {name or 'n/a'})")
+    return {"status": "success", "config": envelope, "name": name}
 
 
 # ===== Model Preload Endpoints =====

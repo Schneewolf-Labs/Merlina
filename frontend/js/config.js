@@ -41,10 +41,42 @@ class ConfigManager {
             loadFromJobBtn.addEventListener('click', () => this.showLoadFromJobModal());
         }
 
+        // Load from image button — opens a hidden file picker; the change
+        // handler decodes the config from the PNG (QR / metadata).
+        const loadFromImageBtn = document.getElementById('load-from-image-btn');
+        const loadFromImageInput = document.getElementById('load-config-image-input');
+        if (loadFromImageBtn && loadFromImageInput) {
+            loadFromImageBtn.addEventListener('click', () => loadFromImageInput.click());
+            loadFromImageInput.addEventListener('change', (e) => {
+                const file = e.target.files && e.target.files[0];
+                if (file) this.loadConfigFromImage(file);
+                // Reset so picking the same file again re-fires change.
+                e.target.value = '';
+            });
+        }
+
         // Manage configs button
         const manageBtn = document.getElementById('manage-configs-btn');
         if (manageBtn) {
             manageBtn.addEventListener('click', () => this.showManageModal());
+        }
+    }
+
+    /**
+     * Decode a training config from a merlina_config.png and populate the form.
+     */
+    async loadConfigFromImage(file) {
+        try {
+            const result = await MerlinaAPI.decodeConfigImage(file);
+            const config = result.config;
+
+            this.populateForm(config);
+
+            const name = result.name || config?._metadata?.name || 'image';
+            this.toast.success(`Configuration loaded from '${name}'!`);
+        } catch (error) {
+            console.error('Failed to load config from image:', error);
+            this.toast.error(`Failed to load config from image: ${error.message}`);
         }
     }
 
@@ -551,6 +583,11 @@ class ConfigManager {
         // embedded in the model README at upload time).
         if (config.share_config !== undefined) {
             this.setCheckboxValue('share-config', config.share_config);
+        }
+
+        // Share-config-image toggle (publish merlina_config.png QR artifact).
+        if (config.share_config_image !== undefined) {
+            this.setCheckboxValue('share-config-image', config.share_config_image);
         }
     }
 

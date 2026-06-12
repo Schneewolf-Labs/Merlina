@@ -8,7 +8,7 @@ in tests and other lightweight consumers.
 import json
 import os
 import logging
-from typing import Any
+from typing import Any, Optional
 
 from huggingface_hub import HfApi
 
@@ -247,6 +247,15 @@ def generate_model_readme(
     if share_section:
         readme_parts.extend(["", share_section])
 
+    # Optionally reference the shareable config image (merlina_config.png) —
+    # a scannable QR code that also carries the full config in its PNG
+    # metadata. Gated by ``share_config_image`` (defaults to False). Works
+    # independently of the JSON block above so a user can publish the image
+    # *instead of* the giant JSON, both, or neither.
+    image_section = _build_config_image_section(config)
+    if image_section:
+        readme_parts.extend(["", image_section])
+
     readme_parts.extend([
         "",
         "---",
@@ -308,6 +317,62 @@ def _build_diffusion_usage_section(config: Any, training_mode: str, base_model: 
     return "\n".join(parts)
 
 
+# Publishing toggles that gate *how* the config is shared — not training
+# hyperparameters, so they're stripped from the shared payload itself.
+_SHARE_TOGGLE_FIELDS = ("share_config", "share_config_image")
+
+
+def build_shareable_config_envelope(config: Any) -> Optional[dict]:
+    """
+    Build the secret-stripped, importable config envelope for ``config``.
+
+    This is the single source of truth for the shareable payload — used by
+    both the README JSON block (:func:`_build_share_config_section`) and the
+    QR/metadata image (:func:`upload_config_image`). It does **not** consult
+    any ``share_*`` toggle; callers gate on their own flag first.
+
+    Returns ``None`` when the config can't be serialized (e.g. a Mock in
+    tests, or a plain object without ``model_dump``).
+    """
+    # Pydantic models expose model_dump(); plain dicts/Mocks don't, in
+    # which case we silently skip rather than crash.
+    try:
+        payload = config.model_dump(mode="json")
+    except (AttributeError, TypeError):
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    # Drop secrets and the publishing toggles themselves (they control how
+    # the config is shared, not how the model was trained).
+    payload = {
+        k: v for k, v in payload.items()
+        if k not in _CONFIG_SECRET_FIELDS and k not in _SHARE_TOGGLE_FIELDS
+    }
+
+    # Wrap with the same schema header as data/configs/*.json so the blob is
+    # importable through /configs/import (or the image loader) without ceremony.
+    try:
+        from version import __version__ as _merlina_version
+    except Exception:  # pragma: no cover
+        _merlina_version = "unknown"
+
+    return {
+        "_metadata": {
+            "name": getattr(config, "output_name", ""),
+            "description": (
+                "Training configuration shared from a Merlina-trained model."
+            ),
+            "tags": [],
+            "schema": _CONFIG_SCHEMA_NAME,
+            "schema_version": _CONFIG_SCHEMA_VERSION,
+            "merlina_version": _merlina_version,
+        },
+        **payload,
+    }
+
+
 def _build_share_config_section(config: Any) -> str:
     """
     Render the optional "Reproduce this training run" block.
@@ -325,43 +390,9 @@ def _build_share_config_section(config: Any) -> str:
     if not getattr(config, "share_config", False):
         return ""
 
-    # Pydantic models expose model_dump(); plain dicts/Mocks don't, in
-    # which case we silently skip the section rather than crash.
-    try:
-        payload = config.model_dump(mode="json")
-    except (AttributeError, TypeError):
+    envelope = build_shareable_config_envelope(config)
+    if envelope is None:
         return ""
-
-    if not isinstance(payload, dict):
-        return ""
-
-    # Drop secrets and the share flag itself (it's a publishing toggle,
-    # not a training hyperparameter — no need to round-trip it).
-    payload = {
-        k: v for k, v in payload.items()
-        if k not in _CONFIG_SECRET_FIELDS and k != "share_config"
-    }
-
-    # Wrap with the same schema header as data/configs/*.json so the
-    # blob is importable through /configs/import without ceremony.
-    try:
-        from version import __version__ as _merlina_version
-    except Exception:  # pragma: no cover
-        _merlina_version = "unknown"
-
-    envelope = {
-        "_metadata": {
-            "name": getattr(config, "output_name", ""),
-            "description": (
-                "Training configuration shared from a Merlina-trained model."
-            ),
-            "tags": [],
-            "schema": _CONFIG_SCHEMA_NAME,
-            "schema_version": _CONFIG_SCHEMA_VERSION,
-            "merlina_version": _merlina_version,
-        },
-        **payload,
-    }
 
     try:
         rendered = json.dumps(envelope, indent=2, sort_keys=False)
@@ -382,6 +413,78 @@ def _build_share_config_section(config: Any) -> str:
         "```",
     ]
     return "\n".join(lines)
+
+
+# Filename used for the shareable config image, both in the repo and in the
+# README reference. Kept here so the README section and the uploader agree.
+CONFIG_IMAGE_FILENAME = "merlina_config.png"
+
+
+def _build_config_image_section(config: Any) -> str:
+    """
+    Render the optional "Reproduce this run — scan or load" image block.
+
+    Returns markdown referencing :data:`CONFIG_IMAGE_FILENAME` when
+    ``share_config_image`` is True, else "". The image itself is uploaded
+    separately by :func:`upload_config_image`; here we just point at it.
+    """
+    if not getattr(config, "share_config_image", False):
+        return ""
+
+    return "\n".join([
+        "## Reproduce this training run (QR)",
+        "",
+        f"![Merlina training config]({CONFIG_IMAGE_FILENAME})",
+        "",
+        "Scan the QR code above, or download "
+        f"`{CONFIG_IMAGE_FILENAME}` and load it via Merlina's *Load "
+        "Configuration → From Image* button. The full (secret-stripped) "
+        "training config is embedded in the image's metadata, so Merlina "
+        "can reproduce this exact run from the PNG alone.",
+    ])
+
+
+def upload_config_image(repo_id: str, config: Any, token: str) -> None:
+    """
+    Generate and upload the shareable config image to a HuggingFace repo.
+
+    Best-effort and gated by ``share_config_image``: does nothing when the
+    flag is off, when the optional ``qrcode``/Pillow deps are missing, or on
+    any upload error (logged, never raised) — a failure here must not abort
+    the surrounding model upload.
+    """
+    if not getattr(config, "share_config_image", False):
+        return
+
+    try:
+        from src.config_image import build_config_image_bytes
+
+        envelope = build_shareable_config_envelope(config)
+        if envelope is None:
+            logger.debug("config image: envelope unavailable; skipping upload")
+            return
+
+        png_bytes = build_config_image_bytes(envelope)
+        if not png_bytes:
+            return  # build_config_image_bytes already logged the reason
+
+        api = HfApi()
+        full_repo_id = repo_id
+        if "/" not in full_repo_id:
+            user_info = api.whoami(token=token)
+            username = user_info.get("name") or user_info.get("username")
+            full_repo_id = f"{username}/{full_repo_id}"
+
+        api.upload_file(
+            path_or_fileobj=png_bytes,
+            path_in_repo=CONFIG_IMAGE_FILENAME,
+            repo_id=full_repo_id,
+            token=token,
+            commit_message="Add shareable training config (QR + PNG metadata)",
+        )
+        logger.info("%s uploaded to %s", CONFIG_IMAGE_FILENAME, full_repo_id)
+    except Exception as exc:
+        logger.warning("Could not upload config image: %s", exc)
 
 
 def _build_dataset_section(config: Any) -> str:
