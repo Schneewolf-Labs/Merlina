@@ -9,6 +9,7 @@ Start here if you want to use Merlina to train models:
 - **[Quick Start](user/quick-start.md)** - Get up and running in minutes
 - **[Dataset Guide](user/dataset-guide.md)** - Configure datasets (HuggingFace, local files, uploads)
 - **[Tokenizer Format Guide](user/tokenizer-format.md)** - Use automatic chat formatting (recommended!)
+- **[MCP Server Guide](user/mcp.md)** - Drive Merlina from an LLM agent via Model Context Protocol
 
 ## 🔧 For Developers
 
