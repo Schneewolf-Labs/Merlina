@@ -497,6 +497,59 @@ When pushing models to HuggingFace Hub (`push_to_hub=True`):
 - Never commit HF tokens to version control
 - Use tokens with appropriate write permissions
 
+## Remote Execution (src/remote/)
+
+Remote mode turns a locally-running Merlina into a control plane for rented
+compute: it provisions instances on the user's own provider account
+(bring-your-own `RUNPOD_API_KEY`), runs pipeline stages on them, and tears
+them down. Enabled per-job via the `TrainingConfig.remote` block (API-only;
+no form UI yet — `form_config.js` emits `remote: null`).
+
+**Architecture — piecemeal stages over an artifact store:**
+
+- `spec.py` — pure dataclasses (GpuOffer, InstanceSpec, ModelSpecs,
+  SizingDecision, StagePlan, RemotePlan). Zero ML/HTTP deps.
+- `sizing.py` — MoE-aware sizing: reads the model's real `config.json`
+  (DeepSeek-V3-style MoE fields → Kimi-K2 sizes correctly at ~1T total /
+  ~32B active), estimates VRAM/disk, picks the cheapest feasible GPU
+  type/count. Single-GPU fit wins; otherwise model-parallel across N GPUs
+  (maps to `multi_gpu_strategy="single"` → `device_map=auto`).
+- `plan.py` — builds the stage plan: `train` (remote GPU) → `merge`
+  (local / separate instance / skip). `merge_strategy="auto"` skips the
+  merge above ~80 GB native weights (adapter-only is the practical format
+  for 1T-class bases).
+- `artifacts.py` — `ArtifactStore` handoff between stages (`HFHubArtifactStore`:
+  private repo per run; `LocalArtifactStore` for tests). Stages never copy
+  files to each other directly, which is what lets them run on different
+  machines/providers.
+- `providers/` — `ComputeProvider` ABC + `RunPodProvider` (REST v1,
+  defensive parsing). Termination is idempotent and always attempted in a
+  `finally` (opt-out: `remote.keep_instance_on_failure`).
+- `orchestrator.py` — `run_training_remote(...)`, the remote sibling of
+  `run_training_sync` (dispatched in `_make_training_callback`). Polls the
+  worker, mirrors status/metrics into JobManager + WebSockets, enforces
+  `max_runtime_hours`, forwards stop requests, pulls the adapter home.
+  No torch imports — keep it that way.
+- `worker_entry.py` — runs ON the instance (`python -m src.remote.worker_entry`;
+  job arrives base64-encoded in `MERLINA_REMOTE_JOB_B64`). Reuses the
+  existing training pipeline against a local SQLite DB and serves progress
+  over a token-authenticated HTTP endpoint (`X-Merlina-Worker-Token`) that
+  the control plane polls through the provider's port proxy — pull-only, so
+  the user's machine needs no public address. Module top level must stay
+  ML-import-free (heavy imports live inside the stage functions).
+
+**Other touch points:** remote jobs use their own `JobQueue`
+(`remote_job_queue`, `REMOTE_MAX_CONCURRENT_JOBS`) so they never contend
+with local GPU slots; preflight has a remote branch (`_check_remote_config`)
+that skips local GPU/VRAM/disk checks; endpoints `POST /remote/plan`
+(preview sizing without provisioning) and `GET /remote/offers`.
+
+**Limitations (current):** HF Hub datasets/models only (uploads and local
+paths don't travel), text-LLM modes only, on-demand instances only (no
+spot/resume). Tests: `tests/test_remote_*.py` (all run without network or
+GPUs via fake providers/stores/workers). User guide:
+`docs/user/remote-training.md`.
+
 ## Artemis VLM (Project Artemis — multimodal extension)
 
 The ArtemisVLM model classes live in the **standalone `artemis-vlm` package** ([Schneewolf-Labs/Artemis](https://github.com/Schneewolf-Labs/Artemis)) — a LLaVA-style graft that adds vision-language capability to any A-series (or any `MistralForCausalLM`-class) decoder. The package is `pip install`-ed via `requirements.txt` and imported as `from artemis_vlm import ...`.

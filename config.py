@@ -71,6 +71,26 @@ class Settings(BaseSettings):
     max_concurrent_jobs: int = 1  # Maximum number of training jobs to run simultaneously
 
     # ==========================================
+    # Remote Execution (rented compute)
+    # ==========================================
+    # API key for the RunPod provider (https://www.runpod.io/console/user/settings).
+    # Remote jobs are provisioned on YOUR provider account — Merlina only
+    # orchestrates. Leave unset to disable remote mode.
+    runpod_api_key: Optional[str] = None
+    # Container image the provisioned worker instances run. Must contain
+    # Merlina (the worker entry is `python -m src.remote.worker_entry`).
+    remote_worker_image: str = "ghcr.io/schneewolf-labs/merlina:latest"
+    # Remote jobs don't occupy a local GPU, so they get their own queue.
+    remote_max_concurrent_jobs: int = 2
+    # Control-plane polling cadence against remote workers (seconds).
+    remote_poll_interval_seconds: float = 10.0
+    # How long a fresh instance may take to pull the image and come up.
+    remote_boot_timeout_minutes: float = 30.0
+    # After forwarding a stop, how long to wait for a graceful checkpoint
+    # before terminating the instance anyway.
+    remote_stop_grace_minutes: float = 15.0
+
+    # ==========================================
     # System Configuration
     # ==========================================
     cuda_visible_devices: Optional[str] = None

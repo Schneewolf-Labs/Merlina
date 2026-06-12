@@ -95,6 +95,12 @@ job_manager = JobManager(db_path=settings.database_path)
 # Initialize job queue with configurable concurrency
 job_queue = JobQueue(max_concurrent_jobs=settings.max_concurrent_jobs, job_manager=job_manager)
 
+# Remote jobs run on rented compute, not the local GPU, so they get their
+# own queue and don't block (or get blocked by) local training slots.
+remote_job_queue = JobQueue(
+    max_concurrent_jobs=settings.remote_max_concurrent_jobs, job_manager=job_manager
+)
+
 # Initialize config manager
 config_manager = ConfigManager(config_dir=str(settings.data_dir / "configs"))
 
@@ -292,6 +298,57 @@ class DatasetConfig(BaseModel):
 
     # Training mode (affects schema validation)
     training_mode: str = Field("orpo", description="Training mode: 'sft', 'orpo', 'dpo', 'simpo', 'cpo', 'ipo', or 'kto'. For SFT/KTO, rejected column is optional.")
+
+
+class RemoteComputeConfig(BaseModel):
+    """
+    Remote execution settings — run this job on rented compute instead of
+    the local GPU. Instances are provisioned on YOUR provider account
+    (bring-your-own API key, configured server-side via RUNPOD_API_KEY);
+    Merlina orchestrates, polls progress, moves artifacts, and tears the
+    instances down.
+    """
+    enabled: bool = Field(False, description="Run this job on remote rented compute")
+    provider: Literal["runpod"] = Field("runpod", description="Compute provider")
+    gpu_type_id: Optional[str] = Field(
+        None,
+        description="Explicit GPU type (provider id, e.g. 'NVIDIA H200'). "
+                    "Leave unset to let the sizing advisor pick the cheapest fit."
+    )
+    gpu_count: Optional[int] = Field(None, ge=1, le=8, description="GPUs on the instance")
+    cloud_type: Literal["secure", "community"] = Field(
+        "secure", description="Provider cloud tier (community is cheaper, less isolated)"
+    )
+    container_disk_gb: Optional[int] = Field(
+        None, ge=20, description="Container disk override (default: sized from the model)"
+    )
+    volume_gb: Optional[int] = Field(None, ge=0, description="Persistent volume size (optional)")
+    max_cost_per_hr: Optional[float] = Field(
+        None, gt=0, description="Reject instance picks above this hourly cost"
+    )
+    max_runtime_hours: float = Field(
+        48.0, gt=0, le=168,
+        description="Hard cap — instances are terminated when this elapses"
+    )
+    merge_strategy: Literal["auto", "local", "remote", "skip"] = Field(
+        "auto",
+        description="Where the LoRA merge runs: 'local' (control plane), 'remote' "
+                    "(separate big-disk instance), 'skip' (adapter-only), or 'auto' "
+                    "(local for small bases, skip for very large ones)"
+    )
+    artifact_repo: Optional[str] = Field(
+        None,
+        description="HF repo for stage artifact handoff (default: private "
+                    "<you>/merlina-run-<job_id>)"
+    )
+    worker_image: Optional[str] = Field(
+        None, description="Worker container image override (default from settings)"
+    )
+    keep_instance_on_failure: bool = Field(
+        False,
+        description="Keep the instance alive after a failure for debugging. "
+                    "It keeps billing until YOU terminate it."
+    )
 
 
 # Pydantic models
@@ -562,6 +619,12 @@ class TrainingConfig(BaseModel):
             "'ddp' (force Distributed Data Parallel via accelerate launch), "
             "'single' (single-process with device_map=auto, for model parallelism)"
         )
+    )
+
+    # Remote execution (rented compute)
+    remote: Optional[RemoteComputeConfig] = Field(
+        None,
+        description="Run this job on remote rented compute (see RemoteComputeConfig)"
     )
 
     # Weights & Biases settings
@@ -1088,6 +1151,57 @@ async def validate_training_config(config: TrainingConfig):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.get("/remote/offers")
+async def list_remote_gpu_offers(provider: str = "runpod"):
+    """
+    List rentable GPU types (with pricing) from a compute provider.
+    Requires the provider's API key in server settings (e.g. RUNPOD_API_KEY).
+    """
+    from dataclasses import asdict
+    from src.remote.providers import ProviderError, get_provider
+
+    try:
+        prov = get_provider(provider, api_key=settings.runpod_api_key)
+        offers = await asyncio.to_thread(prov.list_gpu_offers)
+        return {"provider": provider, "offers": [asdict(o) for o in offers]}
+    except ProviderError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/remote/plan")
+async def preview_remote_plan(config: TrainingConfig):
+    """
+    Preview the remote run plan for a config without provisioning anything:
+    MoE-aware sizing, the instance the advisor would rent, estimated cost
+    per hour, and where each pipeline stage (train/merge) would run.
+
+    Uses live provider offers when an API key is configured, otherwise a
+    static catalog (prices approximate).
+    """
+    from src.remote.plan import RemotePlanError, build_remote_plan
+    from src.remote.providers import ProviderError, get_provider
+
+    if not (config.remote and config.remote.enabled):
+        raise HTTPException(
+            status_code=400,
+            detail="Config has no remote execution enabled — set remote.enabled=true."
+        )
+
+    offers = None
+    if settings.runpod_api_key:
+        try:
+            prov = get_provider(config.remote.provider, api_key=settings.runpod_api_key)
+            offers = await asyncio.to_thread(prov.list_gpu_offers)
+        except ProviderError as e:
+            logger.warning(f"Could not fetch live GPU offers for plan preview: {e}")
+
+    try:
+        plan = await asyncio.to_thread(build_remote_plan, config, offers=offers)
+        return plan.to_dict()
+    except RemotePlanError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 def _make_training_callback(event_loop):
     """Create a training callback that auto-selects single-process or DDP.
 
@@ -1098,6 +1212,15 @@ def _make_training_callback(event_loop):
     def training_callback(job_id: str, config_dict: dict):
         from pydantic import TypeAdapter
         config_obj = TypeAdapter(TrainingConfig).validate_python(config_dict)
+
+        if config_obj.remote and config_obj.remote.enabled:
+            from src.remote.orchestrator import run_training_remote
+            logger.info(f"Dispatching job {job_id} to remote execution "
+                        f"(provider={config_obj.remote.provider})")
+            run_training_remote(
+                job_id, config_obj, job_manager, uploaded_datasets, event_loop
+            )
+            return
 
         strategy = config_obj.multi_gpu_strategy
         num_gpus = _get_distributed_gpu_count(config_obj)
@@ -1179,8 +1302,11 @@ async def create_training_job(config: TrainingConfig, priority: Optional[str] = 
 
     training_callback = _make_training_callback(loop)
 
-    # Submit job to queue
-    position = job_queue.submit(
+    # Submit job to queue (remote jobs have their own queue so they never
+    # contend with local-GPU slots)
+    is_remote = bool(config.remote and config.remote.enabled)
+    target_queue = remote_job_queue if is_remote else job_queue
+    position = target_queue.submit(
         job_id=job_id,
         config=config.model_dump(),
         callback=training_callback,
@@ -1188,7 +1314,8 @@ async def create_training_job(config: TrainingConfig, priority: Optional[str] = 
     )
 
     # Return response with warnings if any
-    message = f"Training spell cast! Job {job_id} queued at position {position}."
+    queue_label = "remote queue" if is_remote else "queue"
+    message = f"Training spell cast! Job {job_id} queued at position {position} ({queue_label})."
     if validation_results.get("warnings"):
         message += f" Note: {len(validation_results['warnings'])} warning(s) detected."
 
@@ -1476,12 +1603,18 @@ async def stop_job(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # Check queue status
+    # Check queue status — remote jobs live in their own queue
+    active_queue = job_queue
     queue_status = job_queue.get_status(job_id)
+    if queue_status.get("state") == "unknown":
+        remote_status = remote_job_queue.get_status(job_id)
+        if remote_status.get("state") != "unknown":
+            active_queue = remote_job_queue
+            queue_status = remote_status
 
     # If job is queued, cancel it from the queue
     if queue_status.get("state") == "queued":
-        success = job_queue.cancel(job_id)
+        success = active_queue.cancel(job_id)
         if success:
             logger.info(f"Job {job_id} cancelled from queue")
             return {
@@ -1491,9 +1624,19 @@ async def stop_job(job_id: str):
                 "was_queued": True
             }
 
-    # If job is running, request graceful stop
-    if queue_status.get("state") == "running" or job.status in ["training", "loading_model", "loading_dataset", "initializing"]:
-        success = job_queue.cancel(job_id)  # This will set stop_requested flag
+    # If job is running, request graceful stop. Remote jobs add their own
+    # lifecycle statuses (provisioning/downloading/merging) — the remote
+    # orchestrator polls stop_requested and tears the instance down.
+    stoppable_statuses = [
+        "training", "loading_model", "loading_dataset", "initializing",
+        "provisioning", "downloading", "merging",
+    ]
+    if queue_status.get("state") == "running" or job.status in stoppable_statuses:
+        success = active_queue.cancel(job_id)  # This will set stop_requested flag
+        if not success:
+            # Not tracked by either queue (e.g. server restart) — set the
+            # flag directly; remote orchestrators poll the DB regardless.
+            success = job_manager.request_stop(job_id)
         if success:
             logger.info(f"Stop requested for running job {job_id}")
             return {
