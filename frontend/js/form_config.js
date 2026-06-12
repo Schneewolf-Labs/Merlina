@@ -260,6 +260,11 @@ export function buildTrainingConfig({ gpuManager = null, includeSecrets = true }
         // GPU
         multi_gpu_strategy: str('multi-gpu-strategy', 'auto'),
 
+        // Remote execution (rented compute) — API-only for now, no form UI
+        // yet. Emitted as null so saved presets round-trip through
+        // TrainingConfig with the field intact.
+        remote: null,
+
         // Options
         use_4bit: bool('use-4bit', true),
         use_wandb: bool('use-wandb', false),

@@ -36,6 +36,10 @@ datasets>=2.14.0
 # Utilities
 wandb>=0.15.0
 huggingface-hub>=0.19.0
+# Direct dependency of the remote-execution provider clients
+# (src/remote/providers) and worker polling; also pulled transitively by
+# huggingface-hub, but we rely on it explicitly.
+requests>=2.31.0
 sentencepiece>=0.1.99
 protobuf>=3.20.0
 scipy>=1.10.0

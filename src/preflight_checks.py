@@ -210,23 +210,39 @@ class PreflightValidator:
         # exists, adapter loads, LoRA targets resolve) inside the runner.
         is_diffusion = self._is_diffusion(config)
 
-        # Run all checks. GPU + Disk + Deps + Tokens are model-family
-        # agnostic and always run.
-        checks: list = [
-            ("GPU", self._check_gpu),
-            ("Disk Space", lambda: self._check_disk_space(config)),
-            ("Tokens", lambda: self._check_tokens(config)),
-            ("Dependencies", self._check_dependencies),
-        ]
-        if not is_diffusion:
-            checks[1:1] = [
-                ("VRAM", lambda: self._check_vram(config)),
+        # Remote jobs run on rented instances, so local GPU/VRAM/disk are
+        # irrelevant — sizing happens against the model's real config in
+        # src/remote/sizing.py instead. Model access, dataset, and training
+        # hyperparameter checks still apply (they validate the config, not
+        # the machine).
+        is_remote = self._is_remote(config)
+
+        if is_remote:
+            checks: list = [
+                ("Remote Config", lambda: self._check_remote_config(config)),
                 ("Model Access", lambda: self._check_model_access(config)),
                 ("Dataset Config", lambda: self._check_dataset_config(config)),
                 ("Training Config", lambda: self._check_training_config(config)),
+                ("Tokens", lambda: self._check_tokens(config)),
             ]
         else:
-            checks.append(("Diffusion Config", lambda: self._check_diffusion_config(config)))
+            # Run all checks. GPU + Disk + Deps + Tokens are model-family
+            # agnostic and always run.
+            checks = [
+                ("GPU", self._check_gpu),
+                ("Disk Space", lambda: self._check_disk_space(config)),
+                ("Tokens", lambda: self._check_tokens(config)),
+                ("Dependencies", self._check_dependencies),
+            ]
+            if not is_diffusion:
+                checks[1:1] = [
+                    ("VRAM", lambda: self._check_vram(config)),
+                    ("Model Access", lambda: self._check_model_access(config)),
+                    ("Dataset Config", lambda: self._check_dataset_config(config)),
+                    ("Training Config", lambda: self._check_training_config(config)),
+                ]
+            else:
+                checks.append(("Diffusion Config", lambda: self._check_diffusion_config(config)))
 
         for check_name, check_func in checks:
             try:
@@ -254,6 +270,41 @@ class PreflightValidator:
         model_type = (getattr(config, "model_type", None) or "auto").lower()
         training_mode = (getattr(config, "training_mode", "") or "").lower()
         return model_type == "diffusion" or training_mode.startswith("diffusion_")
+
+    def _is_remote(self, config: Any) -> bool:
+        """Detect remote-execution jobs (run on rented compute)."""
+        remote = getattr(config, "remote", None)
+        return bool(remote and getattr(remote, "enabled", False))
+
+    def _check_remote_config(self, config: Any) -> Dict[str, Any]:
+        """Validate remote-execution prerequisites without provisioning."""
+        from config import settings
+        from src.remote.plan import check_remote_compatible
+
+        details: Dict[str, Any] = {"provider": config.remote.provider}
+
+        if config.remote.provider == "runpod" and not getattr(settings, "runpod_api_key", None):
+            self.errors.append(
+                "Remote execution requires RUNPOD_API_KEY in the server's .env "
+                "(instances are provisioned on your own RunPod account)."
+            )
+
+        for problem in check_remote_compatible(config):
+            self.errors.append(problem)
+
+        if not config.hf_token and not config.remote.artifact_repo:
+            self.errors.append(
+                "Remote runs hand artifacts between stages through a private "
+                "HuggingFace repo — provide an HF token or set remote.artifact_repo."
+            )
+
+        if is_local_model_path(config.base_model):
+            self.errors.append(
+                f"Base model '{config.base_model}' is a local path — remote workers "
+                "can only load models from the HuggingFace Hub."
+            )
+
+        return details
 
     def _check_diffusion_config(self, config: Any) -> Dict[str, Any]:
         """Lightweight diffusion-specific sanity checks.
