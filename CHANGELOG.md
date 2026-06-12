@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.0] - 2026-06-12
+
 ### Added
 - **Shareable config as a QR image** (`src/config_image.py`): optional `share_config_image` toggle in the HuggingFace Hub upload section publishes a `merlina_config.png` alongside the model — a scannable QR code that also carries the full (secret-stripped) training config in its PNG metadata. Lets others reproduce a run by scanning or loading the image, without the giant JSON block in the README. New `POST /configs/decode-image` endpoint plus a *Load Config → From Image* button decode the config back into the form (lossless via PNG metadata, with an optional OpenCV QR fallback). Independent of `share_config`, so you can publish the image instead of, in addition to, or without the README JSON. Adds `qrcode` to requirements (pure-Python, Pillow-only).
 - **Offline support for choosing LLMs** (#80): new `GET /models/local` endpoint lists base models already on disk (HuggingFace cache + full models in `./models`), surfaced in the UI as a "Local Models" picker with inline suggestions on the base-model input. New `OFFLINE_MODE` setting exports `HF_HUB_OFFLINE`/`TRANSFORMERS_OFFLINE` so training, preview, and dataset loading resolve entirely from the local cache, and pre-flight checks now fail fast when a HuggingFace model id isn't cached while offline.
