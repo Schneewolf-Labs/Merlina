@@ -447,12 +447,12 @@ describe('buildDatasetConfig — full dataset coverage', () => {
 // ─── share_config flag ──────────────────────────────────────────────────────
 
 describe('buildTrainingConfig — share_config toggle', () => {
-    it('defaults to true when checkbox is missing', () => {
+    it('defaults to false when checkbox is missing', () => {
         const s = fullFormState();
         delete s.inputs['share-config'];
         setState(s);
         const config = buildTrainingConfig();
-        assert.equal(config.share_config, true);
+        assert.equal(config.share_config, false);
     });
 
     it('respects unchecked state', () => {

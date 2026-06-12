@@ -285,9 +285,9 @@ export function buildTrainingConfig({ gpuManager = null, includeSecrets = true }
         })(),
         wandb_notes: str('wandb-notes', '') || null,
 
-        // Sharing — when true, the training config is embedded in the
-        // uploaded model's README so others can reproduce the training run.
-        share_config: bool('share-config', true),
+        // Sharing — off by default. When true, the training config is
+        // embedded in the uploaded model's README so others can reproduce it.
+        share_config: bool('share-config', false),
 
         // Publish a scannable QR image (merlina_config.png) that also carries
         // the full config in its PNG metadata. Independent of share_config.

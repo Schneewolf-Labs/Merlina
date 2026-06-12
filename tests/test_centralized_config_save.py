@@ -198,7 +198,7 @@ class TestNormalizeTrainingConfig:
         assert normalized["batch_size"] == 1
         assert normalized["num_epochs"] == 2
         assert normalized["beta"] == 0.1
-        assert normalized["share_config"] is True
+        assert normalized["share_config"] is False
 
     def test_rejects_unknown_top_level_fields(self):
         """Pydantic v2 silently drops unknown fields by default. We rely on
@@ -278,7 +278,7 @@ class TestSaveConfigIntegration:
             loaded = mgr.load_config("test")
             # Pydantic defaults are present after a validated save
             assert loaded["batch_size"] == 1
-            assert loaded["share_config"] is True
+            assert loaded["share_config"] is False
             assert loaded["use_lora"] is True
 
     def test_save_with_validate_rejects_invalid(self):

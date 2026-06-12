@@ -570,13 +570,14 @@ class TrainingConfig(BaseModel):
     wandb_tags: Optional[list[str]] = Field(None, description="W&B tags for organizing runs")
     wandb_notes: Optional[str] = Field(None, description="Notes about this training run")
 
-    # Config sharing
+    # Config sharing — both default OFF, so nothing about your training
+    # setup is published unless you explicitly opt in per upload.
     share_config: bool = Field(
-        True,
+        False,
         description=(
             "Embed the (secret-stripped) training config in the uploaded "
             "model's README so others can reproduce the training run. "
-            "Disable to keep your hyperparameters private."
+            "Off by default — enable to share your hyperparameters."
         ),
     )
     share_config_image: bool = Field(

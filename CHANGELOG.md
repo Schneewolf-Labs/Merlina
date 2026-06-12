@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Google Colab notebook** (`notebooks/Merlina_Colab.ipynb`): runs the full UI on a free Colab GPU via Colab's built-in port proxy.
 
 ### Changed
+- **Config sharing is now opt-in**: `share_config` (the README JSON block) defaults to **off**, matching `share_config_image`. Nothing about your training setup is published to the model repo unless you explicitly enable it per upload.
 - README Quick Start now offers pip / Docker / RunPod / Colab / from-source install paths.
 - `merlina.py`'s `__main__` startup block is now a callable `main()` (used by both `python merlina.py` and the `merlina` console script). No behavior change.
 
