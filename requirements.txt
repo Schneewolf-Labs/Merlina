@@ -47,6 +47,12 @@ Pillow>=10.0.0    # Required for VLM image processors (Qwen-VL, LLaVA, etc.)
 # Pillow, so QR decoding is never a hard requirement.
 qrcode>=7.4.2
 
+# MCP server (mcp_server.py / `merlina-mcp`) — optional. Exposes the Merlina
+# REST API as Model Context Protocol tools. Thin HTTP client, no torch needed.
+# Install with `pip install 'merlina[mcp]'` or uncomment below.
+#   mcp[cli]>=1.2.0
+#   httpx>=0.24.0
+
 # Optional but recommended
 # xformers is tightly coupled to torch+CUDA. Install manually after torch:
 #   pip install xformers
