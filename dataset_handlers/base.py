@@ -71,6 +71,9 @@ class DatasetPipeline:
         dedupe_strategy: DedupeStrategy = "prompt_chosen",
         system_prompt: Optional[str] = None,
         system_prompt_mode: str = "fill_empty",
+        eval_loader: Optional[DatasetLoader] = None,
+        eval_column_mapping: Optional[dict] = None,
+        eval_convert_messages_format: bool = True,
     ):
         """
         Initialize dataset pipeline.
@@ -113,6 +116,12 @@ class DatasetPipeline:
         self.dedupe_strategy = dedupe_strategy
         self.system_prompt = system_prompt
         self.system_prompt_mode = system_prompt_mode
+        # Optional explicit eval source. When set, it becomes the eval split
+        # verbatim and the random `test_size` split is skipped (the full primary
+        # dataset is used for training).
+        self.eval_loader = eval_loader
+        self.eval_column_mapping = eval_column_mapping
+        self.eval_convert_messages_format = eval_convert_messages_format
 
     def _load_and_map_source(self, loader, column_mapping, convert_messages):
         """Load a single source and apply its column mapping + messages conversion."""
@@ -185,32 +194,26 @@ class DatasetPipeline:
 
         logger.info(f"Dataset ready with {len(dataset)} samples")
 
-        # Validate schema
-        logger.info("Validating dataset schema...")
-        self._validate_schema(dataset)
+        # Finalize the (training) dataset: validate, system prompt, dedup,
+        # subsample, format.
+        dataset = self._finalize(dataset, is_eval=False)
 
-        # Apply system prompt override
-        dataset = self._apply_system_prompt_override(dataset)
+        # Explicit eval source: use it verbatim and skip the random split (the
+        # full primary dataset becomes the training set).
+        if self.eval_loader is not None:
+            logger.info("Loading explicit eval dataset (skipping random test_size split)...")
+            eval_dataset = self._load_and_map_source(
+                self.eval_loader, self.eval_column_mapping, self.eval_convert_messages_format
+            )
+            eval_dataset = self._finalize(eval_dataset, is_eval=True)
+            train_dataset = dataset
+            logger.info(
+                f"Prepared {len(train_dataset)} training samples and "
+                f"{len(eval_dataset)} explicit eval samples"
+            )
+            return train_dataset, eval_dataset
 
-        # Deduplicate if enabled
-        if self.deduplicate:
-            logger.info(f"Deduplicating dataset (strategy='{self.dedupe_strategy}')...")
-            dataset = deduplicate_dataset(dataset, strategy=self.dedupe_strategy)
-
-        # Limit samples if requested
-        if self.max_samples and len(dataset) > self.max_samples:
-            logger.info(f"Limiting dataset to {self.max_samples} samples")
-            dataset = dataset.select(range(self.max_samples))
-
-        # Format dataset
-        logger.info("Formatting dataset...")
-        dataset = dataset.map(
-            self.formatter.format,
-            num_proc=min(os.cpu_count() or 1, 4),  # Limit to 4 processes
-            desc="Formatting dataset"
-        )
-
-        # Split dataset
+        # Otherwise, random train/test split.
         logger.info(f"Splitting dataset (test_size={self.test_size}, shuffle={self.shuffle})...")
         split = dataset.train_test_split(test_size=self.test_size, seed=self.seed, shuffle=self.shuffle)
 
@@ -220,6 +223,34 @@ class DatasetPipeline:
         logger.info(f"Prepared {len(train_dataset)} training samples and {len(eval_dataset)} eval samples")
 
         return train_dataset, eval_dataset
+
+    def _finalize(self, dataset: Dataset, is_eval: bool = False) -> Dataset:
+        """Validate schema, apply system prompt, (train-only) dedup + subsample,
+        and format a dataset for training/eval.
+
+        Dedup and max_samples are training-set hygiene, so they are skipped for
+        an explicit eval set — it is evaluated verbatim.
+        """
+        logger.info(f"Validating {'eval ' if is_eval else ''}dataset schema...")
+        self._validate_schema(dataset)
+
+        dataset = self._apply_system_prompt_override(dataset)
+
+        if not is_eval:
+            if self.deduplicate:
+                logger.info(f"Deduplicating dataset (strategy='{self.dedupe_strategy}')...")
+                dataset = deduplicate_dataset(dataset, strategy=self.dedupe_strategy)
+            if self.max_samples and len(dataset) > self.max_samples:
+                logger.info(f"Limiting dataset to {self.max_samples} samples")
+                dataset = dataset.select(range(self.max_samples))
+
+        logger.info(f"Formatting {'eval ' if is_eval else ''}dataset...")
+        dataset = dataset.map(
+            self.formatter.format,
+            num_proc=min(os.cpu_count() or 1, 4),  # Limit to 4 processes
+            desc="Formatting dataset",
+        )
+        return dataset
 
     def preview(self, num_samples: int = 5, offset: int = 0) -> tuple[list[dict], int]:
         """

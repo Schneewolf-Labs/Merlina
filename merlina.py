@@ -251,6 +251,14 @@ class DatasetConfig(BaseModel):
         description="Additional dataset sources to concatenate with the primary source"
     )
 
+    eval_source: Optional[DatasetSource] = Field(
+        None,
+        description="Optional explicit evaluation dataset. When set, it is used as "
+                    "the eval split verbatim and the random `test_size` split is "
+                    "skipped (the full primary source is used for training). Useful "
+                    "for held-out / cross-distribution evaluation."
+    )
+
     format: DatasetFormat = Field(
         default=DatasetFormat(format_type="chatml"),
         description="Dataset format configuration"
