@@ -1468,6 +1468,19 @@ def run_training_sync(
                 extra_convert = config.dataset.convert_messages_format
                 additional_loaders.append((extra_loader, extra_mapping, extra_convert))
 
+        # Create explicit eval loader if configured (skips the random split)
+        eval_loader = None
+        eval_column_mapping = None
+        if getattr(config.dataset, 'eval_source', None):
+            logger.info("Creating loader for explicit eval dataset")
+            eval_loader = create_loader_from_config(
+                source_config=config.dataset.eval_source,
+                uploaded_datasets=uploaded_datasets,
+                hf_token=config.hf_token
+            )
+            eval_column_mapping = (config.dataset.eval_source.column_mapping
+                                   or config.dataset.column_mapping)
+
         # Get formatter
         formatter = get_formatter(
             format_type=config.dataset.format.format_type,
@@ -1491,6 +1504,9 @@ def run_training_sync(
             dedupe_strategy=config.dataset.dedupe_strategy,
             system_prompt=config.dataset.system_prompt,
             system_prompt_mode=config.dataset.system_prompt_mode,
+            eval_loader=eval_loader,
+            eval_column_mapping=eval_column_mapping,
+            eval_convert_messages_format=config.dataset.convert_messages_format,
         )
 
         train_dataset, eval_dataset = pipeline.prepare()
