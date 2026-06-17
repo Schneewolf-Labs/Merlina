@@ -392,7 +392,15 @@
                 <div class="spell-section">
                     <h3>⚙️ Advanced Options</h3>
                     <div class="form-row">
-                        <div class="form-group">
+                        <div class="form-group" id="eval-source-mode-group">
+                            <label>Evaluation Set</label>
+                            <select id="eval-source-mode" class="magic-select">
+                                <option value="split" selected>Split from training data</option>
+                                <option value="separate">Use a separate eval dataset</option>
+                            </select>
+                            <small style="color: #888; font-size: 0.85em;">Hold out a fraction of training data, or load a dedicated eval set.</small>
+                        </div>
+                        <div class="form-group" id="test-size-group">
                             <label>Test Split Size</label>
                             <input type="number" id="test-size" value="0.01" min="0.001" max="0.5" step="0.01" class="magic-input">
                             <small style="color: #888; font-size: 0.85em;">Fraction of data for evaluation</small>
@@ -402,6 +410,14 @@
                             <input type="number" id="max-samples" placeholder="Use all" class="magic-input">
                             <small style="color: #888; font-size: 0.85em;">Limit dataset size for testing</small>
                         </div>
+                    </div>
+
+                    <!-- Separate evaluation dataset source (shown when "Use a separate eval dataset" is selected) -->
+                    <div id="eval-source-config" style="display: none; margin-top: 15px;">
+                        <small style="color: #888; font-size: 0.85em; display: block; margin-bottom: 10px;">
+                            Configure a dedicated evaluation dataset. When set, the entire training data is used for training (the random test split is skipped).
+                        </small>
+                        <div id="eval-datasets-list"></div>
                     </div>
                     <div class="form-row" style="margin-top: 10px;">
                         <div class="form-group" style="flex: 1;" id="streaming-group">

@@ -318,6 +318,34 @@ describe('Validator.validateDatasetConfig', () => {
         const errors = Validator.validateDatasetConfig(config, 'orpo');
         assert.equal(errors.length, 0);
     });
+
+    it('requires rejected mapping on the eval source for paired modes', () => {
+        const config = {
+            source: { source_type: 'huggingface', repo_id: 'a/b' },
+            column_mapping: { p: 'prompt', c: 'chosen', r: 'rejected' },
+            eval_source: {
+                source_type: 'huggingface',
+                repo_id: 'a/eval',
+                column_mapping: { p: 'prompt', c: 'chosen' },
+            },
+        };
+        const errors = Validator.validateDatasetConfig(config, 'orpo');
+        assert.ok(errors.some(e => /Eval dataset.*[Rr]ejected/.test(e)));
+    });
+
+    it('allows a fully-mapped eval source for paired modes', () => {
+        const config = {
+            source: { source_type: 'huggingface', repo_id: 'a/b' },
+            column_mapping: { p: 'prompt', c: 'chosen', r: 'rejected' },
+            eval_source: {
+                source_type: 'huggingface',
+                repo_id: 'a/eval',
+                column_mapping: { p: 'prompt', c: 'chosen', r: 'rejected' },
+            },
+        };
+        const errors = Validator.validateDatasetConfig(config, 'orpo');
+        assert.equal(errors.length, 0);
+    });
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

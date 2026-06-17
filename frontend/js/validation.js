@@ -254,6 +254,9 @@ class Validator {
         (config.additional_sources || []).forEach((src, idx) => {
             checkMapping(src.column_mapping, `Dataset ${idx + 2}`);
         });
+        if (config.eval_source) {
+            checkMapping(config.eval_source.column_mapping, 'Eval dataset');
+        }
 
         return errors;
     }

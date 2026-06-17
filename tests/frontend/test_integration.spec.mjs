@@ -230,6 +230,57 @@ test.describe('Dataset source selection', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
+// Evaluation set source (split from training data vs. separate eval dataset)
+// ═════════════════════════════════════════════════════════════════════════════
+
+test.describe('Evaluation set source', () => {
+    test('defaults to splitting from training data; eval source hidden', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
+        await expect(page.locator('#eval-source-mode')).toHaveValue('split');
+        await expect(page.locator('#eval-source-config')).toBeHidden();
+        await expect(page.locator('#test-size')).toBeEnabled();
+    });
+
+    test('selecting a separate eval dataset reveals its own dataset card', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
+        await page.locator('#eval-source-mode').selectOption('separate');
+        await expect(page.locator('#eval-source-config')).toBeVisible();
+        const evalCard = page.locator('#eval-datasets-list .dataset-card');
+        await expect(evalCard).toHaveCount(1);
+        await expect(evalCard.locator('.ds-source-type')).toHaveValue('huggingface');
+        await expect(evalCard.locator('.ds-hf-config')).toBeVisible();
+        // Test split is de-emphasized/disabled while an explicit eval set is used.
+        await expect(page.locator('#test-size')).toBeDisabled();
+    });
+
+    test('eval card source switching is independent of the training cards', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
+        await page.locator('#eval-source-mode').selectOption('separate');
+        const evalCard = page.locator('#eval-datasets-list .dataset-card');
+        await evalCard.locator('.ds-source-type').selectOption('local_file');
+        await expect(evalCard.locator('.ds-local-config')).toBeVisible();
+        await expect(evalCard.locator('.ds-hf-config')).toBeHidden();
+        // The training list still has exactly one card, untouched.
+        await expect(page.locator('#datasets-list .dataset-card')).toHaveCount(1);
+        await expect(page.locator('#datasets-list .dataset-card').first().locator('.ds-source-type'))
+            .toHaveValue('huggingface');
+    });
+
+    test('switching back to split hides the eval source and re-enables test split', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
+        await page.locator('#eval-source-mode').selectOption('separate');
+        await expect(page.locator('#eval-source-config')).toBeVisible();
+        await page.locator('#eval-source-mode').selectOption('split');
+        await expect(page.locator('#eval-source-config')).toBeHidden();
+        await expect(page.locator('#test-size')).toBeEnabled();
+    });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
 // Training mode selector mirror (Dataset section ↔ Training section)
 // ═════════════════════════════════════════════════════════════════════════════
 

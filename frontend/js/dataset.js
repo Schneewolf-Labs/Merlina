@@ -48,6 +48,7 @@ class DatasetManager {
         this.toast = new Toast();
         this.setupEventListeners();
         this.initializeFirstCard();
+        this.initializeEvalCard();
     }
 
     setupEventListeners() {
@@ -99,16 +100,68 @@ class DatasetManager {
         }
     }
 
+    /**
+     * Create the single, non-removable evaluation dataset card and wire up the
+     * eval-source mode selector. The eval card reuses the standard card
+     * template (source picker + column mapping) but lives in its own
+     * container so getCards() — which feeds source/additional_sources — never
+     * picks it up.
+     */
+    initializeEvalCard() {
+        const container = document.getElementById('eval-datasets-list');
+        if (container) {
+            const card = this.addDataset({ canRemove: false, container });
+            if (card) {
+                const title = card.querySelector('.dataset-card-title');
+                if (title) title.textContent = '📊 Evaluation Dataset';
+            }
+        }
+
+        const modeSel = document.getElementById('eval-source-mode');
+        if (modeSel) {
+            modeSel.addEventListener('change', () => this.updateEvalSourceVisibility());
+        }
+        this.updateEvalSourceVisibility();
+    }
+
+    /**
+     * Show the eval source config (and de-emphasize the random test split)
+     * only when the user opts for a separate eval dataset.
+     */
+    updateEvalSourceVisibility() {
+        const separate = (document.getElementById('eval-source-mode')?.value || 'split') === 'separate';
+        const evalConfig = document.getElementById('eval-source-config');
+        if (evalConfig) evalConfig.style.display = separate ? 'block' : 'none';
+
+        // The random test_size split is ignored when an explicit eval source is
+        // set; visually disable it so the relationship is clear.
+        const testSizeGroup = document.getElementById('test-size-group');
+        const testSizeInput = document.getElementById('test-size');
+        if (testSizeGroup) testSizeGroup.style.opacity = separate ? '0.5' : '1';
+        if (testSizeInput) testSizeInput.disabled = separate;
+    }
+
     getCards() {
         return Array.from(document.querySelectorAll('#datasets-list .dataset-card'));
     }
 
     /**
-     * Append a new dataset card. Returns the card element.
+     * The single evaluation dataset card (or null when the section is absent).
      */
-    addDataset({ canRemove = true } = {}) {
-        const container = document.getElementById('datasets-list');
-        if (!container) return null;
+    getEvalCard() {
+        return document.querySelector('#eval-datasets-list .dataset-card');
+    }
+
+    /**
+     * Append a new dataset card. Returns the card element.
+     *
+     * @param {boolean} canRemove - Whether the card shows a remove button.
+     * @param {HTMLElement} container - Target container. Defaults to the main
+     *     #datasets-list. The eval card lives in its own #eval-datasets-list.
+     */
+    addDataset({ canRemove = true, container = null } = {}) {
+        const target = container || document.getElementById('datasets-list');
+        if (!target) return null;
 
         this.datasetCounter++;
         const id = this.datasetCounter;
@@ -116,10 +169,12 @@ class DatasetManager {
         card.className = 'dataset-card';
         card.dataset.id = String(id);
         card.innerHTML = this.cardTemplate();
-        container.appendChild(card);
+        target.appendChild(card);
 
         this.wireCard(card, canRemove);
-        this.renumberCards();
+        // Only the main list is auto-numbered ("Dataset 1, 2, …"); the eval
+        // card keeps its own title.
+        if (target.id === 'datasets-list') this.renumberCards();
         this.applyModeToCard(card, document.getElementById('training-mode')?.value || 'orpo');
         return card;
     }
@@ -286,6 +341,8 @@ class DatasetManager {
      */
     applyModeToAllCards(mode) {
         this.getCards().forEach(card => this.applyModeToCard(card, mode));
+        const evalCard = this.getEvalCard();
+        if (evalCard) this.applyModeToCard(evalCard, mode);
     }
 
     applyModeToCard(card, mode) {
@@ -788,6 +845,19 @@ class DatasetManager {
                 if (Object.keys(mapping).length > 0) src.column_mapping = mapping;
                 return src;
             });
+        }
+
+        // Explicit eval dataset source. Only relevant for training (preview
+        // operates on the training data), so skip it for preview configs.
+        const evalMode = document.getElementById('eval-source-mode')?.value || 'split';
+        if (!forPreview && evalMode === 'separate') {
+            const evalCard = this.getEvalCard();
+            if (evalCard) {
+                const evalSrc = this.readCardSource(evalCard);
+                const evalMapping = this.readCardColumnMapping(evalCard);
+                if (Object.keys(evalMapping).length > 0) evalSrc.column_mapping = evalMapping;
+                config.eval_source = evalSrc;
+            }
         }
 
         const trainingMode = forPreview ? 'sft' : (document.getElementById('training-mode')?.value || 'orpo');

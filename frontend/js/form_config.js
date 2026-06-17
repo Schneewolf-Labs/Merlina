@@ -173,6 +173,13 @@ export function buildDatasetConfig({ includeTrainingMode = true } = {}) {
         if (modeRadio) config.system_prompt_mode = modeRadio.value;
     }
 
+    // Explicit eval dataset source. Read raw (no validation) so an in-progress
+    // eval config still round-trips through save/load.
+    if (str('eval-source-mode', 'split') === 'separate') {
+        const evalCard = document.querySelector('#eval-datasets-list .dataset-card');
+        if (evalCard) config.eval_source = readCardSource(evalCard);
+    }
+
     if (includeTrainingMode) {
         config.training_mode = str('training-mode', 'orpo');
     }

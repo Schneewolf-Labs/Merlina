@@ -553,6 +553,21 @@ class ConfigManager {
                 : [];
             const allSources = primary ? [primary, ...extras] : extras;
             this.restoreDatasetCards(allSources);
+
+            // Explicit eval source: flip the mode selector and repopulate the
+            // eval card. Absence resets the selector back to "split".
+            const modeSel = document.getElementById('eval-source-mode');
+            if (config.dataset.eval_source) {
+                if (modeSel) {
+                    modeSel.value = 'separate';
+                    modeSel.dispatchEvent(new Event('change'));
+                }
+                const evalCard = document.querySelector('#eval-datasets-list .dataset-card');
+                if (evalCard) this.populateCardFromSource(evalCard, config.dataset.eval_source);
+            } else if (modeSel) {
+                modeSel.value = 'split';
+                modeSel.dispatchEvent(new Event('change'));
+            }
         }
 
         // Optional fields

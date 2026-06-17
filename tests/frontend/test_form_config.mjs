@@ -81,6 +81,7 @@ function setState(s) {
     state = {
         inputs: s.inputs || {},
         cards: s.cards || [],
+        evalCard: s.evalCard || null,
         radios: s.radios || {},
     };
 }
@@ -101,6 +102,9 @@ globalThis.document = {
         return [];
     },
     querySelector(sel) {
+        if (sel === '#eval-datasets-list .dataset-card') {
+            return state.evalCard ? makeCard(state.evalCard) : null;
+        }
         const m = sel.match(/^input\[name="([^"]+)":?checked\]?$/);
         if (m) {
             const name = m[1];
@@ -128,7 +132,7 @@ const { buildTrainingConfig, buildDatasetConfig, SECRET_FIELDS } =
  * Build a state object with values for *every* form field touched by
  * buildTrainingConfig, so we get a complete config back.
  */
-function fullFormState({ extras = {}, cards, radios } = {}) {
+function fullFormState({ extras = {}, cards, evalCard, radios } = {}) {
     return {
         inputs: {
             'base-model': 'meta-llama/Meta-Llama-3-8B',
@@ -208,6 +212,7 @@ function fullFormState({ extras = {}, cards, radios } = {}) {
             repoId: 'schneewolflabs/Athanorlite-DPO',
             split: 'train',
         }],
+        evalCard: evalCard ?? null,
         radios: radios ?? { 'system-prompt-mode': 'fill_empty' },
     };
 }
@@ -412,6 +417,42 @@ describe('buildDatasetConfig — full dataset coverage', () => {
             instruction: 'prompt',
             response: 'chosen',
         });
+    });
+
+    it('omits eval_source when eval-source-mode is split (default)', () => {
+        setState(fullFormState({
+            evalCard: { sourceType: 'huggingface', repoId: 'eval/set', split: 'test' },
+        }));
+        const ds = buildDatasetConfig();
+        assert.equal('eval_source' in ds, false);
+    });
+
+    it('captures eval_source when a separate eval dataset is selected', () => {
+        setState(fullFormState({
+            extras: { 'eval-source-mode': 'separate' },
+            evalCard: {
+                sourceType: 'huggingface',
+                repoId: 'eval/set',
+                split: 'test',
+                mapping: { prompt: 'question', chosen: 'answer' },
+            },
+        }));
+        const ds = buildDatasetConfig();
+        assert.equal(ds.eval_source.source_type, 'huggingface');
+        assert.equal(ds.eval_source.repo_id, 'eval/set');
+        assert.equal(ds.eval_source.split, 'test');
+        assert.deepEqual(ds.eval_source.column_mapping, {
+            question: 'prompt',
+            answer: 'chosen',
+        });
+    });
+
+    it('omits eval_source when separate is selected but no eval card exists', () => {
+        setState(fullFormState({
+            extras: { 'eval-source-mode': 'separate' },
+        }));
+        const ds = buildDatasetConfig();
+        assert.equal('eval_source' in ds, false);
     });
 
     it('attaches qwen3 enable_thinking when format_type=qwen3', () => {
