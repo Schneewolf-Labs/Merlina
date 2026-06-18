@@ -96,6 +96,8 @@ function readCardSource(card) {
     if (t === 'huggingface') {
         src.repo_id = card.querySelector('.ds-repo')?.value || '';
         src.split = card.querySelector('.ds-split')?.value || 'train';
+        const configName = card.querySelector('.ds-config')?.value?.trim();
+        if (configName) src.config_name = configName;
     } else if (t === 'local_file') {
         src.file_path = card.querySelector('.ds-local-path')?.value || '';
         src.file_format = card.querySelector('.ds-local-format')?.value || '';

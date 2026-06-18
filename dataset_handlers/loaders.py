@@ -37,7 +37,8 @@ class HuggingFaceLoader(DatasetLoader):
         self,
         repo_id: str,
         split: str = "train",
-        token: Optional[str] = None
+        token: Optional[str] = None,
+        config_name: Optional[str] = None,
     ) -> None:
         """
         Initialize HuggingFace dataset loader.
@@ -46,10 +47,14 @@ class HuggingFaceLoader(DatasetLoader):
             repo_id: HuggingFace repository ID (e.g., "schneewolflabs/Athanorlite-DPO")
             split: Dataset split to load (default: "train")
             token: Optional HuggingFace API token for private/gated datasets
+            config_name: Optional dataset configuration / subset name (HuggingFace's
+                ``name`` argument, e.g. "high_quality"). When omitted, the dataset's
+                default configuration is loaded.
         """
         self.repo_id = repo_id
         self.split = split
         self.token = token
+        self.config_name = config_name or None
 
     def load(self) -> Dataset:
         """
@@ -61,14 +66,19 @@ class HuggingFaceLoader(DatasetLoader):
         Raises:
             ValueError: If the dataset cannot be loaded
         """
-        logger.info(f"Loading dataset from HuggingFace: {self.repo_id} (split: {self.split})")
+        suffix = f", config: {self.config_name}" if self.config_name else ""
+        logger.info(
+            f"Loading dataset from HuggingFace: {self.repo_id} "
+            f"(split: {self.split}{suffix})"
+        )
 
         try:
-            dataset = load_dataset(
-                self.repo_id,
-                split=self.split,
-                token=self.token
-            )
+            # Only pass `name` when a config/subset is set, so default-config
+            # datasets keep loading exactly as before.
+            kwargs = {"split": self.split, "token": self.token}
+            if self.config_name:
+                kwargs["name"] = self.config_name
+            dataset = load_dataset(self.repo_id, **kwargs)
             logger.info(f"Successfully loaded {len(dataset)} samples from {self.repo_id}")
             return dataset
 
@@ -81,12 +91,13 @@ class HuggingFaceLoader(DatasetLoader):
         Get information about the dataset source.
 
         Returns:
-            Dictionary containing source type, repo ID, and split
+            Dictionary containing source type, repo ID, split, and config name
         """
         return {
             "source_type": "huggingface",
             "repo_id": self.repo_id,
-            "split": self.split
+            "split": self.split,
+            "config_name": self.config_name,
         }
 
 
@@ -115,6 +126,7 @@ class StreamingHuggingFaceLoader(DatasetLoader):
         token: Optional[str] = None,
         max_samples: Optional[int] = None,
         batch_size: int = DEFAULT_BATCH_SIZE,
+        config_name: Optional[str] = None,
     ) -> None:
         """
         Initialize streaming HuggingFace dataset loader.
@@ -128,12 +140,16 @@ class StreamingHuggingFaceLoader(DatasetLoader):
                         loads the entire dataset (use with caution).
             batch_size: Number of rows to buffer before flushing to the Arrow table.
                        Higher values use more memory but are faster. Default: 10000.
+            config_name: Optional dataset configuration / subset name (HuggingFace's
+                ``name`` argument, e.g. "high_quality"). When omitted, the dataset's
+                default configuration is streamed.
         """
         self.repo_id = repo_id
         self.split = split
         self.token = token
         self.max_samples = max_samples
         self.batch_size = batch_size
+        self.config_name = config_name or None
 
     def load(self) -> Dataset:
         """
@@ -149,18 +165,17 @@ class StreamingHuggingFaceLoader(DatasetLoader):
         Raises:
             ValueError: If the dataset cannot be loaded or stream is empty
         """
+        suffix = f", config: {self.config_name}" if self.config_name else ""
         logger.info(
             f"Streaming dataset from HuggingFace: {self.repo_id} "
-            f"(split: {self.split}, max_samples: {self.max_samples})"
+            f"(split: {self.split}, max_samples: {self.max_samples}{suffix})"
         )
 
         try:
-            iterable_dataset = load_dataset(
-                self.repo_id,
-                split=self.split,
-                token=self.token,
-                streaming=True,
-            )
+            kwargs = {"split": self.split, "token": self.token, "streaming": True}
+            if self.config_name:
+                kwargs["name"] = self.config_name
+            iterable_dataset = load_dataset(self.repo_id, **kwargs)
 
             # Materialize streaming dataset into batches
             rows = []
@@ -204,6 +219,7 @@ class StreamingHuggingFaceLoader(DatasetLoader):
             "source_type": "huggingface",
             "repo_id": self.repo_id,
             "split": self.split,
+            "config_name": self.config_name,
             "streaming": True,
             "max_samples": self.max_samples,
             "batch_size": self.batch_size,

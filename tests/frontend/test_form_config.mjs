@@ -44,7 +44,7 @@ function makeElement({ id, value = '', checked = false, type = 'text', tag = 'IN
 }
 
 function makeCard(card) {
-    // card: { sourceType, repoId, split, filePath, fileFormat, datasetId, mapping }
+    // card: { sourceType, repoId, split, configName, filePath, fileFormat, datasetId, mapping }
     const select = (sel) => {
         switch (sel) {
             case '.ds-source-type':
@@ -53,6 +53,8 @@ function makeCard(card) {
                 return { value: card.repoId ?? '' };
             case '.ds-split':
                 return { value: card.split ?? 'train' };
+            case '.ds-config':
+                return { value: card.configName ?? '' };
             case '.ds-local-path':
                 return { value: card.filePath ?? '' };
             case '.ds-local-format':
@@ -396,6 +398,23 @@ describe('buildDatasetConfig — full dataset coverage', () => {
         assert.equal(ds.additional_sources.length, 2);
         assert.equal(ds.additional_sources[0].repo_id, 'b/two');
         assert.equal(ds.additional_sources[1].file_path, '/data/extra.json');
+    });
+
+    it('includes config_name (HF subset) when set, omits it when blank', () => {
+        // set on the primary source
+        setState(fullFormState({
+            cards: [{ sourceType: 'huggingface', repoId: 'org/ds', split: 'train',
+                      configName: 'high_quality' }],
+        }));
+        let ds = buildDatasetConfig();
+        assert.equal(ds.source.config_name, 'high_quality');
+
+        // blank -> key omitted entirely (default config)
+        setState(fullFormState({
+            cards: [{ sourceType: 'huggingface', repoId: 'org/ds', split: 'train' }],
+        }));
+        ds = buildDatasetConfig();
+        assert.equal('config_name' in ds.source, false);
     });
 
     it('attaches per-card column_mapping when provided', () => {

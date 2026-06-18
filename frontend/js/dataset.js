@@ -147,6 +147,11 @@ class DatasetManager {
                             <input type="text" class="magic-input ds-repo" placeholder="username/dataset-name">
                         </div>
                         <div class="form-group" style="flex: 1;">
+                            <label>Subset / Config</label>
+                            <input type="text" class="magic-input ds-config" placeholder="default">
+                            <small style="color: #888; font-size: 0.85em;">Optional — e.g. high_quality</small>
+                        </div>
+                        <div class="form-group" style="flex: 1;">
                             <label>Split</label>
                             <input type="text" class="magic-input ds-split" value="train">
                         </div>
@@ -390,6 +395,8 @@ class DatasetManager {
             if (!repoId) throw new Error('Repository ID is required');
             source.repo_id = repoId;
             source.split = card.querySelector('.ds-split').value.trim() || 'train';
+            const configName = card.querySelector('.ds-config')?.value.trim();
+            if (configName) source.config_name = configName;
         } else if (sourceType === 'local_file') {
             const filePath = card.querySelector('.ds-local-path').value.trim();
             if (!filePath) throw new Error('File path is required');
