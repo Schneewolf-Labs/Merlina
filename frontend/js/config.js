@@ -670,8 +670,10 @@ class ConfigManager {
         if (sourceType === 'huggingface') {
             const repoInput = card.querySelector('.ds-repo');
             const splitInput = card.querySelector('.ds-split');
+            const configInput = card.querySelector('.ds-config');
             if (repoInput) repoInput.value = src.repo_id || '';
             if (splitInput) splitInput.value = src.split || 'train';
+            if (configInput) configInput.value = src.config_name || '';
         } else if (sourceType === 'local_file') {
             const pathInput = card.querySelector('.ds-local-path');
             const fmtSelect = card.querySelector('.ds-local-format');

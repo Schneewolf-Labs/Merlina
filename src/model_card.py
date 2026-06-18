@@ -504,7 +504,10 @@ def _build_dataset_section(config: Any) -> str:
         t = getattr(src, 'source_type', None)
         if t == "huggingface" and getattr(src, 'repo_id', None):
             split = getattr(src, 'split', None) or 'train'
-            return f"[`{src.repo_id}`](https://huggingface.co/datasets/{src.repo_id}) (split: `{split}`)"
+            config_name = getattr(src, 'config_name', None)
+            cfg = f"config: `{config_name}`, " if config_name else ""
+            return (f"[`{src.repo_id}`](https://huggingface.co/datasets/{src.repo_id}) "
+                    f"({cfg}split: `{split}`)")
         if t == "local_file" and getattr(src, 'file_path', None):
             return f"local file: `{src.file_path}`"
         if t == "upload":

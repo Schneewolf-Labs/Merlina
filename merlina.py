@@ -169,6 +169,12 @@ class DatasetSource(BaseModel):
     # For HuggingFace datasets
     repo_id: Optional[str] = Field(None, description="HuggingFace repository ID")
     split: str = Field("train", description="Dataset split to use")
+    config_name: Optional[str] = Field(
+        None,
+        description="HuggingFace dataset configuration / subset name (the `name` "
+                    "argument to load_dataset, e.g. 'high_quality'). Leave empty for "
+                    "the dataset's default configuration."
+    )
 
     # For local file datasets
     file_path: Optional[str] = Field(None, description="Path to local dataset file")
