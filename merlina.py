@@ -1452,7 +1452,7 @@ async def upload_job(job_id: str, request: UploadJobRequest):
     job_manager.update_job(job_id, upload_error="")
 
     # Start upload in background thread
-    from src.training_runner import _run_background_upload
+    from src.training_runner import _run_background_upload, _perform_sync_merge
 
     # Diffusion jobs need the is_diffusion flag so the helper skips the
     # LLM merge path and the model card renders for diffusers.
@@ -1461,10 +1461,48 @@ async def upload_job(job_id: str, request: UploadJobRequest):
         or training_mode.lower().startswith("diffusion_")
     )
 
+    # _run_background_upload no longer merges on its own — it expects a
+    # pre-merged artifact from _perform_sync_merge and otherwise falls back
+    # to uploading the LoRA adapter only. Re-run the merge here (inside the
+    # background thread, same as the post-hoc /models/{name}/upload path)
+    # so "merge before upload" actually uploads the merged model.
+    needs_merge = (
+        not is_diffusion
+        and bool(config.use_lora)
+        and config.merge_lora_before_upload
+    )
+
+    def _runner():
+        merge_artifact = None
+        try:
+            is_vlm = False
+            if not is_diffusion:
+                try:
+                    is_vlm = _resolve_is_vlm(
+                        getattr(config, "model_type", "auto") or "auto",
+                        config.base_model,
+                    )
+                except Exception:
+                    is_vlm = False
+            if needs_merge:
+                merge_artifact = _perform_sync_merge(
+                    config, output_dir, job_id, job_manager,
+                    event_loop=event_loop,
+                    is_vlm=is_vlm,
+                    num_consumers=1,
+                )
+            _run_background_upload(
+                config, output_dir, training_mode, job_id, job_manager,
+                event_loop, is_vlm,
+                merge_artifact=merge_artifact,
+                is_diffusion=is_diffusion,
+            )
+        except Exception as exc:
+            logger.error(f"Re-upload failed for job {job_id}: {exc}", exc_info=True)
+            job_manager.update_job(job_id, status="completed", upload_error=str(exc))
+
     upload_thread = threading.Thread(
-        target=_run_background_upload,
-        args=(config, output_dir, training_mode, job_id, job_manager, event_loop),
-        kwargs={"is_diffusion": is_diffusion},
+        target=_runner,
         name=f"UploadThread-{job_id}",
         daemon=False
     )
