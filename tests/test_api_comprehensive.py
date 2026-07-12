@@ -1159,6 +1159,80 @@ class TestErrorCases:
 
 
 # ============================================================================
+# Test Job Re-Upload Endpoint (POST /jobs/{job_id}/upload)
+# ============================================================================
+
+class TestJobReUpload:
+    """Regression tests for re-uploading a completed job's model.
+
+    The sync-merge refactor moved the LoRA merge out of
+    _run_background_upload — without a pre-merged artifact it falls back
+    to uploading the adapter only. The endpoint must therefore run
+    _perform_sync_merge itself when merge_lora_before_upload=True.
+    """
+
+    def _completed_lora_job(self, tmp_path):
+        from src.job_manager import JobRecord
+        return JobRecord(
+            job_id="job_up_001",
+            status="completed",
+            progress=1.0,
+            created_at=datetime.now().isoformat(),
+            updated_at=datetime.now().isoformat(),
+            config={
+                "base_model": "test/base-model",
+                "output_name": "test-model",
+                "use_lora": True,
+            },
+            output_dir=str(tmp_path),
+        )
+
+    def _post_upload(self, client, mock_job_manager, tmp_path, *, merge):
+        import threading
+
+        mock_job_manager.get_job.return_value = self._completed_lora_job(tmp_path)
+
+        done = threading.Event()
+        merge_mock = Mock(return_value="MERGE_ARTIFACT")
+        upload_calls = []
+
+        def fake_upload(*args, **kwargs):
+            upload_calls.append((args, kwargs))
+            done.set()
+
+        with patch("src.training_runner._perform_sync_merge", merge_mock), \
+             patch("src.training_runner._run_background_upload", fake_upload), \
+             patch("merlina._resolve_is_vlm", return_value=False):
+            response = client.post(
+                "/jobs/job_up_001/upload",
+                json={"hf_token": "hf_test_token", "merge_lora_before_upload": merge},
+            )
+            assert response.status_code == 200
+            assert done.wait(timeout=10), "upload thread never ran"
+
+        return merge_mock, upload_calls
+
+    def test_reupload_with_merge_runs_sync_merge(self, client, mock_job_manager, tmp_path):
+        """merge_lora_before_upload=True must merge and pass the artifact along"""
+        merge_mock, upload_calls = self._post_upload(
+            client, mock_job_manager, tmp_path, merge=True
+        )
+        assert merge_mock.call_count == 1
+        assert merge_mock.call_args.kwargs.get("num_consumers") == 1
+        _, kwargs = upload_calls[0]
+        assert kwargs.get("merge_artifact") == "MERGE_ARTIFACT"
+
+    def test_reupload_without_merge_skips_merge(self, client, mock_job_manager, tmp_path):
+        """merge_lora_before_upload=False uploads the adapter as-is, no merge"""
+        merge_mock, upload_calls = self._post_upload(
+            client, mock_job_manager, tmp_path, merge=False
+        )
+        merge_mock.assert_not_called()
+        _, kwargs = upload_calls[0]
+        assert kwargs.get("merge_artifact") is None
+
+
+# ============================================================================
 # Run Tests
 # ============================================================================
 
