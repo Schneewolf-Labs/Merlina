@@ -1372,6 +1372,66 @@ async def retry_job(job_id: str, priority: Optional[str] = "normal"):
     )
 
 
+def _dispatch_merge_gated(
+    job_id: str,
+    config,
+    *,
+    needs_merge: bool,
+    merge,
+    work,
+    on_error,
+    thread_name: str,
+) -> Optional[int]:
+    """
+    Run ``work(merge_artifact)`` in a background thread, gating the RAM-heavy
+    LoRA merge on a job-queue slot.
+
+    The CPU bf16 merge holds ~2 bytes/param of system RAM (≈24 GB for a 12B
+    model). Post-training merges run on the queue worker so they can't race
+    the next job's startup for that memory (see ``_perform_sync_merge``);
+    this helper gives on-demand merges (job re-upload, post-hoc upload and
+    GGUF export) the same guarantee by submitting them to the job queue with
+    HIGH priority. The slot is released as soon as the merge finishes —
+    ``work`` (network upload, GGUF convert/quantize) runs in a plain
+    background thread because it doesn't compete with training for RAM.
+
+    Args:
+        job_id: Job to run under (queue tracking + status updates).
+        config: Stored config for the queue record.
+        needs_merge: When False, ``work(None)`` is spawned immediately and
+            no queue slot is taken.
+        merge: Zero-arg callable returning a MergeArtifact. Runs on the
+            queue worker thread.
+        work: One-arg callable receiving the MergeArtifact (or None). Runs
+            in a background thread.
+        on_error: One-arg callable receiving the exception, for failures
+            outside merge/work's own error handling.
+        thread_name: Name for the background work thread.
+
+    Returns:
+        The queue position when the merge was queued, else None.
+    """
+    def _spawn(merge_artifact):
+        def _thread_body():
+            try:
+                work(merge_artifact)
+            except Exception as exc:
+                on_error(exc)
+        threading.Thread(target=_thread_body, name=thread_name, daemon=False).start()
+
+    if not needs_merge:
+        _spawn(None)
+        return None
+
+    def _queue_callback(_jid, _cfg):
+        try:
+            _spawn(merge())
+        except Exception as exc:
+            on_error(exc)
+
+    return job_queue.submit(job_id, config, _queue_callback, JobPriority.HIGH)
+
+
 class UploadJobRequest(BaseModel):
     hf_token: Optional[str] = Field(
         None,
@@ -1463,50 +1523,76 @@ async def upload_job(job_id: str, request: UploadJobRequest):
 
     # _run_background_upload no longer merges on its own — it expects a
     # pre-merged artifact from _perform_sync_merge and otherwise falls back
-    # to uploading the LoRA adapter only. Re-run the merge here (inside the
-    # background thread, same as the post-hoc /models/{name}/upload path)
-    # so "merge before upload" actually uploads the merged model.
+    # to uploading the LoRA adapter only.
     needs_merge = (
         not is_diffusion
         and bool(config.use_lora)
         and config.merge_lora_before_upload
     )
 
-    def _runner():
-        merge_artifact = None
-        try:
-            is_vlm = False
+    # Resolved lazily (may fetch the base model's config) and cached so the
+    # merge and the upload agree on the answer.
+    _vlm_cache: dict = {}
+
+    def _is_vlm() -> bool:
+        if "value" not in _vlm_cache:
+            value = False
             if not is_diffusion:
                 try:
-                    is_vlm = _resolve_is_vlm(
+                    value = _resolve_is_vlm(
                         getattr(config, "model_type", "auto") or "auto",
                         config.base_model,
                     )
                 except Exception:
-                    is_vlm = False
-            if needs_merge:
-                merge_artifact = _perform_sync_merge(
-                    config, output_dir, job_id, job_manager,
-                    event_loop=event_loop,
-                    is_vlm=is_vlm,
-                    num_consumers=1,
-                )
-            _run_background_upload(
-                config, output_dir, training_mode, job_id, job_manager,
-                event_loop, is_vlm,
-                merge_artifact=merge_artifact,
-                is_diffusion=is_diffusion,
-            )
-        except Exception as exc:
-            logger.error(f"Re-upload failed for job {job_id}: {exc}", exc_info=True)
-            job_manager.update_job(job_id, status="completed", upload_error=str(exc))
+                    value = False
+            _vlm_cache["value"] = value
+        return _vlm_cache["value"]
 
-    upload_thread = threading.Thread(
-        target=_runner,
-        name=f"UploadThread-{job_id}",
-        daemon=False
+    def _merge():
+        return _perform_sync_merge(
+            config, output_dir, job_id, job_manager,
+            event_loop=event_loop,
+            is_vlm=_is_vlm(),
+            num_consumers=1,
+        )
+
+    def _upload(merge_artifact):
+        _run_background_upload(
+            config, output_dir, training_mode, job_id, job_manager,
+            event_loop, _is_vlm(),
+            merge_artifact=merge_artifact,
+            is_diffusion=is_diffusion,
+        )
+
+    def _on_error(exc):
+        logger.error(f"Re-upload failed for job {job_id}: {exc}", exc_info=True)
+        # Training itself succeeded — keep the job completed, surface the
+        # upload failure separately so the user can retry.
+        job_manager.update_job(job_id, status="completed", upload_error=str(exc))
+
+    position = _dispatch_merge_gated(
+        job_id, job.config,
+        needs_merge=needs_merge,
+        merge=_merge,
+        work=_upload,
+        on_error=_on_error,
+        thread_name=f"UploadThread-{job_id}",
     )
-    upload_thread.start()
+
+    if position is not None:
+        logger.info(
+            f"📤 Merge + upload queued for job {job_id} -> {config.output_name} "
+            f"(position {position})"
+        )
+        return JobResponse(
+            job_id=job_id,
+            status="queued",
+            message=(
+                f"Upload queued at position {position} for {config.output_name}. "
+                "The LoRA merge waits for a free training slot, then the merged "
+                "model is pushed to HuggingFace Hub."
+            )
+        )
 
     logger.info(f"📤 Background upload started for job {job_id} -> {config.output_name}")
 
@@ -4101,32 +4187,45 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
     except RuntimeError:
         event_loop = None
 
-    def _runner():
-        merge_artifact = None
-        try:
-            if needs_merge:
-                merge_artifact = _perform_sync_merge(
-                    cfg, str(model_dir), job_id, job_manager,
-                    event_loop=event_loop,
-                    is_vlm=is_vlm,
-                    num_consumers=1,
-                )
-            _run_background_upload(
-                config=cfg,
-                final_output_dir=str(model_dir),
-                training_mode="post_hoc_upload",
-                job_id=job_id,
-                job_manager=job_manager,
-                event_loop=event_loop,
-                is_vlm=is_vlm,
-                merge_artifact=merge_artifact,
-            )
-        except Exception as exc:
-            logger.error(f"Post-hoc upload failed for {name}: {exc}", exc_info=True)
-            job_manager.update_job(job_id, status="failed", upload_error=str(exc))
+    def _merge():
+        return _perform_sync_merge(
+            cfg, str(model_dir), job_id, job_manager,
+            event_loop=event_loop,
+            is_vlm=is_vlm,
+            num_consumers=1,
+        )
 
-    threading.Thread(target=_runner, name=f"PostHocUpload-{job_id}", daemon=False).start()
-    return {"job_id": job_id, "model_name": name, "repo_id": repo_id, "started": True}
+    def _upload(merge_artifact):
+        _run_background_upload(
+            config=cfg,
+            final_output_dir=str(model_dir),
+            training_mode="post_hoc_upload",
+            job_id=job_id,
+            job_manager=job_manager,
+            event_loop=event_loop,
+            is_vlm=is_vlm,
+            merge_artifact=merge_artifact,
+        )
+
+    def _on_error(exc):
+        logger.error(f"Post-hoc upload failed for {name}: {exc}", exc_info=True)
+        job_manager.update_job(job_id, status="failed", upload_error=str(exc))
+
+    position = _dispatch_merge_gated(
+        job_id, cfg,
+        needs_merge=needs_merge,
+        merge=_merge,
+        work=_upload,
+        on_error=_on_error,
+        thread_name=f"PostHocUpload-{job_id}",
+    )
+    return {
+        "job_id": job_id,
+        "model_name": name,
+        "repo_id": repo_id,
+        "started": True,
+        "queue_position": position,
+    }
 
 
 @app.post("/models/{name}/export-gguf")
@@ -4169,32 +4268,44 @@ async def export_gguf_for_existing_model(name: str, request: ModelGgufExportRequ
     except RuntimeError:
         event_loop = None
 
-    def _runner():
-        merge_artifact = None
-        try:
-            if has_adapter:
-                merge_artifact = _perform_sync_merge(
-                    cfg, str(model_dir), job_id, job_manager,
-                    event_loop=event_loop,
-                    is_vlm=is_vlm,
-                    num_consumers=1,
-                )
-            _run_background_gguf_export(
-                config=cfg,
-                final_output_dir=str(model_dir),
-                job_id=job_id,
-                job_manager=job_manager,
-                event_loop=event_loop,
-                is_vlm=is_vlm,
-                merge_artifact=merge_artifact,
-            )
-            job_manager.update_job(job_id, status="completed", progress=1.0)
-        except Exception as exc:
-            logger.error(f"Post-hoc GGUF export failed for {name}: {exc}", exc_info=True)
-            job_manager.update_job(job_id, status="failed", gguf_error=str(exc))
+    def _merge():
+        return _perform_sync_merge(
+            cfg, str(model_dir), job_id, job_manager,
+            event_loop=event_loop,
+            is_vlm=is_vlm,
+            num_consumers=1,
+        )
 
-    threading.Thread(target=_runner, name=f"PostHocGguf-{job_id}", daemon=False).start()
-    return {"job_id": job_id, "model_name": name, "started": True}
+    def _export(merge_artifact):
+        _run_background_gguf_export(
+            config=cfg,
+            final_output_dir=str(model_dir),
+            job_id=job_id,
+            job_manager=job_manager,
+            event_loop=event_loop,
+            is_vlm=is_vlm,
+            merge_artifact=merge_artifact,
+        )
+        job_manager.update_job(job_id, status="completed", progress=1.0)
+
+    def _on_error(exc):
+        logger.error(f"Post-hoc GGUF export failed for {name}: {exc}", exc_info=True)
+        job_manager.update_job(job_id, status="failed", gguf_error=str(exc))
+
+    position = _dispatch_merge_gated(
+        job_id, cfg,
+        needs_merge=has_adapter,
+        merge=_merge,
+        work=_export,
+        on_error=_on_error,
+        thread_name=f"PostHocGguf-{job_id}",
+    )
+    return {
+        "job_id": job_id,
+        "model_name": name,
+        "started": True,
+        "queue_position": position,
+    }
 
 
 @app.websocket("/ws-inference")

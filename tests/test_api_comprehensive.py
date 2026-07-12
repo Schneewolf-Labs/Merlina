@@ -1168,7 +1168,9 @@ class TestJobReUpload:
     The sync-merge refactor moved the LoRA merge out of
     _run_background_upload — without a pre-merged artifact it falls back
     to uploading the adapter only. The endpoint must therefore run
-    _perform_sync_merge itself when merge_lora_before_upload=True.
+    _perform_sync_merge itself when merge_lora_before_upload=True, and the
+    RAM-heavy merge must go through a job-queue slot so it can't race an
+    active training job for system RAM.
     """
 
     def _completed_lora_job(self, tmp_path):
@@ -1187,10 +1189,17 @@ class TestJobReUpload:
             output_dir=str(tmp_path),
         )
 
-    def _post_upload(self, client, mock_job_manager, tmp_path, *, merge):
+    def _post_upload(self, client, mock_job_manager, mock_job_queue, tmp_path, *, merge):
         import threading
 
         mock_job_manager.get_job.return_value = self._completed_lora_job(tmp_path)
+
+        # Execute queued callbacks inline so the gated merge path actually
+        # runs during the test (the real queue does this on a worker thread).
+        def _run_callback(job_id, config, callback, priority):
+            callback(job_id, config)
+            return 0
+        mock_job_queue.submit.side_effect = _run_callback
 
         done = threading.Event()
         merge_mock = Mock(return_value="MERGE_ARTIFACT")
@@ -1210,26 +1219,116 @@ class TestJobReUpload:
             assert response.status_code == 200
             assert done.wait(timeout=10), "upload thread never ran"
 
-        return merge_mock, upload_calls
+        return merge_mock, upload_calls, response
 
-    def test_reupload_with_merge_runs_sync_merge(self, client, mock_job_manager, tmp_path):
-        """merge_lora_before_upload=True must merge and pass the artifact along"""
-        merge_mock, upload_calls = self._post_upload(
-            client, mock_job_manager, tmp_path, merge=True
+    def test_reupload_with_merge_runs_sync_merge(
+        self, client, mock_job_manager, mock_job_queue, tmp_path
+    ):
+        """merge=True must merge via a queue slot and pass the artifact along"""
+        from src.job_queue import JobPriority
+
+        merge_mock, upload_calls, response = self._post_upload(
+            client, mock_job_manager, mock_job_queue, tmp_path, merge=True
         )
+        # Merge went through the job queue (HIGH priority) — not a free thread
+        assert mock_job_queue.submit.call_count == 1
+        assert mock_job_queue.submit.call_args.args[3] == JobPriority.HIGH
+        assert response.json()["status"] == "queued"
+
         assert merge_mock.call_count == 1
         assert merge_mock.call_args.kwargs.get("num_consumers") == 1
         _, kwargs = upload_calls[0]
         assert kwargs.get("merge_artifact") == "MERGE_ARTIFACT"
 
-    def test_reupload_without_merge_skips_merge(self, client, mock_job_manager, tmp_path):
-        """merge_lora_before_upload=False uploads the adapter as-is, no merge"""
-        merge_mock, upload_calls = self._post_upload(
-            client, mock_job_manager, tmp_path, merge=False
+    def test_reupload_without_merge_skips_merge(
+        self, client, mock_job_manager, mock_job_queue, tmp_path
+    ):
+        """merge=False uploads the adapter as-is: no merge, no queue slot"""
+        merge_mock, upload_calls, response = self._post_upload(
+            client, mock_job_manager, mock_job_queue, tmp_path, merge=False
         )
         merge_mock.assert_not_called()
+        mock_job_queue.submit.assert_not_called()
+        assert response.json()["status"] == "uploading"
         _, kwargs = upload_calls[0]
         assert kwargs.get("merge_artifact") is None
+
+
+class TestDispatchMergeGated:
+    """Unit tests for the merge queue-gating helper."""
+
+    def _wait_for(self, event):
+        assert event.wait(timeout=10), "background work never ran"
+
+    def test_no_merge_runs_work_immediately(self):
+        import threading
+        import merlina
+
+        done = threading.Event()
+        received = []
+
+        def work(artifact):
+            received.append(artifact)
+            done.set()
+
+        with patch.object(merlina, "job_queue") as queue_mock:
+            position = merlina._dispatch_merge_gated(
+                "job_x", {}, needs_merge=False,
+                merge=Mock(), work=work, on_error=Mock(),
+                thread_name="test-no-merge",
+            )
+        assert position is None
+        self._wait_for(done)
+        assert received == [None]
+        queue_mock.submit.assert_not_called()
+
+    def test_merge_holds_queue_slot_then_spawns_work(self):
+        import threading
+        import merlina
+
+        done = threading.Event()
+        received = []
+
+        def work(artifact):
+            received.append(artifact)
+            done.set()
+
+        with patch.object(merlina, "job_queue") as queue_mock:
+            def _run_callback(job_id, config, callback, priority):
+                callback(job_id, config)
+                return 3
+            queue_mock.submit.side_effect = _run_callback
+
+            position = merlina._dispatch_merge_gated(
+                "job_x", {}, needs_merge=True,
+                merge=Mock(return_value="ARTIFACT"), work=work, on_error=Mock(),
+                thread_name="test-merge",
+            )
+        assert position == 3
+        self._wait_for(done)
+        assert received == ["ARTIFACT"]
+
+    def test_merge_failure_reports_via_on_error(self):
+        import merlina
+
+        errors = []
+        work = Mock()
+
+        with patch.object(merlina, "job_queue") as queue_mock:
+            def _run_callback(job_id, config, callback, priority):
+                callback(job_id, config)
+                return 0
+            queue_mock.submit.side_effect = _run_callback
+
+            merlina._dispatch_merge_gated(
+                "job_x", {}, needs_merge=True,
+                merge=Mock(side_effect=RuntimeError("merge exploded")),
+                work=work, on_error=lambda exc: errors.append(exc),
+                thread_name="test-merge-fail",
+            )
+        assert len(errors) == 1
+        assert "merge exploded" in str(errors[0])
+        work.assert_not_called()
 
 
 # ============================================================================
