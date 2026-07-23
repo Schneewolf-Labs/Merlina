@@ -272,15 +272,20 @@ class PreflightValidator:
         if not has_jsonl and not has_name:
             self.warnings.append(
                 "Diffusion job without dataset_jsonl_path or dataset_name. "
-                "An uploaded image dataset is also acceptable; otherwise the "
-                "runner will fail at _materialize_image_dataset."
+                "An uploaded image dataset (POST /dataset/upload-images) is "
+                "also acceptable; otherwise the runner will fail at "
+                "_materialize_image_dataset."
             )
 
         if has_jsonl:
             jsonl = os.path.expanduser(config.dataset_jsonl_path)
             if not os.path.exists(jsonl):
                 self.errors.append(
-                    f"dataset_jsonl_path does not exist: {jsonl}"
+                    f"dataset_jsonl_path does not exist on the Merlina server: {jsonl}. "
+                    "This path is resolved on the machine running Merlina, not on the "
+                    "API client. If your dataset is on another machine, upload it via "
+                    "POST /dataset/upload-images (returns a server-side jsonl_path) or "
+                    "use dataset_name to load from the HF Hub."
                 )
             else:
                 details["dataset_jsonl_path"] = jsonl

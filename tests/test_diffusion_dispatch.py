@@ -225,6 +225,9 @@ class TestPreflightDiffusionGating:
         )
         v._check_diffusion_config(cfg)
         assert any("does not exist" in e for e in v.errors)
+        # The error must explain the path is host-side and point remote
+        # clients at the upload endpoint / HF Hub alternatives.
+        assert any("Merlina server" in e and "upload-images" in e for e in v.errors)
 
     def test_check_diffusion_config_high_rank_warns(self):
         from types import SimpleNamespace
