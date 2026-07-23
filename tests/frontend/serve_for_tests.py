@@ -10,9 +10,15 @@ Usage:
     python tests/frontend/serve_for_tests.py
 """
 
+import os
 import sys
 from unittest.mock import MagicMock, Mock
 from pathlib import Path
+
+# Training subprocesses can't see this process's ML mocks — keep the legacy
+# in-process path so a submitted job fails fast against the mocks instead
+# of spawning a doomed real subprocess on the CI runner.
+os.environ.setdefault("TRAINING_ISOLATION", "thread")
 
 # ── Mock ML dependencies before any imports ──────────────────────────────────
 

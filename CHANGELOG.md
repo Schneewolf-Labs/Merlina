@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Training jobs now run in isolated subprocesses** (`src/train_single.py`, `run_training_subprocess` in `src/training_runner.py`): non-DDP jobs used to execute on a queue worker thread inside the API server, which left two residual stuck-worker paths after 2.1.0's async `/train` work. First, model loading (and tokenization) held the GIL hard enough to starve the event loop, so the API went unresponsive during the heavy phases. Second, a stop request was only checked at training-step boundaries — a job hung in a model download, dataset load, or wedged CUDA op could never be stopped, permanently occupying the queue worker until a server restart. Both had the same root cause (long synchronous work living in the API process), and get the same root fix the DDP path already had: the queue worker now only *launches and monitors* a training subprocess. The subprocess runs the exact same `run_training_sync` code path (including VLM/diffusion dispatch, sync LoRA merge, background HF upload, and GGUF export), writes progress to the shared SQLite DB, and the monitor relays updates to WebSocket clients. Set `TRAINING_ISOLATION=thread` to restore the legacy in-process mode (used by the mocked test suites).
+
+### Added
+- **Enforced stop requests with SIGTERM → SIGKILL escalation**: stopping a job first sends SIGTERM to the training process group (graceful — an immediate abort while loading, a checkpoint-saving stop at the next step boundary while training). If the job is still wedged in a killable phase after a grace period, its process group is SIGKILLed and the job is marked `stopped` — a stop can no longer leave a hung worker behind. Grace periods are configurable: `STOP_GRACE_SECONDS` (default 600, deliberately generous so a slow step plus checkpoint save is never cut short) and `STOP_GRACE_LOADING_SECONDS` (default 30, applied before training starts when there is nothing to checkpoint). The same escalation now also protects the multi-GPU DDP monitor, which previously re-sent SIGTERM forever and could hang the queue worker on an unresponsive DDP launcher. Tests: `tests/test_subprocess_training.py`.
+
+### Fixed
+- **Hard crashes during training no longer take down the server**: a segfault or OS OOM-kill inside model loading/training now kills only the job's subprocess; the monitor marks the job `failed` with the exit code (or `stopped` if a stop was pending) and the API keeps serving. Process exit also guarantees VRAM is returned to the driver between jobs, independent of Python-level cleanup.
+
 ## [2.1.0] - 2026-07-23 "Workshop"
 
 ### Added

@@ -605,7 +605,7 @@ class JobManager {
             const result = await MerlinaAPI.stopJob(this.currentJobId);
 
             if (result.status === 'success') {
-                this.toast.success('Stop request sent. Training will stop after current step.');
+                this.toast.success('Stop request sent. Training stops after the current step (or is force-stopped if stuck).');
 
                 // Disable stop button
                 const stopBtn = document.getElementById('stop-button');

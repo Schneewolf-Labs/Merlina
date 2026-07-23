@@ -380,8 +380,10 @@ Merlina supports multiple training modes, selectable via the `training_mode` con
 
 1. User submits training config via POST /train with optional priority
 2. Job created with unique job_id and added to queue
-3. Worker thread picks up job when slot available
-4. `run_training()` executes:
+3. Worker thread picks up job when slot available and launches an
+   **isolated training subprocess** (see "Training Isolation" below);
+   the worker itself only monitors
+4. Inside the subprocess, `run_training_sync()` executes:
    - Load model and tokenizer with optional 4-bit quantization
    - Create DatasetPipeline with appropriate loader and formatter
    - Call `pipeline.prepare()` to get formatted train/eval datasets
@@ -392,7 +394,43 @@ Merlina supports multiple training modes, selectable via the `training_mode` con
      - **SFT Mode**: Train with supervised fine-tuning (uses only chosen)
    - Save to ./models/{output_name}
    - Optionally merge and push to HuggingFace Hub
-4. Frontend polls GET /status/{job_id} for progress updates
+5. Frontend polls GET /status/{job_id} for progress updates
+
+### Training Isolation (subprocess execution)
+
+Non-DDP training jobs run in their own subprocess (`src/train_single.py`,
+launched and supervised by `run_training_subprocess` /
+`_monitor_subprocess_job` in `src/training_runner.py`), not on a thread
+inside the API server. This is why:
+
+- **API responsiveness**: model loading and tokenization hold the GIL hard;
+  in-process they starved the event loop and froze every endpoint.
+- **Enforceable stops**: `POST /jobs/{id}/stop` sets the DB `stop_requested`
+  flag and the monitor sends SIGTERM to the job's process group. The worker
+  aborts immediately during load phases (nothing to checkpoint) or stops
+  gracefully with a checkpoint at the next step boundary. If the process is
+  still wedged in a killable phase (`loading_model`, `training`, ...) after
+  the grace period (`STOP_GRACE_LOADING_SECONDS`, default 30s pre-training /
+  `STOP_GRACE_SECONDS`, default 600s during training), the group is
+  SIGKILLed — a stop can never leave a queue worker hung. Past the training
+  loop (`saving`/`merging`/`uploading`) the process is never killed.
+- **Crash isolation**: a segfault or OS OOM-kill fails the job (exit code
+  recorded) instead of taking the server down, and process exit guarantees
+  VRAM release between jobs.
+
+The subprocess runs `run_training_sync` itself, so behavior (VLM/diffusion
+dispatch, sync LoRA merge, background upload/GGUF threads) is identical to
+the old in-process path. Progress/metrics flow through the shared SQLite DB;
+the parent monitor relays them to WebSocket clients and releases the queue
+slot early once the job reaches `uploading`/terminal status while background
+threads finish (a daemon reaper collects the process and relays the final
+event). Multi-GPU DDP jobs keep their own subprocess path
+(`run_training_distributed` → `accelerate launch` → `src/train_worker.py`)
+with the same stop escalation. `TRAINING_ISOLATION=thread` restores the
+legacy in-process mode — used by the mocked test suites
+(`tests/conftest.py`, `tests/frontend/serve_for_tests.py`), where a spawned
+subprocess couldn't see the in-process ML mocks. Tests:
+`tests/test_subprocess_training.py`.
 
 ### API Endpoints
 

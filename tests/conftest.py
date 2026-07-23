@@ -14,6 +14,12 @@ from unittest.mock import Mock, MagicMock
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Force legacy in-process training for the unit-test suite: tests submit
+# /train against ML modules mocked in *this* process, and a spawned
+# training subprocess would import the real (absent) stack instead.
+# Must be set before config.Settings is instantiated (merlina import).
+os.environ.setdefault("TRAINING_ISOLATION", "thread")
+
 # ============================================================================
 # Mock GPU-dependent imports for CI environments without GPUs
 # ============================================================================

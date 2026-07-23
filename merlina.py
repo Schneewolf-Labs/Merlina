@@ -1265,7 +1265,12 @@ def _make_training_callback(event_loop):
         # Imported here so the heavy training stack (grimoire, peft, etc.)
         # loads on the queue worker thread — importing it on the API event
         # loop would freeze every endpoint until the import finishes.
-        from src.training_runner import run_training_sync, run_training_distributed, _get_distributed_gpu_count
+        from src.training_runner import (
+            run_training_sync,
+            run_training_subprocess,
+            run_training_distributed,
+            _get_distributed_gpu_count,
+        )
         from pydantic import TypeAdapter
         config_obj = TypeAdapter(TrainingConfig).validate_python(config_dict)
 
@@ -1281,8 +1286,15 @@ def _make_training_callback(event_loop):
             run_training_distributed(
                 job_id, config_obj, job_manager, uploaded_datasets, event_loop
             )
-        else:
+        elif settings.training_isolation == "thread":
+            # Legacy in-process mode (tests / debugging): training shares
+            # the API process, so a hung load can't be force-stopped and
+            # heavy phases compete with request handling for the GIL.
             run_training_sync(
+                job_id, config_obj, job_manager, uploaded_datasets, event_loop
+            )
+        else:
+            run_training_subprocess(
                 job_id, config_obj, job_manager, uploaded_datasets, event_loop
             )
 
@@ -1834,7 +1846,11 @@ async def stop_job(job_id: str):
             logger.info(f"Stop requested for running job {job_id}")
             return {
                 "status": "success",
-                "message": f"Stop request sent to job {job_id}. Training will stop after current step.",
+                "message": (
+                    f"Stop request sent to job {job_id}. Training will stop after the "
+                    f"current step (a checkpoint is saved); a job stuck loading or "
+                    f"training is force-stopped after a grace period."
+                ),
                 "job_id": job_id,
                 "was_queued": False
             }

@@ -906,6 +906,91 @@ def _serialize_uploaded_datasets(uploaded_datasets: dict, tmp_dir: str) -> Optio
     return ds_dir
 
 
+# Statuses before the training loop starts. A stopped job in one of these
+# phases has nothing to checkpoint, so stop enforcement uses the short
+# grace period; past them, the generous training grace applies.
+_PRE_TRAINING_STATUSES = {"queued", "initializing", "loading_model", "loading_dataset"}
+
+# Statuses where a stop request may still force-kill the subprocess. Once
+# the worker moves past these (saving / merging / uploading), it is already
+# winding down toward exit — killing it would only corrupt the checkpoint.
+_KILLABLE_STATUSES = _PRE_TRAINING_STATUSES | {"training"}
+
+# Terminal job statuses.
+_TERMINAL_STATUSES = {"completed", "failed", "stopped", "cancelled"}
+
+# Statuses at which the queue slot can be released even though the training
+# subprocess is still alive: only background work (HF upload / GGUF export
+# threads) keeps it running.
+_DETACH_STATUSES = _TERMINAL_STATUSES | {"uploading"}
+
+
+def _signal_process_group(proc: subprocess.Popen, sig: int) -> None:
+    """Send a signal to the subprocess's whole process group (POSIX),
+    falling back to the process itself if the group is gone."""
+    try:
+        if hasattr(os, "killpg"):
+            os.killpg(os.getpgid(proc.pid), sig)
+            return
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    try:
+        if sig == getattr(signal, "SIGKILL", None):
+            proc.kill()
+        else:
+            proc.terminate()
+    except Exception:
+        pass
+
+
+class _StopEscalation:
+    """
+    Enforce a stop request against a training subprocess.
+
+    First observation of ``stop_requested`` sends one SIGTERM to the
+    process group (graceful: the worker saves a checkpoint at the next
+    step boundary, or aborts immediately if it hasn't started training).
+    If the process is still in a killable phase after the grace period —
+    i.e. it is genuinely wedged in a load or a step — the group is
+    SIGKILLed so a stop request can never leave the queue worker hung.
+    """
+
+    def __init__(self, proc: subprocess.Popen, job_id: str):
+        self.proc = proc
+        self.job_id = job_id
+        self.sigterm_at: Optional[float] = None
+        self.killed = False
+
+    def check(self, job) -> None:
+        if job is None or not job.stop_requested or self.killed:
+            return
+
+        if self.sigterm_at is None:
+            logger.info(f"Stop requested for job {self.job_id} — sending SIGTERM to training subprocess")
+            _signal_process_group(self.proc, signal.SIGTERM)
+            self.sigterm_at = time.monotonic()
+            return
+
+        if job.status not in _KILLABLE_STATUSES:
+            # Past the training loop (saving/merging/uploading) — the worker
+            # is making progress toward exit; let it finish.
+            return
+
+        from config import settings
+        if job.status in _PRE_TRAINING_STATUSES:
+            grace = settings.stop_grace_loading_seconds
+        else:
+            grace = settings.stop_grace_seconds
+
+        if time.monotonic() - self.sigterm_at >= grace:
+            logger.warning(
+                f"Job {self.job_id} still '{job.status}' {grace:.0f}s after SIGTERM — "
+                f"force-killing training subprocess"
+            )
+            _signal_process_group(self.proc, signal.SIGKILL)
+            self.killed = True
+
+
 def _monitor_distributed_progress(
     proc: subprocess.Popen,
     progress_file: str,
@@ -916,21 +1001,18 @@ def _monitor_distributed_progress(
     """
     Monitor a distributed training subprocess by tailing its progress file.
 
-    Forwards updates to the WebSocket manager and job manager.
+    Forwards updates to the WebSocket manager and job manager, and enforces
+    stop requests (SIGTERM, then SIGKILL after a grace period so a hung
+    worker can never wedge the queue).
     Blocks until the subprocess exits.
     """
     last_pos = 0
+    escalation = _StopEscalation(proc, job_id)
 
     while proc.poll() is None:
-        # Check for stop requests and forward to subprocess
+        # Check for stop requests and enforce them against the subprocess
         job = job_manager.get_job(job_id)
-        if job and job.stop_requested:
-            logger.info(f"Forwarding stop request to distributed subprocess for job {job_id}")
-            try:
-                # Send SIGTERM to the entire process group
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-            except (ProcessLookupError, OSError):
-                pass
+        escalation.check(job)
 
         # Read new progress lines
         try:
@@ -974,13 +1056,27 @@ def _monitor_distributed_progress(
         # Check if the job was already marked as failed/completed by the worker
         job = job_manager.get_job(job_id)
         if job and job.status not in ("completed", "stopped", "failed", "uploading"):
-            error_msg = f"Distributed training subprocess exited with code {proc.returncode}"
-            logger.error(error_msg)
-            job_manager.update_job(job_id, status="failed", error=error_msg)
-            send_websocket_update(
-                websocket_manager.send_error(job_id=job_id, error=error_msg),
-                event_loop,
-            )
+            if job.stop_requested:
+                # The subprocess died honoring (or being force-killed over) a
+                # stop request — that's a stop, not a failure.
+                logger.info(f"Distributed job {job_id} terminated by stop request")
+                job_manager.update_job(job_id, status="stopped")
+                send_websocket_update(
+                    websocket_manager.send_status_update(
+                        job_id=job_id,
+                        status="stopped",
+                        progress=job.progress or 0.0,
+                    ),
+                    event_loop,
+                )
+            else:
+                error_msg = f"Distributed training subprocess exited with code {proc.returncode}"
+                logger.error(error_msg)
+                job_manager.update_job(job_id, status="failed", error=error_msg)
+                send_websocket_update(
+                    websocket_manager.send_error(job_id=job_id, error=error_msg),
+                    event_loop,
+                )
 
 
 def _handle_progress_record(
@@ -1167,6 +1263,255 @@ def run_training_distributed(
 
     finally:
         # Clean up temp files
+        try:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
+
+
+# Entry script for single-process isolated training. Module-level so tests
+# can substitute a stub worker.
+_TRAIN_SINGLE_SCRIPT = os.path.join(os.path.dirname(__file__), "train_single.py")
+
+
+def _relay_job_snapshot(job, last_snapshot, job_id: str, event_loop) -> tuple:
+    """Forward the job's DB state to WebSocket clients if it changed."""
+    snapshot = (job.status, job.progress, job.current_step, job.loss, job.eval_loss, job.learning_rate)
+    if snapshot == last_snapshot:
+        return last_snapshot
+    send_websocket_update(
+        websocket_manager.send_status_update(
+            job_id=job_id,
+            status=job.status,
+            progress=job.progress or 0.0,
+            current_step=job.current_step,
+            total_steps=job.total_steps,
+            loss=job.loss,
+            eval_loss=job.eval_loss,
+            learning_rate=job.learning_rate,
+        ),
+        event_loop,
+    )
+    return snapshot
+
+
+def _monitor_subprocess_job(
+    proc: subprocess.Popen,
+    job_id: str,
+    job_manager: JobManager,
+    event_loop: Optional[asyncio.AbstractEventLoop] = None,
+) -> bool:
+    """
+    Monitor a single-process training subprocess.
+
+    - Relays DB status/metric changes to WebSocket clients (the subprocess
+      writes to the shared SQLite DB but has no event loop of its own).
+    - Enforces stop requests: SIGTERM first (graceful — the worker aborts
+      immediately during load phases, or saves a checkpoint at the next
+      step boundary), then SIGKILL after a grace period so a hung load or
+      training step can never wedge the queue worker.
+    - Detaches once the job reaches "uploading" or a terminal status while
+      non-daemon upload/GGUF threads keep the process alive — the queue
+      slot frees exactly like the old in-process path, and a reaper thread
+      collects the process.
+
+    Returns True if it detached early, False once the process has exited.
+    """
+    escalation = _StopEscalation(proc, job_id)
+    last_snapshot = None
+
+    while proc.poll() is None:
+        try:
+            job = job_manager.get_job(job_id)
+        except Exception:
+            job = None
+
+        if job:
+            if job.status in _DETACH_STATUSES:
+                logger.info(
+                    f"Job {job_id} reached '{job.status}' — releasing queue slot "
+                    f"(subprocess finishing background work)"
+                )
+                if job.status == "failed":
+                    send_websocket_update(
+                        websocket_manager.send_error(job_id=job_id, error=job.error or "Training failed"),
+                        event_loop,
+                    )
+                elif job.status in ("completed", "stopped"):
+                    send_websocket_update(
+                        websocket_manager.send_completion(job_id=job_id, output_dir=job.output_dir or ""),
+                        event_loop,
+                    )
+                else:
+                    _relay_job_snapshot(job, last_snapshot, job_id, event_loop)
+
+                def _reap_and_relay():
+                    proc.wait()
+                    # Background upload/GGUF threads have finished and set the
+                    # final status in the DB — relay it, since the subprocess
+                    # itself cannot reach WebSocket clients.
+                    try:
+                        final = job_manager.get_job(job_id)
+                    except Exception:
+                        final = None
+                    if final is None:
+                        return
+                    if final.status == "failed":
+                        send_websocket_update(
+                            websocket_manager.send_error(job_id=job_id, error=final.error or "Training failed"),
+                            event_loop,
+                        )
+                    elif final.status in ("completed", "stopped"):
+                        send_websocket_update(
+                            websocket_manager.send_completion(
+                                job_id=job_id,
+                                output_dir=final.output_dir or "",
+                                upload_error=final.upload_error or None,
+                            ),
+                            event_loop,
+                        )
+
+                threading.Thread(
+                    target=_reap_and_relay, name=f"TrainReaper-{job_id}", daemon=True
+                ).start()
+                return True
+
+            escalation.check(job)
+            last_snapshot = _relay_job_snapshot(job, last_snapshot, job_id, event_loop)
+
+        time.sleep(1.0)
+
+    # Process exited — reconcile final state.
+    try:
+        job = job_manager.get_job(job_id)
+    except Exception:
+        job = None
+    if job is None:
+        return False
+
+    if job.status not in _DETACH_STATUSES:
+        # The worker died without writing a terminal status: either it was
+        # (force-)stopped, or it crashed hard (segfault, OOM kill, ...).
+        if job.stop_requested:
+            logger.info(f"Job {job_id} terminated by stop request")
+            job_manager.update_job(job_id, status="stopped")
+            send_websocket_update(
+                websocket_manager.send_status_update(
+                    job_id=job_id,
+                    status="stopped",
+                    progress=job.progress or 0.0,
+                ),
+                event_loop,
+            )
+        else:
+            error_msg = f"Training subprocess exited unexpectedly (exit code {proc.returncode})"
+            logger.error(f"Job {job_id}: {error_msg}")
+            job_manager.update_job(job_id, status="failed", error=error_msg)
+            send_websocket_update(
+                websocket_manager.send_error(job_id=job_id, error=error_msg),
+                event_loop,
+            )
+    elif job.status == "failed":
+        send_websocket_update(
+            websocket_manager.send_error(job_id=job_id, error=job.error or "Training failed"),
+            event_loop,
+        )
+    else:
+        send_websocket_update(
+            websocket_manager.send_completion(job_id=job_id, output_dir=job.output_dir or ""),
+            event_loop,
+        )
+    return False
+
+
+def run_training_subprocess(
+    job_id: str,
+    config: Any,
+    job_manager: JobManager,
+    uploaded_datasets: dict,
+    event_loop: Optional[asyncio.AbstractEventLoop] = None,
+) -> None:
+    """
+    Run a training job in an isolated single-process subprocess.
+
+    Default execution mode for non-DDP jobs (``TRAINING_ISOLATION``,
+    config.py). Compared to running ``run_training_sync`` directly on the
+    queue worker thread, the subprocess:
+
+    - keeps model-loading / tokenization GIL churn out of the API process,
+      so endpoints stay responsive during the heavy phases;
+    - makes stop requests enforceable — SIGTERM asks for a graceful stop
+      (immediate abort while loading, checkpoint save while training),
+      SIGKILL after a grace period guarantees the queue worker is never
+      wedged by a hung load or step;
+    - isolates hard crashes: a segfault or OOM kill fails the job instead
+      of taking the whole server down, and process exit releases VRAM by
+      construction.
+
+    The subprocess runs ``run_training_sync`` itself (via
+    ``src/train_single.py``), so training behavior — including VLM /
+    diffusion dispatch, the sync LoRA merge, and background upload / GGUF
+    export — is identical to the in-process path. Progress flows through
+    the shared SQLite DB and is relayed to WebSocket clients by
+    ``_monitor_subprocess_job``.
+    """
+    logger.info(f"Launching isolated training subprocess for job {job_id}")
+    tmp_dir = tempfile.mkdtemp(prefix=f"merlina_{job_id}_")
+    config_path = os.path.join(tmp_dir, "config.json")
+
+    try:
+        job_manager.update_job(job_id, status="initializing", progress=0.0)
+        send_websocket_update(
+            websocket_manager.send_status_update(job_id=job_id, status="initializing", progress=0.0),
+            event_loop,
+        )
+
+        with open(config_path, "w") as f:
+            json.dump(config.model_dump(), f)
+        ds_dir = _serialize_uploaded_datasets(uploaded_datasets, tmp_dir)
+
+        cmd = [
+            sys.executable, _TRAIN_SINGLE_SCRIPT,
+            "--config-path", config_path,
+            "--job-id", job_id,
+            "--db-path", str(job_manager.db_path),
+        ]
+        if ds_dir:
+            cmd.extend(["--uploaded-datasets-dir", ds_dir])
+
+        # Own process group so stop enforcement can signal the job (and any
+        # children it spawns, e.g. diffusion sample subprocesses) atomically.
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+
+        def _log_stdout():
+            for raw_line in proc.stdout:
+                line = raw_line.decode("utf-8", errors="replace").rstrip()
+                if line:
+                    logger.info(f"[train:{job_id}] {line}")
+
+        log_thread = threading.Thread(target=_log_stdout, name=f"TrainLog-{job_id}", daemon=True)
+        log_thread.start()
+
+        detached = _monitor_subprocess_job(proc, job_id, job_manager, event_loop)
+        if not detached:
+            log_thread.join(timeout=5)
+
+    except Exception as e:
+        logger.error(f"Subprocess training failed for job {job_id}: {e}", exc_info=True)
+        job_manager.update_job(job_id, status="failed", error=str(e))
+        send_websocket_update(
+            websocket_manager.send_error(job_id=job_id, error=str(e)),
+            event_loop,
+        )
+
+    finally:
+        # The config file and serialized uploads are consumed during worker
+        # startup / dataset load, so this is safe even on early detach.
         try:
             shutil.rmtree(tmp_dir, ignore_errors=True)
         except Exception:

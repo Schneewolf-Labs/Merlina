@@ -71,6 +71,26 @@ class Settings(BaseSettings):
     max_concurrent_jobs: int = 1  # Maximum number of training jobs to run simultaneously
 
     # ==========================================
+    # Training Isolation & Stop Enforcement
+    # ==========================================
+    # "subprocess" (default): each non-DDP training job runs in its own
+    # process (src/train_single.py). Model loading can't starve the API
+    # event loop, a hard crash only kills the job, and a stop request is
+    # always enforceable (SIGTERM, then SIGKILL after a grace period).
+    # "thread": legacy in-process mode — training runs on a queue worker
+    # thread inside the API server. Only intended for tests/debugging;
+    # a hung model load or training step cannot be force-stopped there.
+    training_isolation: str = "subprocess"
+    # After a stop request, how long a job may keep running before its
+    # process group is force-killed. The loading grace applies before
+    # training starts (nothing to checkpoint, so stops should be near
+    # instant); the training grace is deliberately generous so a slow
+    # step + graceful checkpoint save is never cut short — it only kicks
+    # in when the job is genuinely wedged.
+    stop_grace_seconds: float = 600.0
+    stop_grace_loading_seconds: float = 30.0
+
+    # ==========================================
     # System Configuration
     # ==========================================
     cuda_visible_devices: Optional[str] = None
