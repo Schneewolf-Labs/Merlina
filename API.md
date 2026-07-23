@@ -40,8 +40,11 @@ The Merlina API provides a comprehensive interface for training language models 
 
 FastAPI provides interactive API documentation:
 
-- **Swagger UI:** `/api/docs` - Interactive API explorer
-- **ReDoc:** `/api/redoc` - Alternative documentation view
+- **Swagger UI:** `/docs` - Interactive API explorer
+- **ReDoc:** `/redoc` - Alternative documentation view
+- **OpenAPI spec:** `/openapi.json` - Machine-readable OpenAPI 3.x specification
+
+The legacy URLs `/api/docs` and `/api/redoc` redirect to `/docs` and `/redoc`.
 
 ---
 
@@ -141,7 +144,9 @@ Returns basic API information and available endpoints.
     "POST /train": "Start a new training job",
     "GET /status/{job_id}": "Get job status",
     "GET /jobs": "List all jobs",
-    "GET /api/docs": "API documentation"
+    "GET /docs": "Interactive API documentation (Swagger UI)",
+    "GET /redoc": "API documentation (ReDoc)",
+    "GET /openapi.json": "OpenAPI specification"
   }
 }
 ```
@@ -1708,4 +1713,4 @@ For production deployments, consider implementing:
 For issues, questions, or feature requests:
 - **GitHub:** https://github.com/Schneewolf-Labs/Merlina
 - **Documentation:** See `CLAUDE.md` for developer documentation
-- **API Docs:** Visit `/api/docs` for interactive documentation
+- **API Docs:** Visit `/docs` for interactive documentation
