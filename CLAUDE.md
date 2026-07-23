@@ -435,6 +435,36 @@ torch.cuda.empty_cache()
 
 This is critical for running multiple sequential training jobs.
 
+### Unified-Memory Protection (DGX Spark / Grace-Blackwell)
+
+On unified-memory machines (NVIDIA GB10 "DGX Spark", GH200/GB200, Jetson) the
+GPU and system RAM share one physical pool. A training memory spike there does
+**not** raise a clean CUDA OOM — the allocator grows into RAM the OS needs and
+the whole machine locks up or gets OOM-killed. `src/memory_guard.py` defends
+against this with three layers, all inert on discrete-GPU systems:
+
+1. **Allocator cap** — `torch.cuda.set_per_process_memory_fraction()` keeps a
+   reserve (`MEMORY_GUARD_RESERVE_GB`, default 12 GB, capped at 25% of the
+   pool) off-limits, so spikes fail as ordinary catchable OOMs.
+2. **Watchdog** — a per-job thread samples free system RAM. Below the soft
+   floor (`MEMORY_GUARD_SOFT_FREE_GB`, 8 GB) it calls `trainer.request_stop()`
+   (graceful, checkpoint saved); below the hard floor
+   (`MEMORY_GUARD_HARD_FREE_GB`, 3 GB) it raises `MemoryPressureAbort` in the
+   training thread. Floors auto-scale down on small boards.
+3. **Forensic log** — every sample is appended and fsync'd to
+   `data/memory_guard.log`, so a post-reboot investigation has the memory
+   timeline the crashed kernel can't give you. Check this file (and `dmesg`)
+   first when diagnosing a Spark that went down mid-training.
+
+Detection is automatic (GPU name match, or GPU total memory ≈ system RAM);
+override with `UNIFIED_MEMORY=true/false` in `.env`. Integration points: the
+runners create a `TrainingMemoryGuard` per job (`install()` before model load,
+`set_trainer()` after trainer construction, `set_trainer(None)` **before**
+`del trainer` — the guard holds a strong reference — and `shutdown()` in the
+`finally` block). Pre-flight `_check_vram` budgets against actually-free
+shared-pool memory minus the reserve on these systems. Tests:
+`tests/test_memory_guard.py` (no GPU required).
+
 ### 4-bit Quantization
 
 When `use_4bit=True`:

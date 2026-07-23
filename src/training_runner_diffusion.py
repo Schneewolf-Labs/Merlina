@@ -318,8 +318,14 @@ def run_diffusion_training_sync(
     adapter = None
     trainer = None
 
+    # Unified-memory protection (DGX Spark / Grace-Blackwell) — see the
+    # text runner for the rationale. No-op on discrete-GPU systems.
+    from src.memory_guard import TrainingMemoryGuard
+    memory_guard = TrainingMemoryGuard(job_id)
+
     try:
         job_manager.update_job(job_id, status="initializing", progress=0.0)
+        memory_guard.install()
         send_websocket_update(
             websocket_manager.send_status_update(
                 job_id=job_id, status="initializing", progress=0.0,
@@ -478,6 +484,8 @@ def run_diffusion_training_sync(
             callbacks=callbacks,
         )
 
+        memory_guard.set_trainer(trainer)
+
         # Capture W&B URL after accelerator init
         if config.use_wandb and wandb.run is not None:
             wandb_url = wandb.run.get_url()
@@ -510,6 +518,7 @@ def run_diffusion_training_sync(
 
         # Free VRAM before any post-training upload work
         logger.info("🧹 Cleaning up diffusion training resources...")
+        memory_guard.set_trainer(None)  # drop the guard's reference so del works
         del trainer, adapter
         adapter = None
         trainer = None
@@ -587,6 +596,7 @@ def run_diffusion_training_sync(
         )
         raise
     finally:
+        memory_guard.shutdown()
         # _cleanup_training_resources expects (model, trainer); pass the
         # adapter in the model slot — its parameters are what holds VRAM.
         _cleanup_training_resources(adapter, trainer)

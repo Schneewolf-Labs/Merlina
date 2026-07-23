@@ -328,10 +328,23 @@ class PreflightValidator:
 
         logger.info(f"Found {gpu_count} GPU(s): {[g['name'] for g in gpu_info]}")
 
+        # Unified-memory detection (DGX Spark / Grace-Blackwell, GH200, Jetson)
+        from src.memory_guard import detect_unified_memory
+        unified = detect_unified_memory()
+        if unified.is_unified:
+            self.warnings.append(
+                f"Unified-memory system detected ({unified.reason}): GPU and system RAM "
+                "share one pool, so a training memory spike can freeze the whole machine "
+                "instead of raising a clean CUDA OOM. Merlina's memory guard will cap the "
+                "CUDA allocator and stop training if free system RAM runs low "
+                "(see MEMORY_GUARD_* settings in .env)."
+            )
+
         return {
             "available": True,
             "count": gpu_count,
-            "devices": gpu_info
+            "devices": gpu_info,
+            "unified_memory": unified.to_dict()
         }
 
     def _check_vram(self, config: Any) -> Dict[str, Any]:
@@ -352,6 +365,25 @@ class PreflightValidator:
         # Check available VRAM
         gpu = torch.cuda.get_device_properties(0)
         available_vram = gpu.total_memory / (1024**3)
+
+        # On unified-memory systems (DGX Spark / Grace-Blackwell) the GPU
+        # reports the whole shared pool as device memory, but part of it is
+        # already used by the OS and other processes, and the memory guard
+        # reserves a slice for the host. Budget against what's actually
+        # free, not the raw pool size — an over-optimistic estimate here is
+        # what lets a job launch that later crashes the entire machine.
+        from src.memory_guard import detect_unified_memory, effective_reserve_gb
+        unified = detect_unified_memory()
+        if unified.is_unified:
+            try:
+                from config import get_settings
+                reserve_setting = float(get_settings().memory_guard_reserve_gb)
+            except Exception:
+                from src.memory_guard import DEFAULT_RESERVE_GB
+                reserve_setting = DEFAULT_RESERVE_GB
+            reserve = effective_reserve_gb(available_vram, reserve_setting)
+            system_available = psutil.virtual_memory().available / (1024**3)
+            available_vram = max(0.0, min(available_vram - reserve, system_available - reserve))
 
         # Use enhanced VRAM estimation
         estimated_vram = estimate_training_vram(
@@ -414,7 +446,8 @@ class PreflightValidator:
             "estimated_required_gb": round(estimated_vram, 2),
             "model_size_billions": model_size,
             "batch_seq_product": batch_seq_product,
-            "sufficient": available_vram >= estimated_vram
+            "sufficient": available_vram >= estimated_vram,
+            "unified_memory": unified.is_unified
         }
 
     def _check_disk_space(self, config: Any) -> Dict[str, Any]:
