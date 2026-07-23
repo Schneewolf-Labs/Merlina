@@ -283,7 +283,9 @@ def _materialize_image_dataset(config: Any, uploaded_datasets: dict, job_id: str
     if rows is None or len(rows) == 0:
         raise ValueError(
             "No dataset rows resolved for diffusion training. Provide one of: "
-            "dataset_jsonl_path, an uploaded JSONL dataset, or dataset_name."
+            "dataset_jsonl_path (a path on the Merlina server), an uploaded "
+            "JSONL dataset (POST /dataset/upload-images), or dataset_name "
+            "(HF Hub id — works from remote clients)."
         )
 
     # Normalize the 'image' / 'chosen' key

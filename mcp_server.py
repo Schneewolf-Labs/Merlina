@@ -77,6 +77,8 @@ async def _request(
     *,
     params: Optional[dict] = None,
     json_body: Optional[dict] = None,
+    files: Optional[list] = None,
+    form_data: Optional[dict] = None,
 ) -> Any:
     """
     Make one API call and return parsed JSON, or a structured error dict.
@@ -84,10 +86,20 @@ async def _request(
     Errors are returned (not raised) so the LLM sees a readable explanation
     instead of an opaque tool failure — e.g. a connection refused becomes a
     hint to start the Merlina server.
+
+    ``files``/``form_data`` switch the request to multipart (used by the
+    upload tools); they are mutually exclusive with ``json_body``.
     """
     client = _client()
+    kwargs: dict = {"params": params}
+    if files is not None:
+        kwargs["files"] = files
+        if form_data is not None:
+            kwargs["data"] = form_data
+    else:
+        kwargs["json"] = json_body
     try:
-        resp = await client.request(method, path, params=params, json=json_body)
+        resp = await client.request(method, path, **kwargs)
     except httpx.HTTPError as exc:
         return {
             "error": "connection_failed",
@@ -211,6 +223,168 @@ async def list_uploaded_datasets() -> str:
     return _dump(await _request("GET", "/dataset/uploads"))
 
 
+# Image extensions the diffusion upload path accepts. Matches the MIME map
+# served back by /dataset/image-content.
+_IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"}
+
+
+def _unique_name(name: str, used: set) -> str:
+    """De-collide basenames when a manifest pulls images from several dirs."""
+    if name not in used:
+        used.add(name)
+        return name
+    stem, ext = os.path.splitext(name)
+    i = 2
+    while f"{stem}_{i}{ext}" in used:
+        i += 1
+    unique = f"{stem}_{i}{ext}"
+    used.add(unique)
+    return unique
+
+
+async def upload_dataset(file_path: str) -> str:
+    """
+    Upload a local dataset file (JSON/JSONL/CSV/Parquet) to the Merlina server.
+
+    This reads the file from *this* machine (where the MCP server runs) and
+    ships it over HTTP, so it works against a remote Merlina host — unlike
+    local-path config fields, which are resolved on the server's filesystem.
+
+    Returns a dataset_id. Use it with dataset_source_type='upload' in
+    start_training / preview_dataset. Uploads are held server-side with a TTL
+    (default 24h), so re-upload if the id has expired.
+
+    Args:
+        file_path: Path to the dataset file on this machine.
+    """
+    path = os.path.expanduser(file_path)
+    if not os.path.isfile(path):
+        return _dump({
+            "error": "file_not_found",
+            "detail": f"No such file on the MCP host: {path}",
+            "hint": "This path is read from the machine running merlina-mcp, "
+                    "not the Merlina server.",
+        })
+    with open(path, "rb") as f:
+        content = f.read()
+    result = await _request(
+        "POST", "/dataset/upload-file",
+        files=[("file", (os.path.basename(path), content))],
+    )
+    if isinstance(result, dict) and result.get("dataset_id"):
+        result["hint"] = (
+            "Pass this dataset_id to start_training with "
+            "dataset_source_type='upload'."
+        )
+    return _dump(result)
+
+
+async def upload_image_dataset(path: str) -> str:
+    """
+    Upload an image dataset (for diffusion training) to the Merlina server.
+
+    Accepts either:
+      - a JSONL manifest of {"prompt": ..., "image": ...} rows — image paths
+        are resolved relative to the manifest's directory; "caption" is
+        accepted as an alias for "prompt";
+      - a directory of images — a caption is read from a same-stem .txt
+        sidecar when present (kohya convention), otherwise the server
+        derives one from the filename.
+
+    Everything is read from *this* machine and shipped over HTTP, so it works
+    against a remote Merlina host. The server materializes the upload and
+    returns a server-side `jsonl_path`; pass that to start_training as
+    `overrides={"dataset_jsonl_path": ...}` for a diffusion_* job. Setting
+    `dataset_jsonl_path` to a path on this machine will NOT work when the
+    server is remote — it's resolved on the server's filesystem.
+
+    Args:
+        path: Path (on this machine) to a JSONL manifest or an image directory.
+    """
+    root = os.path.expanduser(path)
+    entries: list[tuple[str, str]] = []  # (image_path, caption)
+
+    if os.path.isfile(root):
+        base_dir = os.path.dirname(root)
+        try:
+            with open(root) as f:
+                for n, line in enumerate(f, 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    row = json.loads(line)
+                    img = row.get("image") or row.get("chosen")
+                    if not isinstance(img, str):
+                        return _dump({
+                            "error": "bad_manifest",
+                            "detail": f"line {n}: no 'image' (or 'chosen') string field",
+                        })
+                    img = os.path.expanduser(img)
+                    if not os.path.isabs(img):
+                        img = os.path.join(base_dir, img)
+                    caption = row.get("prompt") or row.get("caption") or ""
+                    entries.append((img, caption))
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            return _dump({
+                "error": "bad_manifest",
+                "detail": f"Could not parse {root} as JSONL: {exc}",
+                "hint": "Pass a JSONL manifest of {prompt, image} rows or a directory of images.",
+            })
+    elif os.path.isdir(root):
+        for name in sorted(os.listdir(root)):
+            img = os.path.join(root, name)
+            if os.path.splitext(name)[1].lower() not in _IMAGE_EXTS or not os.path.isfile(img):
+                continue
+            caption = ""
+            sidecar = os.path.splitext(img)[0] + ".txt"
+            if os.path.isfile(sidecar):
+                with open(sidecar) as f:
+                    caption = f.read().strip()
+            entries.append((img, caption))
+    else:
+        return _dump({
+            "error": "path_not_found",
+            "detail": f"No such file or directory on the MCP host: {root}",
+            "hint": "This path is read from the machine running merlina-mcp, "
+                    "not the Merlina server.",
+        })
+
+    if not entries:
+        return _dump({
+            "error": "no_images",
+            "detail": f"No images found under {root} "
+                      f"(looked for {', '.join(sorted(_IMAGE_EXTS))}).",
+        })
+
+    files = []
+    captions: dict[str, str] = {}
+    used_names: set = set()
+    for img, caption in entries:
+        if not os.path.isfile(img):
+            return _dump({
+                "error": "image_not_found",
+                "detail": f"Image referenced by the manifest is missing: {img}",
+            })
+        name = _unique_name(os.path.basename(img), used_names)
+        with open(img, "rb") as f:
+            files.append(("files", (name, f.read())))
+        if caption:
+            captions[name] = caption
+
+    result = await _request(
+        "POST", "/dataset/upload-images",
+        files=files,
+        form_data={"captions": json.dumps(captions)},
+    )
+    if isinstance(result, dict) and result.get("jsonl_path"):
+        result["hint"] = (
+            "Pass this server-side jsonl_path to start_training as "
+            'overrides={"dataset_jsonl_path": "%s"} for a diffusion_* job.'
+            % result["jsonl_path"]
+        )
+    return _dump(result)
+
+
 async def preview_dataset(
     repo_id: str,
     source_type: str = "huggingface",
@@ -288,6 +462,14 @@ async def start_training(
     returned object includes the validation errors. Call validate_training_config
     first if you want to check without queueing.
 
+    IMPORTANT — paths resolve on the server: any filesystem path in the config
+    (a local base_model directory, dataset_jsonl_path for diffusion jobs, a
+    local_file dataset source) is read from the *Merlina server's* filesystem,
+    not from this machine. When the server is remote, use HuggingFace ids
+    (base_model, dataset_repo_id, dataset_name), or upload first with
+    upload_dataset / upload_image_dataset and use the returned
+    dataset_id / jsonl_path.
+
     Args:
         output_name: Name for the output model (required).
         base_model: HuggingFace model id or local path to fine-tune.
@@ -352,6 +534,8 @@ TOOLS = [
     list_gpus,
     list_local_models,
     list_uploaded_datasets,
+    upload_dataset,
+    upload_image_dataset,
     preview_dataset,
     validate_training_config,
     start_training,
@@ -375,7 +559,10 @@ def build_server():
             "Tools for Merlina, a magical LLM/VLM/diffusion fine-tuning server. "
             "Queue training jobs, monitor progress, preview datasets, and manage "
             "the GPU queue. The server must be running (`merlina serve`); the "
-            f"API base URL is {BASE_URL} (set MERLINA_API_URL to change it)."
+            f"API base URL is {BASE_URL} (set MERLINA_API_URL to change it). "
+            "Filesystem paths inside a training config are resolved on the "
+            "Merlina server, not on this machine — for a remote server, use "
+            "HuggingFace ids or the upload_dataset / upload_image_dataset tools."
         ),
     )
     for tool in TOOLS:

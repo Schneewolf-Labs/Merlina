@@ -560,11 +560,20 @@ class TrainingConfig(BaseModel):
     )
     dataset_jsonl_path: Optional[str] = Field(
         None,
-        description="Absolute path to a local JSONL of {prompt, image} (or {prompt, chosen, rejected}) rows for diffusion training."
+        description=(
+            "Absolute path to a JSONL of {prompt, image} (or {prompt, chosen, rejected}) "
+            "rows for diffusion training. Resolved on the machine running Merlina — a "
+            "remote API client cannot point this at files on its own host. Remote clients "
+            "should POST /dataset/upload-images (which returns a server-side jsonl_path "
+            "to use here) or use dataset_name instead."
+        )
     )
     dataset_name: Optional[str] = Field(
         None,
-        description="HF Hub dataset id for diffusion training (alternative to dataset_jsonl_path / uploads)."
+        description=(
+            "HF Hub dataset id for diffusion training (alternative to dataset_jsonl_path "
+            "/ uploads). Works from any client since the server downloads it from the Hub."
+        )
     )
     dataset_split: Optional[str] = Field(
         None,
