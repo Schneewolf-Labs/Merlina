@@ -1268,9 +1268,30 @@ def run_training_sync(
     model = None
     trainer = None
 
+    # Unified-memory protection (DGX Spark / Grace-Blackwell): on those
+    # machines GPU and system RAM are one pool, so a memory spike crashes
+    # the whole box instead of raising a clean CUDA OOM. The guard caps the
+    # CUDA allocator and watches free system RAM, stopping or aborting the
+    # job before the OS starves. No-op on discrete-GPU systems.
+    from src.memory_guard import TrainingMemoryGuard
+
+    def _memory_guard_notify(level: str, message: str) -> None:
+        send_websocket_update(
+            websocket_manager.send_status_update(
+                job_id=job_id,
+                status="training" if level == "warning" else "error",
+                message=message,
+            ),
+            event_loop,
+        )
+
+    memory_guard = TrainingMemoryGuard(job_id, notify=_memory_guard_notify)
+
     try:
         # Update job status
         job_manager.update_job(job_id, status="initializing", progress=0.0)
+
+        memory_guard.install()
 
         # Send WebSocket update
         send_websocket_update(
@@ -1733,6 +1754,9 @@ def run_training_sync(
             callbacks=[WebSocketCallback(job_id, job_manager, event_loop)],
         )
 
+        # Let the memory guard request a graceful stop once a trainer exists
+        memory_guard.set_trainer(trainer)
+
         # Capture W&B run URL after trainer init (accelerator owns the wandb run)
         if config.use_wandb and wandb.run is not None:
             wandb_url = wandb.run.get_url()
@@ -1793,6 +1817,9 @@ def run_training_sync(
         # Clean up trainer and model to free VRAM before potential merge/upload
         # This prevents OOM when loading the model again for merging
         logger.info("🧹 Cleaning up training resources to free VRAM...")
+        # Drop the memory guard's trainer reference first — otherwise it
+        # keeps the trainer (and model) alive past the del below.
+        memory_guard.set_trainer(None)
         del trainer, model
         # Set to None so the finally block's _cleanup_training_resources
         # doesn't hit NameError after del
@@ -1947,6 +1974,8 @@ def run_training_sync(
             logger.debug(f"Could not finish W&B run on failure: {wandb_error}")
 
     finally:
+        # Stop the watchdog and drop its trainer reference before cleanup
+        memory_guard.shutdown()
         # Ensure GPU memory is freed even on error
         # This prevents OOM errors in subsequent training jobs
         _cleanup_training_resources(model, trainer)

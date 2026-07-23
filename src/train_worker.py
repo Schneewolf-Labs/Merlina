@@ -374,7 +374,15 @@ def run_worker(args):
     model = None
     trainer = None
 
+    # Unified-memory protection (DGX Spark / Grace-Blackwell): cap the CUDA
+    # allocator and watch free system RAM so a spike fails this rank's job
+    # instead of taking the whole machine down. No-op on discrete GPUs.
+    from src.memory_guard import TrainingMemoryGuard
+    memory_guard = TrainingMemoryGuard(args.job_id)
+
     try:
+        memory_guard.install()
+
         # ---- Model loading ----
         if is_main and job_manager:
             job_manager.update_job(args.job_id, status="loading_model", progress=0.1)
@@ -675,6 +683,8 @@ def run_worker(args):
             callbacks=callbacks,
         )
 
+        memory_guard.set_trainer(trainer)
+
         # Capture W&B URL
         if is_main and config.use_wandb and wandb is not None and wandb.run is not None:
             wandb_url = wandb.run.get_url()
@@ -708,6 +718,7 @@ def run_worker(args):
             final_max_steps = trainer.max_steps
 
             # Cleanup before potential upload
+            memory_guard.set_trainer(None)  # drop the guard's reference so del works
             del trainer, model
             trainer = None
             model = None
@@ -767,6 +778,7 @@ def run_worker(args):
                     pass
 
     finally:
+        memory_guard.shutdown()
         _cleanup_training_resources(model, trainer)
 
 

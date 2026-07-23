@@ -76,6 +76,23 @@ class Settings(BaseSettings):
     cuda_visible_devices: Optional[str] = None
     log_level: str = "INFO"
 
+    # ==========================================
+    # Unified-Memory Protection (DGX Spark / Grace-Blackwell)
+    # ==========================================
+    # On unified-memory machines (GB10 "DGX Spark", GH200, Jetson) the GPU
+    # and system RAM share one pool, so a training memory spike can take
+    # down the whole machine instead of raising a clean CUDA OOM. The
+    # memory guard (src/memory_guard.py) caps the CUDA allocator and runs
+    # a watchdog that stops training before the OS starves. It activates
+    # automatically only when a unified-memory system is detected.
+    memory_guard_enabled: bool = True
+    unified_memory: str = "auto"          # auto | true | false (force detection result)
+    memory_guard_reserve_gb: float = 12.0  # RAM kept off-limits to the CUDA allocator
+    memory_guard_soft_free_gb: float = 8.0  # below this free RAM: graceful training stop
+    memory_guard_hard_free_gb: float = 3.0  # below this free RAM: abort the job
+    memory_guard_poll_seconds: float = 5.0
+    memory_guard_log_enabled: bool = True   # fsync'd forensic log at data/memory_guard.log
+
     # Offline mode: never hit the HuggingFace Hub. Exports HF_HUB_OFFLINE /
     # TRANSFORMERS_OFFLINE so transformers/datasets/huggingface_hub resolve
     # everything from the local cache. Models and datasets must already be
