@@ -180,6 +180,31 @@ app.add_middleware(
 )
 
 
+def _warm_training_runner_import():
+    """Pre-import the heavy training stack (grimoire, TRL-adjacent deps).
+
+    src.training_runner is imported lazily inside the training callback, on
+    the queue worker thread. Warming it at startup means the first job after
+    a server start doesn't spend its first ~seconds importing, and the
+    import's GIL churn doesn't compete with live request handling.
+    Failure is tolerated (e.g. test servers that mock the ML stack).
+    """
+    try:
+        import src.training_runner  # noqa: F401
+        logger.info("Training modules pre-loaded")
+    except Exception as e:
+        logger.warning(f"Training module pre-load failed (will import lazily on demand): {e}")
+
+
+@app.on_event("startup")
+async def _preload_training_modules():
+    threading.Thread(
+        target=_warm_training_runner_import,
+        name="TrainingRunnerWarmup",
+        daemon=True,
+    ).start()
+
+
 # Backwards-compatible redirects for the old documentation URLs
 @app.get("/api/docs", include_in_schema=False)
 async def legacy_docs_redirect():
@@ -249,6 +274,17 @@ class JobsProxy:
             }
 
 jobs = JobsProxy()
+
+
+def _new_job_id() -> str:
+    """Generate a unique job id.
+
+    The timestamp keeps ids readable/sortable; the random suffix prevents
+    UNIQUE-constraint failures when two jobs are created within the same
+    second (e.g. a double-clicked submit button).
+    """
+    import uuid
+    return f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
 # Get the directory where this script is located
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -1292,28 +1328,53 @@ async def create_training_job(config: TrainingConfig, priority: Optional[str] = 
     }
     job_priority = priority_map.get(priority.lower(), JobPriority.NORMAL)
 
-    # Create job in database
-    job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    job_manager.create_job(job_id, config.model_dump())
-
     # Get the current event loop for WebSocket updates
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = None
 
+    # Build the callback BEFORE creating the job record: everything that can
+    # fail should fail while no job row exists yet, so the client never sees
+    # a lost response for a job that was actually created. (The heavy
+    # training-stack import happens inside the callback, on the queue worker
+    # thread — never on this event loop.)
     training_callback = _make_training_callback(loop)
 
-    # Submit job to queue
-    position = job_queue.submit(
-        job_id=job_id,
-        config=config.model_dump(),
-        callback=training_callback,
-        priority=job_priority
-    )
+    # Create job in database
+    job_id = _new_job_id()
+    job_manager.create_job(job_id, config.model_dump())
 
-    # Return response with warnings if any
-    message = f"Training spell cast! Job {job_id} queued at position {position}."
+    # From this point the job exists server-side: any internal failure must
+    # still produce a JSON body that names the job, never a broken response.
+    try:
+        position = job_queue.submit(
+            job_id=job_id,
+            config=config.model_dump(),
+            callback=training_callback,
+            priority=job_priority
+        )
+    except Exception as e:
+        logger.error(f"Failed to queue job {job_id}: {e}", exc_info=True)
+        try:
+            job_manager.update_job(job_id, status="failed", error=f"Failed to queue job: {e}")
+        except Exception:
+            logger.exception(f"Could not mark job {job_id} as failed after queue error")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": f"Job {job_id} was created but could not be queued",
+                "job_id": job_id,
+                "error": str(e),
+            }
+        )
+
+    # Return response with warnings if any. Position can be None if an idle
+    # worker picked the job up before we read it — that means it started.
+    if position is None:
+        message = f"Training spell cast! Job {job_id} started immediately."
+    else:
+        message = f"Training spell cast! Job {job_id} queued at position {position}."
     if validation_results.get("warnings"):
         message += f" Note: {len(validation_results['warnings'])} warning(s) detected."
 
@@ -1458,23 +1519,39 @@ async def retry_job(job_id: str, priority: Optional[str] = "normal"):
     }
     job_priority = priority_map.get(priority.lower(), JobPriority.NORMAL)
 
-    # Create new job
-    new_job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    job_manager.create_job(new_job_id, config.model_dump())
-
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = None
 
+    # As in /train: build the callback before the job record exists.
     training_callback = _make_training_callback(loop)
 
-    position = job_queue.submit(
-        job_id=new_job_id,
-        config=config.model_dump(),
-        callback=training_callback,
-        priority=job_priority
-    )
+    # Create new job
+    new_job_id = _new_job_id()
+    job_manager.create_job(new_job_id, config.model_dump())
+
+    try:
+        position = job_queue.submit(
+            job_id=new_job_id,
+            config=config.model_dump(),
+            callback=training_callback,
+            priority=job_priority
+        )
+    except Exception as e:
+        logger.error(f"Failed to queue retry job {new_job_id}: {e}", exc_info=True)
+        try:
+            job_manager.update_job(new_job_id, status="failed", error=f"Failed to queue job: {e}")
+        except Exception:
+            logger.exception(f"Could not mark job {new_job_id} as failed after queue error")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": f"Job {new_job_id} was created but could not be queued",
+                "job_id": new_job_id,
+                "error": str(e),
+            }
+        )
 
     return JobResponse(
         job_id=new_job_id,

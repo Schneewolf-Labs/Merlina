@@ -147,7 +147,28 @@ class MerlinaAPI {
                 throw new APIError(errorMessage, type, response.status, errorDetails);
             }
 
-            return await response.json();
+            // Read the body as text first so an empty or truncated body
+            // (dropped connection, proxy timeout) surfaces as a distinct,
+            // recoverable error instead of a generic JSON parse failure.
+            const text = await response.text();
+            if (!text) {
+                throw new APIError(
+                    'Empty response from server',
+                    ErrorType.SERVER,
+                    response.status,
+                    { emptyResponse: true }
+                );
+            }
+            try {
+                return JSON.parse(text);
+            } catch {
+                throw new APIError(
+                    'Invalid JSON response from server',
+                    ErrorType.SERVER,
+                    response.status,
+                    { emptyResponse: false, body: text.slice(0, 200) }
+                );
+            }
         } catch (error) {
             clearTimeout(timeoutId);
 

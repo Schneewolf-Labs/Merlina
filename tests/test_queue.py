@@ -246,6 +246,57 @@ def test_wait_for_completion_timeout():
     print("\n✓ Test 6 passed!")
 
 
+def test_submit_rollback_on_db_failure():
+    """Test that a failed DB write during submit leaves no stale queue state"""
+    print("\n" + "="*60)
+    print("TEST 7: submit() rollback on DB failure")
+    print("="*60)
+
+    class FailingJobManager:
+        def update_job(self, job_id, **kwargs):
+            raise RuntimeError("database is locked")
+
+    queue = JobQueue(max_concurrent_jobs=1, job_manager=FailingJobManager())
+
+    raised = False
+    try:
+        queue.submit("doomed-job", {"duration": 1}, simple_task, JobPriority.NORMAL)
+    except RuntimeError:
+        raised = True
+    assert raised, "expected submit() to propagate the DB error"
+
+    # No stale tracking entry: the job must not report as queued
+    status = queue.get_status("doomed-job")
+    print(f"Status after failed submit: {status}")
+    assert status["state"] == "unknown", f"stale queue state: {status}"
+    assert queue.get_queue_stats()["queued"] == 0
+
+    queue._shutdown = True
+    print("\n✓ Test 7 passed!")
+
+
+def test_no_stale_queued_state_after_run():
+    """Test that a job picked up instantly by a worker leaves no 'queued' ghost"""
+    print("\n" + "="*60)
+    print("TEST 8: no stale queued state after immediate pickup")
+    print("="*60)
+
+    queue = JobQueue(max_concurrent_jobs=1)
+
+    # Idle worker: the job is grabbed the moment it hits the queue, which
+    # previously could race submit()'s own bookkeeping.
+    queue.submit("instant-job", {"duration": 1}, simple_task, JobPriority.NORMAL)
+    queue.wait_for_completion(timeout=30)
+
+    status = queue.get_status("instant-job")
+    print(f"Status after completion: {status}")
+    assert status["state"] == "unknown", f"job still tracked after completion: {status}"
+    assert queue.get_queue_stats()["queued"] == 0
+
+    queue.shutdown(wait=True)
+    print("\n✓ Test 8 passed!")
+
+
 def run_all_tests():
     """Run all tests"""
     print("\n" + "🧪 "*20)
@@ -259,6 +310,8 @@ def run_all_tests():
         test_concurrent_execution()
         test_with_job_manager()
         test_wait_for_completion_timeout()
+        test_submit_rollback_on_db_failure()
+        test_no_stale_queued_state_after_run()
 
         print("\n" + "✅ "*20)
         print("ALL TESTS PASSED!")
