@@ -185,16 +185,25 @@ class JobQueue:
         # Create queued job
         queued_job = QueuedJob(job_id, config, callback, priority)
 
-        # Add to queue
-        self._queue.put(queued_job)
-
-        # Track in queued jobs
+        # Register tracking and persist status BEFORE handing the job to the
+        # queue. Once _queue.put() runs, an idle worker can pick the job up
+        # immediately; if tracking/DB writes happened after (as they used to),
+        # the worker's _queued_jobs.pop() could race the registration (leaking
+        # a stale "queued" entry) and the DB status="queued" write could
+        # overwrite the worker's "initializing".
         with self._queued_lock:
             self._queued_jobs[job_id] = queued_job
 
-        # Update job status in database
-        if self.job_manager:
-            self.job_manager.update_job(job_id, status="queued", progress=0.0)
+        try:
+            if self.job_manager:
+                self.job_manager.update_job(job_id, status="queued", progress=0.0)
+
+            # Add to queue (job becomes visible to workers from this point)
+            self._queue.put(queued_job)
+        except BaseException:
+            with self._queued_lock:
+                self._queued_jobs.pop(job_id, None)
+            raise
 
         # Calculate queue position
         position = self.get_queue_position(job_id)

@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - README Quick Start now offers pip / Docker / RunPod / Colab / from-source install paths.
 - `merlina.py`'s `__main__` startup block is now a callable `main()` (used by both `python merlina.py` and the `merlina` console script). No behavior change.
 
+### Fixed
+- **`/train` intermittently losing its response after the job was created**: the heavy training stack (`src/training_runner` → grimoire/TRL chain) was imported lazily *inside* the request handler, after the job row already existed — on the first submission after a server start the import could stall the response long enough for clients/proxies to give up, making the UI report failure for a job that was actually queued. The import is now pre-warmed on server startup and, as a belt-and-braces measure, built off the event loop *before* the job record is created (same fix applied to `/jobs/{id}/retry`). Any failure after job creation now returns a JSON error naming the `job_id` instead of a bodiless 500, and the job is marked `failed`.
+- **Job queue submit race**: `JobQueue.submit()` handed the job to the worker queue before registering its own tracking and writing `status="queued"` — an idle worker could grab the job instantly, leaving a stale "queued" tracking entry forever and overwriting the worker's `initializing` status with `queued`. Registration and the DB write now happen before enqueueing, with rollback if either fails. Tests: `tests/test_queue.py` (tests 7–8).
+- **Job id collisions on rapid submits**: job ids were second-granularity timestamps, so two submissions in the same second (e.g. a double-clicked submit) hit the SQLite UNIQUE constraint and returned an unhandled 500. Ids now carry a short random suffix (`job_YYYYMMDD_HHMMSS_abc123`).
+- **Frontend resilience to lost `/train` responses**: the API client now distinguishes an empty or non-JSON response body from other failures, and on a lost response (timeout, network drop, empty body) the job manager checks the server's job list — if the job was created anyway it recovers it and opens monitoring instead of reporting a spurious failure. Tests: `tests/frontend/test_api.mjs` (`MerlinaAPI.fetch body handling`).
+
 ## [2.0.3] - 2026-06-02
 
 ### Added

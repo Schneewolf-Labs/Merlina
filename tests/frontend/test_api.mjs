@@ -32,7 +32,7 @@ globalThis.XMLHttpRequest = class XMLHttpRequest {
     addEventListener() {}
 };
 
-const { APIError, ErrorType, WebSocketManager } = await import(
+const { MerlinaAPI, APIError, ErrorType, WebSocketManager } = await import(
     '../../frontend/js/api.js'
 );
 
@@ -126,6 +126,92 @@ describe('ErrorType', () => {
         const values = Object.values(ErrorType);
         const unique = new Set(values);
         assert.equal(values.length, unique.size, 'Error types should have unique values');
+    });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// MerlinaAPI.fetch response-body handling
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('MerlinaAPI.fetch body handling', () => {
+    const originalFetch = globalThis.fetch;
+
+    const mockFetch = (response) => {
+        globalThis.fetch = async () => response;
+    };
+    const restoreFetch = () => {
+        globalThis.fetch = originalFetch;
+    };
+
+    const okResponse = (body) => ({
+        ok: true,
+        status: 200,
+        text: async () => body,
+    });
+
+    it('parses a valid JSON body', async () => {
+        mockFetch(okResponse('{"job_id": "job_1", "status": "queued"}'));
+        try {
+            const data = await MerlinaAPI.fetch('/train', { method: 'POST' });
+            assert.deepEqual(data, { job_id: 'job_1', status: 'queued' });
+        } finally {
+            restoreFetch();
+        }
+    });
+
+    it('throws a SERVER error with emptyResponse details for an empty 200 body', async () => {
+        mockFetch(okResponse(''));
+        try {
+            await assert.rejects(
+                MerlinaAPI.fetch('/train', { method: 'POST' }),
+                (err) => {
+                    assert.ok(err instanceof APIError);
+                    assert.equal(err.type, ErrorType.SERVER);
+                    assert.equal(err.statusCode, 200);
+                    assert.equal(err.details.emptyResponse, true);
+                    return true;
+                }
+            );
+        } finally {
+            restoreFetch();
+        }
+    });
+
+    it('throws a SERVER error for a non-JSON 200 body', async () => {
+        mockFetch(okResponse('<html>gateway error</html>'));
+        try {
+            await assert.rejects(
+                MerlinaAPI.fetch('/train', { method: 'POST' }),
+                (err) => {
+                    assert.ok(err instanceof APIError);
+                    assert.equal(err.type, ErrorType.SERVER);
+                    assert.equal(err.details.emptyResponse, false);
+                    return true;
+                }
+            );
+        } finally {
+            restoreFetch();
+        }
+    });
+
+    it('categorizes an aborted request as TIMEOUT', async () => {
+        globalThis.fetch = async () => {
+            const err = new Error('The operation was aborted');
+            err.name = 'AbortError';
+            throw err;
+        };
+        try {
+            await assert.rejects(
+                MerlinaAPI.fetch('/train', { method: 'POST' }),
+                (err) => {
+                    assert.ok(err instanceof APIError);
+                    assert.equal(err.type, ErrorType.TIMEOUT);
+                    return true;
+                }
+            );
+        } finally {
+            restoreFetch();
+        }
     });
 });
 
