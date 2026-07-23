@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **RunPod support**: `scripts/runpod_setup.sh` one-line setup for PyTorch pods (persists state to `/workspace`) and a deployment guide (`docs/user/runpod.md`) covering both the script and the GHCR image as a custom template.
 - **Google Colab notebook** (`notebooks/Merlina_Colab.ipynb`): runs the full UI on a free Colab GPU via Colab's built-in port proxy.
 
+### Fixed
+- **Pre-flight VRAM check for models without a size in their name**: model-size detection now falls back to a known-family table (`KNOWN_MODEL_SIZES` in `src/constants.py`), so common bases like `mistralai/Mistral-Nemo-Instruct-2407` (12B), Mistral-Small/Large, and Codestral get a real VRAM estimate instead of silently skipping the check. Mixture-of-experts names like `Mixtral-8x7B` are now sized by total parameters (56B) rather than matching the per-expert `7b` token. Tests: `tests/test_model_size_detection.py`.
+
 ### Changed
 - README Quick Start now offers pip / Docker / RunPod / Colab / from-source install paths.
 - `merlina.py`'s `__main__` startup block is now a callable `main()` (used by both `python merlina.py` and the `merlina` console script). No behavior change.

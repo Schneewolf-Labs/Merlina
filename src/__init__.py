@@ -28,6 +28,7 @@ from .utils import (
 
 from .constants import (
     VRAM_ESTIMATES_4BIT,
+    KNOWN_MODEL_SIZES,
     DISK_SPACE_ESTIMATES,
     GATED_MODEL_PREFIXES,
     DEFAULT_MAX_CONCURRENT_JOBS,
@@ -80,6 +81,7 @@ __all__ = [
     'supports_flash_attention',
     # Constants
     'VRAM_ESTIMATES_4BIT',
+    'KNOWN_MODEL_SIZES',
     'DISK_SPACE_ESTIMATES',
     'GATED_MODEL_PREFIXES',
     'DEFAULT_MAX_CONCURRENT_JOBS',
