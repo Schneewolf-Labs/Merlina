@@ -919,6 +919,11 @@ _inference_state = {
 }
 _inference_lock = threading.Lock()
 
+# Serializes /inference/load requests. Loads used to be implicitly serialized
+# by blocking the event loop; now that they run in the threadpool, this lock
+# keeps two concurrent loads from racing each other for VRAM.
+_inference_load_lock = threading.Lock()
+
 
 def _unload_current_inference() -> Optional[str]:
     """
@@ -1211,9 +1216,11 @@ def _make_training_callback(event_loop):
 
     Returns a callback suitable for JobQueue.submit().
     """
-    from src.training_runner import run_training_sync, run_training_distributed, _get_distributed_gpu_count
-
     def training_callback(job_id: str, config_dict: dict):
+        # Imported here so the heavy training stack (grimoire, peft, etc.)
+        # loads on the queue worker thread — importing it on the API event
+        # loop would freeze every endpoint until the import finishes.
+        from src.training_runner import run_training_sync, run_training_distributed, _get_distributed_gpu_count
         from pydantic import TypeAdapter
         config_obj = TypeAdapter(TrainingConfig).validate_python(config_dict)
 
@@ -1615,9 +1622,6 @@ async def upload_job(job_id: str, request: UploadJobRequest):
     # Clear any previous upload error before retrying
     job_manager.update_job(job_id, upload_error="")
 
-    # Start upload in background thread
-    from src.training_runner import _run_background_upload, _perform_sync_merge
-
     # Diffusion jobs need the is_diffusion flag so the helper skips the
     # LLM merge path and the model card renders for diffusers.
     is_diffusion = (
@@ -1653,6 +1657,9 @@ async def upload_job(job_id: str, request: UploadJobRequest):
         return _vlm_cache["value"]
 
     def _merge():
+        # Imported on the worker thread — the heavy training stack must
+        # never be imported on the API event loop.
+        from src.training_runner import _perform_sync_merge
         return _perform_sync_merge(
             config, output_dir, job_id, job_manager,
             event_loop=event_loop,
@@ -1661,6 +1668,7 @@ async def upload_job(job_id: str, request: UploadJobRequest):
         )
 
     def _upload(merge_artifact):
+        from src.training_runner import _run_background_upload
         _run_background_upload(
             config, output_dir, training_mode, job_id, job_manager,
             event_loop, _is_vlm(),
@@ -1864,8 +1872,11 @@ def _protected_model_names() -> set:
 
 
 @app.get("/disk/analysis", tags=["Disk & Cleanup"], summary="Analyze disk usage of results and models")
-async def disk_analysis(keep: int = 1):
+def disk_analysis(keep: int = 1):
     """Read-only breakdown of results/ and models/ disk usage.
+
+    Sync endpoint on purpose: walking large results/models trees can take
+    seconds to minutes, so it runs in the threadpool, not on the event loop.
 
     ``keep`` controls how many checkpoints per job are treated as keepers when
     computing the reclaimable estimate (default 1 = keep only the latest). Each
@@ -1891,8 +1902,11 @@ class DiskCleanupRequest(BaseModel):
 
 
 @app.post("/disk/cleanup", tags=["Disk & Cleanup"], summary="Prune old checkpoints")
-async def disk_cleanup(req: DiskCleanupRequest):
+def disk_cleanup(req: DiskCleanupRequest):
     """Prune old checkpoints. Dry-run unless ``apply=true``.
+
+    Sync endpoint on purpose — deleting multi-GB checkpoints must not block
+    the event loop.
 
     Never touches active jobs. Returns the list of (would-be) deletions and the
     total bytes freed.
@@ -1939,8 +1953,11 @@ class ModelDeleteRequest(BaseModel):
 
 
 @app.post("/disk/models/delete", tags=["Disk & Cleanup"], summary="Delete saved models")
-async def disk_models_delete(req: ModelDeleteRequest):
+def disk_models_delete(req: ModelDeleteRequest):
     """Delete saved models by name. Dry-run unless ``apply``.
+
+    Sync endpoint on purpose — deleting multi-GB model dirs must not block
+    the event loop.
 
     Refuses any model that is an active job's output or currently loaded for
     inference. Deletion is permanent for models that were never pushed to the
@@ -1978,8 +1995,11 @@ class GGUFDeleteRequest(BaseModel):
 
 
 @app.post("/disk/artifacts/gguf/delete", tags=["Disk & Cleanup"], summary="Delete GGUF exports")
-async def disk_gguf_delete(req: GGUFDeleteRequest):
+def disk_gguf_delete(req: GGUFDeleteRequest):
     """Delete GGUF exports by {model, file}. Dry-run unless ``apply``.
+
+    Sync endpoint on purpose — deleting multi-GB GGUF files must not block
+    the event loop.
 
     GGUF is always regenerable from the saved model; refuses one that is
     currently loaded for inference.
@@ -1993,8 +2013,11 @@ class WandbClearRequest(BaseModel):
 
 
 @app.post("/disk/artifacts/wandb/clear", tags=["Disk & Cleanup"], summary="Clear local W&B run logs")
-async def disk_wandb_clear(req: WandbClearRequest):
-    """Delete local W&B run logs except the active run. Dry-run unless apply."""
+def disk_wandb_clear(req: WandbClearRequest):
+    """Delete local W&B run logs except the active run. Dry-run unless apply.
+
+    Sync endpoint on purpose — log-dir deletion must not block the event loop.
+    """
     return clear_wandb_runs(SCRIPT_DIR / "wandb", apply=req.apply)
 
 
@@ -2197,8 +2220,13 @@ def _build_additional_loaders(config: DatasetConfig, hf_token=None):
 
 
 @app.post("/dataset/preview", tags=["Datasets"], summary="Preview raw dataset samples")
-async def preview_dataset(config: DatasetConfig, offset: int = 0, limit: int = 10):
-    """Preview dataset without formatting"""
+def preview_dataset(config: DatasetConfig, offset: int = 0, limit: int = 10):
+    """Preview dataset without formatting.
+
+    Sync endpoint on purpose: dataset loading can hit the network (HF Hub)
+    and block for a long time, so FastAPI must run it in the threadpool
+    instead of on the event loop.
+    """
     try:
         # Create loader using factory
         try:
@@ -2258,8 +2286,11 @@ async def preview_dataset(config: DatasetConfig, offset: int = 0, limit: int = 1
 
 
 @app.post("/dataset/preview-formatted", tags=["Datasets"], summary="Preview formatted dataset samples")
-async def preview_formatted_dataset(config: DatasetConfig, offset: int = 0, limit: int = 5):
-    """Preview dataset with formatting applied"""
+def preview_formatted_dataset(config: DatasetConfig, offset: int = 0, limit: int = 5):
+    """Preview dataset with formatting applied.
+
+    Sync endpoint on purpose — see preview_dataset.
+    """
     try:
         # Create loader using factory
         try:
@@ -2339,8 +2370,11 @@ async def preview_formatted_dataset(config: DatasetConfig, offset: int = 0, limi
 
 
 @app.post("/dataset/stats", tags=["Datasets"], summary="Compute dataset statistics")
-async def get_dataset_stats(config: DatasetConfig):
-    """Compute dataset statistics: row count, avg lengths, token estimates, class balance."""
+def get_dataset_stats(config: DatasetConfig):
+    """Compute dataset statistics: row count, avg lengths, token estimates, class balance.
+
+    Sync endpoint on purpose — see preview_dataset.
+    """
     try:
         try:
             loader = create_loader_from_config(
@@ -2385,10 +2419,12 @@ async def get_dataset_stats(config: DatasetConfig):
 
 
 @app.post("/dataset/columns", tags=["Datasets"], summary="Inspect dataset columns for mapping")
-async def get_dataset_columns(config: DatasetConfig):
+def get_dataset_columns(config: DatasetConfig):
     """
     Get column names and sample data from dataset for mapping.
     Returns available columns and a few sample rows.
+
+    Sync endpoint on purpose — see preview_dataset.
     """
     try:
         # Create loader using factory
@@ -2549,14 +2585,36 @@ async def list_diffusion_loras():
     return {"loras": loras}
 
 
+# Serializes /diffusion/generate. Generations used to be implicitly
+# serialized by blocking the event loop; now that they run in the
+# threadpool, this lock keeps concurrent requests from fighting for VRAM.
+_diffusion_generate_lock = threading.Lock()
+
+
 @app.post("/diffusion/generate", tags=["Diffusion"], summary="Generate an image with a trained LoRA")
-async def diffusion_generate(req: DiffusionGenerateRequest):
+def diffusion_generate(req: DiffusionGenerateRequest):
     """Run a one-off diffusion inference in a subprocess.
 
     Reuses ``scripts/generate_diffusion_samples.py`` with a single-prompt
     list so the same code path drives both post-training previews and the
     playground. Returns a URL to the generated PNG.
+
+    Sync endpoint on purpose: the subprocess can run for up to 30 minutes,
+    so FastAPI must run this in the threadpool, never on the event loop.
     """
+    if not _diffusion_generate_lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail="Another diffusion generation is already in progress",
+        )
+    try:
+        return _diffusion_generate_locked(req)
+    finally:
+        _diffusion_generate_lock.release()
+
+
+def _diffusion_generate_locked(req: DiffusionGenerateRequest):
+    """Body of /diffusion/generate; caller holds ``_diffusion_generate_lock``."""
     import subprocess
     import sys
     import hashlib
@@ -3394,10 +3452,14 @@ class ModelPreloadRequest(BaseModel):
 
 
 @app.post("/model/preload", tags=["Models"], summary="Preload a model's tokenizer")
-async def preload_model_tokenizer(request: ModelPreloadRequest):
+def preload_model_tokenizer(request: ModelPreloadRequest):
     """
     Preload a model's tokenizer for dataset preview.
     This downloads the model files and caches the tokenizer for fast preview.
+
+    Sync endpoint on purpose: the tokenizer download can hang on a slow
+    network, so FastAPI must run it in the threadpool instead of on the
+    event loop (a hung load would otherwise freeze the whole API).
     """
     try:
         model_name = request.model_name
@@ -3490,10 +3552,14 @@ _layer_cache_lock = threading.Lock()
 
 
 @app.post("/model/layers", tags=["Models"], summary="Detect LoRA-compatible layers")
-async def detect_model_layers(request: ModelLayersRequest):
+def detect_model_layers(request: ModelLayersRequest):
     """
     Detect LoRA-compatible layers in a model.
     Returns all Linear layer names that can be targeted by LoRA.
+
+    Sync endpoint on purpose: this loads the full model (download + CPU
+    deserialization), which must run in the threadpool, never on the
+    event loop.
     """
     import torch.nn as nn
 
@@ -3702,8 +3768,26 @@ async def list_inference_models():
 
 
 @app.post("/inference/load", tags=["Inference"], summary="Load a model for inference")
-async def load_inference_model(request: InferenceLoadRequest):
-    """Load a model for inference."""
+def load_inference_model(request: InferenceLoadRequest):
+    """Load a model for inference.
+
+    Sync endpoint on purpose: model loading (download + VRAM transfer) can
+    take minutes or hang entirely, so FastAPI must run it in the threadpool
+    instead of on the event loop.
+    """
+    if not _inference_load_lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail="Another inference model load is already in progress",
+        )
+    try:
+        return _load_inference_model_locked(request)
+    finally:
+        _inference_load_lock.release()
+
+
+def _load_inference_model_locked(request: InferenceLoadRequest):
+    """Body of /inference/load; caller holds ``_inference_load_lock``."""
 
     # Unload any currently-loaded model (either backend).
     _unload_current_inference()
@@ -3901,8 +3985,12 @@ async def load_inference_model(request: InferenceLoadRequest):
 
 
 @app.post("/inference/unload", tags=["Inference"], summary="Unload the inference model")
-async def unload_inference_model():
-    """Unload the current inference model to free VRAM"""
+def unload_inference_model():
+    """Unload the current inference model to free VRAM.
+
+    Sync endpoint on purpose: teardown (GC + CUDA cache clear, or stopping a
+    llama-server process) can take a while and must not block the event loop.
+    """
     with _inference_lock:
         has_transformers_model = _inference_state.get("model") is not None
         has_llama_server = _inference_state.get("llama_server") is not None
@@ -4188,7 +4276,6 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
     frontend can subscribe to existing WS progress events. Returns
     ``{job_id}`` immediately.
     """
-    from src.training_runner import _run_background_upload, _perform_sync_merge
     from types import SimpleNamespace
     import uuid as _uuid
 
@@ -4220,7 +4307,9 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
             base_model = _infer_base_model(model_dir, None)
         except HTTPException:
             pass
-    is_vlm = _resolve_is_vlm(request.model_type, base_model)
+    # May fetch the base model's config from the Hub — keep it off the
+    # event loop so a slow/hung download can't freeze the API.
+    is_vlm = await asyncio.to_thread(_resolve_is_vlm, request.model_type, base_model)
     repo_id = request.repo_id or name
     commit_message = request.commit_message or f"Upload via Merlina (post-hoc)"
 
@@ -4292,6 +4381,9 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
         event_loop = None
 
     def _merge():
+        # Imported on the worker thread — the heavy training stack must
+        # never be imported on the API event loop.
+        from src.training_runner import _perform_sync_merge
         return _perform_sync_merge(
             cfg, str(model_dir), job_id, job_manager,
             event_loop=event_loop,
@@ -4300,6 +4392,7 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
         )
 
     def _upload(merge_artifact):
+        from src.training_runner import _run_background_upload
         _run_background_upload(
             config=cfg,
             final_output_dir=str(model_dir),
@@ -4335,7 +4428,6 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
 @app.post("/models/{name}/export-gguf", tags=["Models"], summary="Export a model to GGUF")
 async def export_gguf_for_existing_model(name: str, request: ModelGgufExportRequest):
     """Kick off a post-hoc GGUF export for an existing model dir."""
-    from src.training_runner import _run_background_gguf_export, _perform_sync_merge
     from src.llama_cpp_resolver import resolve_llama_cpp
     from types import SimpleNamespace
     import uuid as _uuid
@@ -4348,7 +4440,9 @@ async def export_gguf_for_existing_model(name: str, request: ModelGgufExportRequ
     model_dir = _resolve_model_dir(name)
     has_adapter = (model_dir / "adapter_config.json").is_file()
     base_model = _infer_base_model(model_dir, request.base_model) if has_adapter else (request.base_model or "")
-    is_vlm = _resolve_is_vlm(request.model_type, base_model)
+    # May fetch the base model's config from the Hub — keep it off the
+    # event loop so a slow/hung download can't freeze the API.
+    is_vlm = await asyncio.to_thread(_resolve_is_vlm, request.model_type, base_model)
 
     cfg = SimpleNamespace(
         output_name=name,
@@ -4373,6 +4467,9 @@ async def export_gguf_for_existing_model(name: str, request: ModelGgufExportRequ
         event_loop = None
 
     def _merge():
+        # Imported on the worker thread — the heavy training stack must
+        # never be imported on the API event loop.
+        from src.training_runner import _perform_sync_merge
         return _perform_sync_merge(
             cfg, str(model_dir), job_id, job_manager,
             event_loop=event_loop,
@@ -4381,6 +4478,7 @@ async def export_gguf_for_existing_model(name: str, request: ModelGgufExportRequ
         )
 
     def _export(merge_artifact):
+        from src.training_runner import _run_background_gguf_export
         _run_background_gguf_export(
             config=cfg,
             final_output_dir=str(model_dir),

@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - README Quick Start now offers pip / Docker / RunPod / Colab / from-source install paths.
 - `merlina.py`'s `__main__` startup block is now a callable `main()` (used by both `python merlina.py` and the `merlina` console script). No behavior change.
 
+### Fixed
+- **Heavy endpoints no longer block the API event loop**: a single slow or hung model/tokenizer/dataset load used to freeze `/health` and every other endpoint, because the load ran synchronously inside an `async def` handler. Endpoints that do heavy blocking work (`/model/preload`, `/model/layers`, `/inference/load`, `/inference/unload`, `/dataset/preview`, `/dataset/preview-formatted`, `/dataset/stats`, `/dataset/columns`, `/diffusion/generate`, and the disk analysis/cleanup/delete endpoints) are now plain `def` handlers so FastAPI runs them in its threadpool. The `/train` and `/jobs/{id}/retry` path no longer imports the heavy training stack (grimoire, peft, wandb) on the event loop — that import now happens on the queue worker thread — and the post-hoc upload/GGUF-export endpoints resolve VLM detection (which may fetch a model config from the Hub) via `asyncio.to_thread`. Since `/inference/load` and `/diffusion/generate` can now run concurrently with other requests, each is guarded by a lock that returns HTTP 409 when an identical operation is already in flight (previously they were only serialized as a side effect of freezing the API). Regression tests: `tests/test_event_loop_blocking.py`, including a live check that `/health` answers while a model load is blocked mid-flight.
+
 ## [2.0.3] - 2026-06-02
 
 ### Added
