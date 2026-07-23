@@ -87,7 +87,7 @@ python merlina.py
 
 Visit http://localhost:8000 and start training! 🎉
 
-API docs are available at http://localhost:8000/api/docs.
+Interactive API docs (Swagger UI) are available at http://localhost:8000/docs, with ReDoc at http://localhost:8000/redoc and the raw OpenAPI spec at http://localhost:8000/openapi.json.
 
 ## Training Modes
 
@@ -259,7 +259,9 @@ merlina/
 - `POST /validate` — Validate configuration before training
 - `GET /version` — Current version info
 - `GET /stats` — Database and system statistics
-- `GET /api/docs` — Interactive API documentation
+- `GET /docs` — Interactive API documentation (Swagger UI)
+- `GET /redoc` — API documentation (ReDoc)
+- `GET /openapi.json` — OpenAPI specification
 
 **WebSocket:**
 - `WS /ws/{job_id}` — Real-time training and export updates (status, metrics, `gguf_progress`)

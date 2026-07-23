@@ -19,7 +19,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field, model_validator
 
 from datasets import load_dataset, Dataset
@@ -72,13 +72,103 @@ from version import __version__, get_version_info, get_version_string
 logging.basicConfig(level=getattr(logging, settings.log_level.upper()))
 logger = logging.getLogger(__name__)
 
+# OpenAPI tag metadata — groups endpoints in Swagger UI / ReDoc
+openapi_tags = [
+    {
+        "name": "System",
+        "description": "Health checks, version info, server capabilities, and statistics.",
+    },
+    {
+        "name": "Training",
+        "description": "Validate configurations and submit training jobs "
+                       "(ORPO, DPO, SimPO, CPO, IPO, KTO, SFT, and VLM/diffusion modes).",
+    },
+    {
+        "name": "Jobs",
+        "description": "Track, manage, retry, stop, and delete training jobs; "
+                       "fetch metrics, configs, and generated samples.",
+    },
+    {
+        "name": "Queue",
+        "description": "Job queue status and positions. Jobs run with configurable "
+                       "concurrency and priority (low/normal/high).",
+    },
+    {
+        "name": "GPU",
+        "description": "GPU discovery, availability, and selection recommendations.",
+    },
+    {
+        "name": "Presets",
+        "description": "Paper-backed recommended hyperparameters per training mode.",
+    },
+    {
+        "name": "Datasets",
+        "description": "Load, preview, format, inspect, upload, and manage datasets "
+                       "from HuggingFace Hub, local files, or direct uploads.",
+    },
+    {
+        "name": "Configs",
+        "description": "Save, load, export, import, and share training configurations.",
+    },
+    {
+        "name": "Models",
+        "description": "Local model discovery, tokenizer preloading, layer detection, "
+                       "artifact management, HuggingFace Hub uploads, and GGUF exports.",
+    },
+    {
+        "name": "Inference",
+        "description": "Load trained models and chat with them for quick evaluation.",
+    },
+    {
+        "name": "Diffusion",
+        "description": "Diffusion image-LoRA browsing and one-off image generation.",
+    },
+    {
+        "name": "Disk & Cleanup",
+        "description": "Disk usage analysis and cleanup of checkpoints, caches, "
+                       "artifacts, and expired uploads. Destructive operations are "
+                       "dry-run unless explicitly applied.",
+    },
+]
+
 # FastAPI app
 app = FastAPI(
     title=settings.app_name,
-    description="Train LLMs with ORPO, powered by magic ✨",
+    description=(
+        "Merlina is a magical LLM training system ✨\n\n"
+        "Fine-tune language models with LoRA adapters using ORPO, DPO, SimPO, "
+        "CPO, IPO, KTO, or SFT — plus Artemis VLM and diffusion image-LoRA "
+        "training modes. Merlina handles dataset loading and formatting, "
+        "pre-flight validation, job queueing, real-time progress updates, and "
+        "publishing to the HuggingFace Hub.\n\n"
+        "### Highlights\n"
+        "- **Training jobs**: submit via `POST /train`, monitor via "
+        "`GET /status/{job_id}` or the `/ws/{job_id}` WebSocket\n"
+        "- **Datasets**: load from HuggingFace Hub, local files, or uploads; "
+        "preview raw and formatted samples before training\n"
+        "- **Pre-flight checks**: `POST /validate` catches configuration "
+        "problems before any GPU time is spent\n"
+        "- **Exports**: merge LoRA adapters, upload to HuggingFace Hub, and "
+        "export GGUF quantizations\n\n"
+        "### Real-time updates (WebSocket)\n"
+        "Not part of the OpenAPI spec, but available:\n"
+        "- `WS /ws/{job_id}` — live training status, metrics, completion, and "
+        "error events\n"
+        "- `WS /ws-inference` — streaming token generation for loaded "
+        "inference models\n"
+    ),
     version=__version__,
-    docs_url="/api/docs",
-    redoc_url="/api/redoc"
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_tags=openapi_tags,
+    contact={
+        "name": "Schneewolf Labs",
+        "url": "https://github.com/Schneewolf-Labs/Merlina",
+    },
+    license_info={
+        "name": "MIT License",
+        "url": "https://github.com/Schneewolf-Labs/Merlina/blob/main/LICENSE",
+    },
 )
 
 app.add_middleware(
@@ -88,6 +178,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# Backwards-compatible redirects for the old documentation URLs
+@app.get("/api/docs", include_in_schema=False)
+async def legacy_docs_redirect():
+    return RedirectResponse(url="/docs")
+
+
+@app.get("/api/redoc", include_in_schema=False)
+async def legacy_redoc_redirect():
+    return RedirectResponse(url="/redoc")
 
 # Initialize job manager with persistent storage
 job_manager = JobManager(db_path=settings.database_path)
@@ -859,7 +960,7 @@ def _unload_current_inference() -> Optional[str]:
 
 # Mount static files for frontend
 if FRONTEND_DIR.exists():
-    @app.get("/")
+    @app.get("/", include_in_schema=False)
     async def serve_frontend():
         """Serve the main HTML page"""
         return FileResponse(FRONTEND_DIR / "index.html")
@@ -887,11 +988,11 @@ if FRONTEND_DIR.exists():
               name="model-files")
     
     # Also serve CSS, JS modules, and images from root for simplicity
-    @app.get("/styles.css")
+    @app.get("/styles.css", include_in_schema=False)
     async def serve_css():
         return FileResponse(FRONTEND_DIR / "styles.css", media_type="text/css")
 
-    @app.get("/js/{file_path:path}")
+    @app.get("/js/{file_path:path}", include_in_schema=False)
     async def serve_js_modules(file_path: str):
         """Serve JavaScript modules from js/ directory"""
         js_file = FRONTEND_DIR / "js" / file_path
@@ -899,7 +1000,7 @@ if FRONTEND_DIR.exists():
             return FileResponse(js_file, media_type="application/javascript")
         return {"error": "File not found"}
 
-    @app.get("/css/{file_path:path}")
+    @app.get("/css/{file_path:path}", include_in_schema=False)
     async def serve_css_modules(file_path: str):
         """Serve CSS files from css/ directory"""
         css_file = FRONTEND_DIR / "css" / file_path
@@ -907,15 +1008,15 @@ if FRONTEND_DIR.exists():
             return FileResponse(css_file, media_type="text/css")
         raise HTTPException(status_code=404, detail="CSS file not found")
 
-    @app.get("/merlina.png")
+    @app.get("/merlina.png", include_in_schema=False)
     async def serve_logo():
         return FileResponse(FRONTEND_DIR / "merlina.png", media_type="image/png")
 
-    @app.get("/favicon.ico")
+    @app.get("/favicon.ico", include_in_schema=False)
     async def serve_favicon():
         return FileResponse(FRONTEND_DIR / "favicon.ico", media_type="image/x-icon")
 else:
-    @app.get("/")
+    @app.get("/", include_in_schema=False)
     async def root():
         return {
             "name": "Merlina",
@@ -925,7 +1026,7 @@ else:
         }
 
 # API Endpoints
-@app.get("/health")
+@app.get("/health", tags=["System"], summary="Health check")
 async def health_check():
     """
     Health check endpoint for load balancers and monitoring.
@@ -996,8 +1097,9 @@ async def health_check():
     }
 
 
-@app.get("/api")
+@app.get("/api", tags=["System"], summary="API overview")
 async def api_info():
+    """Overview of the API with pointers to the most commonly used endpoints."""
     return {
         "name": "Merlina",
         "version": __version__,
@@ -1008,17 +1110,19 @@ async def api_info():
             "GET /jobs": "List all jobs",
             "GET /version": "Get version information",
             "GET /health": "Health check for monitoring",
-            "GET /api/docs": "API documentation"
+            "GET /docs": "Interactive API documentation (Swagger UI)",
+            "GET /redoc": "API documentation (ReDoc)",
+            "GET /openapi.json": "OpenAPI specification"
         }
     }
 
-@app.get("/version")
+@app.get("/version", tags=["System"], summary="Version information")
 async def get_version():
     """Get detailed version information"""
     return get_version_info()
 
 
-@app.get("/env/secrets")
+@app.get("/env/secrets", tags=["System"], summary="Server-side secret availability")
 async def get_env_secrets_status():
     """
     Report which secrets are configured on the server via .env or environment.
@@ -1030,7 +1134,7 @@ async def get_env_secrets_status():
     return env_secret_status()
 
 
-@app.get("/llama-cpp/status")
+@app.get("/llama-cpp/status", tags=["System"], summary="llama.cpp availability")
 async def get_llama_cpp_status():
     """
     Report whether llama.cpp is resolvable so the UI can enable/disable
@@ -1048,13 +1152,13 @@ async def get_llama_cpp_status():
     return resolution
 
 
-@app.get("/presets")
+@app.get("/presets", tags=["Presets"], summary="List presets for all training modes")
 async def list_presets():
     """List recommended presets for all training modes."""
     return get_all_presets()
 
 
-@app.get("/presets/{training_mode}")
+@app.get("/presets/{training_mode}", tags=["Presets"], summary="Get preset for a training mode")
 async def get_training_preset(training_mode: str):
     """Get recommended hyperparameters for a training mode.
 
@@ -1070,7 +1174,7 @@ async def get_training_preset(training_mode: str):
     return preset
 
 
-@app.post("/validate", response_model=dict)
+@app.post("/validate", response_model=dict, tags=["Training"], summary="Validate a training configuration")
 async def validate_training_config(config: TrainingConfig):
     """
     Validate training configuration before starting.
@@ -1133,7 +1237,7 @@ def _make_training_callback(event_loop):
     return training_callback
 
 
-@app.post("/train", response_model=JobResponse)
+@app.post("/train", response_model=JobResponse, tags=["Training"], summary="Submit a training job")
 async def create_training_job(config: TrainingConfig, priority: Optional[str] = "normal"):
     """
     Create and queue a training job.
@@ -1212,7 +1316,7 @@ async def create_training_job(config: TrainingConfig, priority: Optional[str] = 
         message=message
     )
 
-@app.get("/status/{job_id}", response_model=JobStatus)
+@app.get("/status/{job_id}", response_model=JobStatus, tags=["Training"], summary="Get training job status")
 async def get_job_status(job_id: str):
     """Get status of a training job with queue information"""
     if job_id not in jobs:
@@ -1238,7 +1342,7 @@ async def get_job_status(job_id: str):
         queue_state=queue_status.get("state")
     )
 
-@app.get("/jobs")
+@app.get("/jobs", tags=["Jobs"], summary="List all jobs")
 async def list_jobs():
     """List all jobs"""
     return {
@@ -1250,7 +1354,7 @@ async def list_jobs():
     }
 
 
-@app.get("/jobs/history")
+@app.get("/jobs/history", tags=["Jobs"], summary="Get paginated job history")
 async def get_job_history(limit: int = 50, offset: int = 0, status: Optional[str] = None):
     """
     Get job history with pagination.
@@ -1281,7 +1385,7 @@ async def get_job_history(limit: int = 50, offset: int = 0, status: Optional[str
     }
 
 
-@app.get("/jobs/{job_id}/config")
+@app.get("/jobs/{job_id}/config", tags=["Jobs"], summary="Get a job's training configuration")
 async def get_job_config(job_id: str):
     """
     Get the training configuration used for a specific job.
@@ -1298,7 +1402,7 @@ async def get_job_config(job_id: str):
     }
 
 
-@app.get("/jobs/{job_id}/metrics")
+@app.get("/jobs/{job_id}/metrics", tags=["Jobs"], summary="Get a job's training metrics")
 async def get_job_metrics(job_id: str):
     """Get detailed metrics for a job"""
     job = job_manager.get_job(job_id)
@@ -1313,7 +1417,7 @@ async def get_job_metrics(job_id: str):
     }
 
 
-@app.post("/jobs/{job_id}/retry", response_model=JobResponse)
+@app.post("/jobs/{job_id}/retry", response_model=JobResponse, tags=["Jobs"], summary="Retry a failed or stopped job")
 async def retry_job(job_id: str, priority: Optional[str] = "normal"):
     """
     Retry a failed or stopped job with the same configuration.
@@ -1447,7 +1551,7 @@ class UploadJobRequest(BaseModel):
         return self
 
 
-@app.post("/jobs/{job_id}/upload", response_model=JobResponse)
+@app.post("/jobs/{job_id}/upload", response_model=JobResponse, tags=["Jobs"], summary="Upload a job's model to HuggingFace Hub")
 async def upload_job(job_id: str, request: UploadJobRequest):
     """
     Upload or re-upload a completed/stopped job's model to HuggingFace Hub.
@@ -1603,7 +1707,7 @@ async def upload_job(job_id: str, request: UploadJobRequest):
     )
 
 
-@app.post("/jobs/{job_id}/stop")
+@app.post("/jobs/{job_id}/stop", tags=["Jobs"], summary="Stop or cancel a job")
 async def stop_job(job_id: str):
     """
     Cancel or stop a job.
@@ -1649,7 +1753,7 @@ async def stop_job(job_id: str):
     }
 
 
-@app.delete("/jobs/{job_id}")
+@app.delete("/jobs/{job_id}", tags=["Jobs"], summary="Delete a job")
 async def delete_job(job_id: str):
     """Delete a specific job and its metrics"""
     success = job_manager.delete_job(job_id)
@@ -1663,7 +1767,7 @@ async def delete_job(job_id: str):
     }
 
 
-@app.delete("/jobs")
+@app.delete("/jobs", tags=["Jobs"], summary="Delete all jobs")
 async def clear_all_jobs():
     """Delete all jobs and metrics"""
     count = job_manager.clear_all_jobs()
@@ -1711,7 +1815,7 @@ async def websocket_endpoint(websocket: WebSocket, job_id: str):
         await websocket_manager.disconnect(websocket, job_id)
 
 
-@app.get("/stats")
+@app.get("/stats", tags=["System"], summary="Database and system statistics")
 async def get_stats():
     """Get database and system statistics"""
     return {
@@ -1759,7 +1863,7 @@ def _protected_model_names() -> set:
     return protected
 
 
-@app.get("/disk/analysis")
+@app.get("/disk/analysis", tags=["Disk & Cleanup"], summary="Analyze disk usage of results and models")
 async def disk_analysis(keep: int = 1):
     """Read-only breakdown of results/ and models/ disk usage.
 
@@ -1786,7 +1890,7 @@ class DiskCleanupRequest(BaseModel):
     apply: bool = Field(False, description="Actually delete (False = dry-run preview)")
 
 
-@app.post("/disk/cleanup")
+@app.post("/disk/cleanup", tags=["Disk & Cleanup"], summary="Prune old checkpoints")
 async def disk_cleanup(req: DiskCleanupRequest):
     """Prune old checkpoints. Dry-run unless ``apply=true``.
 
@@ -1802,7 +1906,7 @@ async def disk_cleanup(req: DiskCleanupRequest):
     )
 
 
-@app.get("/disk/hf-cache")
+@app.get("/disk/hf-cache", tags=["Disk & Cleanup"], summary="Scan the HuggingFace cache")
 async def disk_hf_cache(stale_days: int = 90):
     """Read-only scan of the HuggingFace cache (~/.cache/huggingface/hub).
 
@@ -1819,7 +1923,7 @@ class HFCacheDeleteRequest(BaseModel):
     apply: bool = Field(False, description="Actually delete (False = dry-run preview)")
 
 
-@app.post("/disk/hf-cache/delete")
+@app.post("/disk/hf-cache/delete", tags=["Disk & Cleanup"], summary="Delete HuggingFace cache repos")
 async def disk_hf_cache_delete(req: HFCacheDeleteRequest):
     """Delete selected HF cache repos via huggingface_hub. Dry-run unless apply.
 
@@ -1834,7 +1938,7 @@ class ModelDeleteRequest(BaseModel):
     apply: bool = Field(False, description="Actually delete (False = dry-run preview)")
 
 
-@app.post("/disk/models/delete")
+@app.post("/disk/models/delete", tags=["Disk & Cleanup"], summary="Delete saved models")
 async def disk_models_delete(req: ModelDeleteRequest):
     """Delete saved models by name. Dry-run unless ``apply``.
 
@@ -1861,7 +1965,7 @@ def _loaded_gguf_path() -> Optional[str]:
         return None
 
 
-@app.get("/disk/artifacts")
+@app.get("/disk/artifacts", tags=["Disk & Cleanup"], summary="List derived artifacts (GGUF, W&B logs)")
 async def disk_artifacts():
     """Read-only breakdown of derived artifacts: GGUF exports + W&B run logs."""
     wandb_dir = SCRIPT_DIR / "wandb"
@@ -1873,7 +1977,7 @@ class GGUFDeleteRequest(BaseModel):
     apply: bool = Field(False, description="Actually delete (False = dry-run preview)")
 
 
-@app.post("/disk/artifacts/gguf/delete")
+@app.post("/disk/artifacts/gguf/delete", tags=["Disk & Cleanup"], summary="Delete GGUF exports")
 async def disk_gguf_delete(req: GGUFDeleteRequest):
     """Delete GGUF exports by {model, file}. Dry-run unless ``apply``.
 
@@ -1888,13 +1992,13 @@ class WandbClearRequest(BaseModel):
     apply: bool = Field(False, description="Actually delete (False = dry-run preview)")
 
 
-@app.post("/disk/artifacts/wandb/clear")
+@app.post("/disk/artifacts/wandb/clear", tags=["Disk & Cleanup"], summary="Clear local W&B run logs")
 async def disk_wandb_clear(req: WandbClearRequest):
     """Delete local W&B run logs except the active run. Dry-run unless apply."""
     return clear_wandb_runs(SCRIPT_DIR / "wandb", apply=req.apply)
 
 
-@app.get("/queue/status")
+@app.get("/queue/status", tags=["Queue"], summary="Get queue status and statistics")
 async def get_queue_status():
     """
     Get overall queue status and statistics.
@@ -1916,7 +2020,7 @@ async def get_queue_status():
     }
 
 
-@app.get("/queue/jobs")
+@app.get("/queue/jobs", tags=["Queue"], summary="List queued and running jobs")
 async def list_queue_jobs():
     """
     List all jobs in the queue (queued and running).
@@ -1930,7 +2034,7 @@ async def list_queue_jobs():
 
 
 # GPU management endpoints
-@app.get("/gpu/list")
+@app.get("/gpu/list", tags=["GPU"], summary="List all GPUs")
 async def list_gpus():
     """
     List all available GPUs with detailed information.
@@ -1967,7 +2071,7 @@ async def list_gpus():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/gpu/available")
+@app.get("/gpu/available", tags=["GPU"], summary="List GPUs with sufficient free memory")
 async def get_available_gpus(min_free_memory_mb: int = 4000):
     """
     Get list of available GPUs with sufficient free memory.
@@ -2002,7 +2106,7 @@ async def get_available_gpus(min_free_memory_mb: int = 4000):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/gpu/recommended")
+@app.get("/gpu/recommended", tags=["GPU"], summary="Get the recommended GPU for training")
 async def get_recommended_gpu():
     """
     Get the recommended GPU for training.
@@ -2034,7 +2138,7 @@ async def get_recommended_gpu():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/gpu/{index}")
+@app.get("/gpu/{index}", tags=["GPU"], summary="Get details for a specific GPU")
 async def get_gpu_info(index: int):
     """
     Get detailed information about a specific GPU.
@@ -2092,7 +2196,7 @@ def _build_additional_loaders(config: DatasetConfig, hf_token=None):
     return extras
 
 
-@app.post("/dataset/preview")
+@app.post("/dataset/preview", tags=["Datasets"], summary="Preview raw dataset samples")
 async def preview_dataset(config: DatasetConfig, offset: int = 0, limit: int = 10):
     """Preview dataset without formatting"""
     try:
@@ -2153,7 +2257,7 @@ async def preview_dataset(config: DatasetConfig, offset: int = 0, limit: int = 1
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/dataset/preview-formatted")
+@app.post("/dataset/preview-formatted", tags=["Datasets"], summary="Preview formatted dataset samples")
 async def preview_formatted_dataset(config: DatasetConfig, offset: int = 0, limit: int = 5):
     """Preview dataset with formatting applied"""
     try:
@@ -2234,7 +2338,7 @@ async def preview_formatted_dataset(config: DatasetConfig, offset: int = 0, limi
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/dataset/stats")
+@app.post("/dataset/stats", tags=["Datasets"], summary="Compute dataset statistics")
 async def get_dataset_stats(config: DatasetConfig):
     """Compute dataset statistics: row count, avg lengths, token estimates, class balance."""
     try:
@@ -2280,7 +2384,7 @@ async def get_dataset_stats(config: DatasetConfig):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/dataset/columns")
+@app.post("/dataset/columns", tags=["Datasets"], summary="Inspect dataset columns for mapping")
 async def get_dataset_columns(config: DatasetConfig):
     """
     Get column names and sample data from dataset for mapping.
@@ -2321,7 +2425,7 @@ async def get_dataset_columns(config: DatasetConfig):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/dataset/upload")
+@app.post("/dataset/upload", tags=["Datasets"], summary="Upload a dataset (legacy)")
 async def upload_dataset(file: bytes = None, filename: str = None):
     """Upload a dataset file"""
     from fastapi import File, Form, UploadFile
@@ -2334,7 +2438,7 @@ async def upload_dataset(file: bytes = None, filename: str = None):
 # Proper upload endpoint with FastAPI's UploadFile
 from fastapi import File, Form, UploadFile as FastAPIUploadFile
 
-@app.post("/dataset/upload-file")
+@app.post("/dataset/upload-file", tags=["Datasets"], summary="Upload a dataset file")
 async def upload_dataset_file(file: FastAPIUploadFile = File(...)):
     """Upload a dataset file and return dataset ID"""
     try:
@@ -2369,7 +2473,7 @@ async def upload_dataset_file(file: FastAPIUploadFile = File(...)):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.get("/dataset/uploads")
+@app.get("/dataset/uploads", tags=["Datasets"], summary="List uploaded datasets")
 async def list_uploaded_datasets():
     """List all uploaded datasets with TTL information"""
     from datetime import timedelta
@@ -2421,7 +2525,7 @@ class DiffusionGenerateRequest(BaseModel):
     seed: int = Field(0, ge=0)
 
 
-@app.get("/diffusion/loras")
+@app.get("/diffusion/loras", tags=["Diffusion"], summary="List trained diffusion LoRAs")
 async def list_diffusion_loras():
     """List trained LoRAs under ./models/ that look like diffusers checkpoints
     (contain pytorch_lora_weights.safetensors). Powers the playground picker.
@@ -2445,7 +2549,7 @@ async def list_diffusion_loras():
     return {"loras": loras}
 
 
-@app.post("/diffusion/generate")
+@app.post("/diffusion/generate", tags=["Diffusion"], summary="Generate an image with a trained LoRA")
 async def diffusion_generate(req: DiffusionGenerateRequest):
     """Run a one-off diffusion inference in a subprocess.
 
@@ -2503,7 +2607,7 @@ async def diffusion_generate(req: DiffusionGenerateRequest):
     }
 
 
-@app.get("/dataset/preview-images")
+@app.get("/dataset/preview-images", tags=["Datasets"], summary="Preview an image dataset")
 async def preview_image_dataset(
     jsonl_path: str,
     limit: int = 24,
@@ -2596,7 +2700,7 @@ async def preview_image_dataset(
     }
 
 
-@app.get("/dataset/image-content")
+@app.get("/dataset/image-content", tags=["Datasets"], summary="Fetch an image from an image dataset")
 async def dataset_image_content(path: str, jsonl_path: str):
     """Serve a single image file from an image dataset.
 
@@ -2653,7 +2757,7 @@ class SaveJsonlRequest(BaseModel):
     caption_column: Optional[str]    = Field(None, description="Column to write captions to (default 'prompt'; pass 'caption' for VLM-style datasets)")
 
 
-@app.post("/dataset/save-jsonl")
+@app.post("/dataset/save-jsonl", tags=["Datasets"], summary="Save edits to an image-dataset JSONL")
 async def save_jsonl_edits(req: SaveJsonlRequest):
     """Apply caption edits + row deletions to an image-dataset JSONL.
 
@@ -2726,7 +2830,7 @@ async def save_jsonl_edits(req: SaveJsonlRequest):
     }
 
 
-@app.get("/jobs/{job_id}/samples")
+@app.get("/jobs/{job_id}/samples", tags=["Jobs"], summary="Get a diffusion job's sample images")
 async def get_job_samples(job_id: str):
     """Return generated sample images for a diffusion training job.
 
@@ -2808,7 +2912,7 @@ async def get_job_samples(job_id: str):
     }
 
 
-@app.post("/dataset/upload-images")
+@app.post("/dataset/upload-images", tags=["Datasets"], summary="Upload an image dataset")
 async def upload_image_dataset(
     files: list[FastAPIUploadFile] = File(...),
     captions: str = Form("{}"),
@@ -2878,7 +2982,7 @@ async def upload_image_dataset(
     }
 
 
-@app.post("/dataset/cleanup")
+@app.post("/dataset/cleanup", tags=["Datasets"], summary="Clean up expired uploaded datasets")
 async def cleanup_expired_uploads():
     """
     Clean up expired uploaded datasets based on TTL.
@@ -2914,7 +3018,7 @@ async def cleanup_expired_uploads():
     }
 
 
-@app.delete("/dataset/uploads/{dataset_id}")
+@app.delete("/dataset/uploads/{dataset_id}", tags=["Datasets"], summary="Delete an uploaded dataset")
 async def delete_uploaded_dataset(dataset_id: str):
     """Delete a specific uploaded dataset"""
     with _uploaded_datasets_lock:
@@ -2933,7 +3037,7 @@ async def delete_uploaded_dataset(dataset_id: str):
     }
 
 
-@app.post("/cleanup/artifacts")
+@app.post("/cleanup/artifacts", tags=["Disk & Cleanup"], summary="Clean up artifacts from failed jobs")
 async def cleanup_failed_job_artifacts(max_age_hours: int = 72):
     """
     Clean up training artifacts from failed jobs.
@@ -2989,7 +3093,7 @@ async def cleanup_failed_job_artifacts(max_age_hours: int = 72):
     }
 
 
-@app.get("/cleanup/status")
+@app.get("/cleanup/status", tags=["Disk & Cleanup"], summary="Get cleanable resource summary")
 async def get_cleanup_status():
     """
     Get information about cleanable resources.
@@ -3067,7 +3171,7 @@ class SaveConfigRequest(BaseModel):
     )
 
 
-@app.post("/configs/save")
+@app.post("/configs/save", tags=["Configs"], summary="Save a training configuration")
 async def save_config(request: SaveConfigRequest):
     """
     Save a training configuration for later reuse.
@@ -3101,7 +3205,7 @@ async def save_config(request: SaveConfigRequest):
         raise HTTPException(status_code=500, detail=f"Failed to save configuration: {str(e)}")
 
 
-@app.get("/configs/list")
+@app.get("/configs/list", tags=["Configs"], summary="List saved configurations")
 async def list_configs(tag: Optional[str] = None):
     """
     List all saved training configurations.
@@ -3122,7 +3226,7 @@ async def list_configs(tag: Optional[str] = None):
         raise HTTPException(status_code=500, detail=f"Failed to list configurations: {str(e)}")
 
 
-@app.get("/configs/{name}")
+@app.get("/configs/{name}", tags=["Configs"], summary="Load a saved configuration")
 async def get_config(name: str, include_metadata: bool = False):
     """
     Load a saved training configuration.
@@ -3149,7 +3253,7 @@ async def get_config(name: str, include_metadata: bool = False):
         raise HTTPException(status_code=500, detail=f"Failed to load configuration: {str(e)}")
 
 
-@app.delete("/configs/{name}")
+@app.delete("/configs/{name}", tags=["Configs"], summary="Delete a saved configuration")
 async def delete_config(name: str):
     """
     Delete a saved training configuration.
@@ -3182,7 +3286,7 @@ class ExportConfigRequest(BaseModel):
     output_path: str = Field(..., description="Path to export the configuration to")
 
 
-@app.post("/configs/export")
+@app.post("/configs/export", tags=["Configs"], summary="Export a configuration to a file")
 async def export_config(request: ExportConfigRequest):
     """
     Export a configuration to a specific file path.
@@ -3211,7 +3315,7 @@ class ImportConfigRequest(BaseModel):
     name: Optional[str] = Field(None, description="Optional name for the imported config")
 
 
-@app.post("/configs/import")
+@app.post("/configs/import", tags=["Configs"], summary="Import a configuration from a file")
 async def import_config(request: ImportConfigRequest):
     """
     Import a configuration from an external file.
@@ -3239,7 +3343,7 @@ async def import_config(request: ImportConfigRequest):
         raise HTTPException(status_code=500, detail=f"Failed to import configuration: {str(e)}")
 
 
-@app.post("/configs/decode-image")
+@app.post("/configs/decode-image", tags=["Configs"], summary="Decode a config from a Merlina config image")
 async def decode_config_image(file: FastAPIUploadFile = File(...)):
     """
     Decode a training config from a Merlina config image (merlina_config.png).
@@ -3289,7 +3393,7 @@ class ModelPreloadRequest(BaseModel):
         return self
 
 
-@app.post("/model/preload")
+@app.post("/model/preload", tags=["Models"], summary="Preload a model's tokenizer")
 async def preload_model_tokenizer(request: ModelPreloadRequest):
     """
     Preload a model's tokenizer for dataset preview.
@@ -3344,7 +3448,7 @@ async def preload_model_tokenizer(request: ModelPreloadRequest):
         raise HTTPException(status_code=400, detail=f"Failed to load tokenizer: {str(e)}")
 
 
-@app.get("/model/cached")
+@app.get("/model/cached", tags=["Models"], summary="List cached tokenizers")
 async def list_cached_models():
     """List currently cached model tokenizers"""
     return {
@@ -3353,7 +3457,7 @@ async def list_cached_models():
     }
 
 
-@app.get("/models/local")
+@app.get("/models/local", tags=["Models"], summary="List local base models")
 async def list_local_base_models():
     """
     List base models available locally for offline training.
@@ -3385,7 +3489,7 @@ _layer_cache: Dict[str, dict] = {}
 _layer_cache_lock = threading.Lock()
 
 
-@app.post("/model/layers")
+@app.post("/model/layers", tags=["Models"], summary="Detect LoRA-compatible layers")
 async def detect_model_layers(request: ModelLayersRequest):
     """
     Detect LoRA-compatible layers in a model.
@@ -3523,7 +3627,7 @@ async def detect_model_layers(request: ModelLayersRequest):
 
 # ==================== Inference Endpoints ====================
 
-@app.get("/inference/models")
+@app.get("/inference/models", tags=["Inference"], summary="List models available for inference")
 async def list_inference_models():
     """List locally trained models available for inference"""
     if settings.models_dir.is_absolute():
@@ -3597,7 +3701,7 @@ async def list_inference_models():
     return {"models": local_models}
 
 
-@app.post("/inference/load")
+@app.post("/inference/load", tags=["Inference"], summary="Load a model for inference")
 async def load_inference_model(request: InferenceLoadRequest):
     """Load a model for inference."""
 
@@ -3796,7 +3900,7 @@ async def load_inference_model(request: InferenceLoadRequest):
         )
 
 
-@app.post("/inference/unload")
+@app.post("/inference/unload", tags=["Inference"], summary="Unload the inference model")
 async def unload_inference_model():
     """Unload the current inference model to free VRAM"""
     with _inference_lock:
@@ -3812,7 +3916,7 @@ async def unload_inference_model():
     }
 
 
-@app.get("/inference/status")
+@app.get("/inference/status", tags=["Inference"], summary="Get inference model status")
 async def inference_status():
     """Get the current inference model status"""
     with _inference_lock:
@@ -3848,7 +3952,7 @@ async def inference_status():
         }
 
 
-@app.post("/inference/chat")
+@app.post("/inference/chat", tags=["Inference"], summary="Chat with the loaded model")
 async def inference_chat(request: InferenceChatRequest):
     """Generate a response from the loaded model"""
     with _inference_lock:
@@ -4013,7 +4117,7 @@ def _resolve_is_vlm(model_type: str, base_model: str) -> bool:
     return is_vlm
 
 
-@app.get("/models/{name}/artifacts")
+@app.get("/models/{name}/artifacts", tags=["Models"], summary="List a model's artifacts")
 async def get_model_artifacts(name: str):
     """List categorized artifacts (files + sizes) for a local model."""
     from src.model_artifacts import inventory_model
@@ -4025,7 +4129,7 @@ async def get_model_artifacts(name: str):
     return inv.to_dict()
 
 
-@app.delete("/models/{name}/artifacts")
+@app.delete("/models/{name}/artifacts", tags=["Models"], summary="Delete a model artifact file")
 async def delete_model_artifact(name: str, path: str):
     """
     Delete a single file inside ``./models/{name}/``.
@@ -4067,7 +4171,7 @@ async def delete_model_artifact(name: str, path: str):
     return {"deleted": path, "model": name}
 
 
-@app.get("/models/{name}/upload-state")
+@app.get("/models/{name}/upload-state", tags=["Models"], summary="Get a model's upload history")
 async def get_model_upload_state(name: str):
     """Return upload history + freshness for the Export UI."""
     from src.upload_state import summary_for_api
@@ -4075,7 +4179,7 @@ async def get_model_upload_state(name: str):
     return summary_for_api(model_dir)
 
 
-@app.post("/models/{name}/upload")
+@app.post("/models/{name}/upload", tags=["Models"], summary="Upload a model to HuggingFace Hub")
 async def upload_existing_model(name: str, request: ModelUploadRequest):
     """
     Kick off a post-hoc HuggingFace Hub upload for an existing model dir.
@@ -4228,7 +4332,7 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
     }
 
 
-@app.post("/models/{name}/export-gguf")
+@app.post("/models/{name}/export-gguf", tags=["Models"], summary="Export a model to GGUF")
 async def export_gguf_for_existing_model(name: str, request: ModelGgufExportRequest):
     """Kick off a post-hoc GGUF export for an existing model dir."""
     from src.training_runner import _run_background_gguf_export, _perform_sync_merge
@@ -4453,7 +4557,7 @@ def main():
     logger.info("Starting Merlina - Magical Model Training")
     logger.info(f"Version: {__version__}")
     logger.info(f"Visit {display_url} to access the interface")
-    logger.info(f"API documentation: {display_url}/api/docs")
+    logger.info(f"API documentation: {display_url}/docs")
     logger.info(f"Health check: {display_url}/health")
     logger.info(f"Frontend directory: {FRONTEND_DIR}")
     logger.info(f"Database: {settings.database_path}")

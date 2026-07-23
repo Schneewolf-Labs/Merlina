@@ -270,7 +270,7 @@ if __name__ == "__main__":
 
 - **Test Summary**: [TEST_SUMMARY.md](TEST_SUMMARY.md) - Detailed coverage report
 - **Project Documentation**: [../CLAUDE.md](../CLAUDE.md) - Full project guide
-- **API Documentation**: http://localhost:8000/api/docs (when server running)
+- **API Documentation**: http://localhost:8000/docs (when server running)
 
 ## 🎯 Test Philosophy
 

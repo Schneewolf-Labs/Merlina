@@ -44,7 +44,8 @@ When working on Merlina, preserve this spirit. Keep the code clean and well-docu
 ```bash
 python merlina.py
 # Access UI at http://localhost:8000
-# API docs at http://localhost:8000/api/docs
+# API docs (Swagger UI) at http://localhost:8000/docs
+# OpenAPI spec at http://localhost:8000/openapi.json
 ```
 
 ### Testing
