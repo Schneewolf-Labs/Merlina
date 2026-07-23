@@ -41,8 +41,11 @@ class FakeClient:
         self._response = response or FakeResponse(json_data={"ok": True})
         self._raise_error = raise_error
 
-    async def request(self, method, path, params=None, json=None):
-        self.calls.append({"method": method, "path": path, "params": params, "json": json})
+    async def request(self, method, path, params=None, json=None, files=None, data=None):
+        self.calls.append({
+            "method": method, "path": path, "params": params,
+            "json": json, "files": files, "data": data,
+        })
         if self._raise_error is not None:
             raise self._raise_error
         return self._response
@@ -163,6 +166,126 @@ def test_preview_dataset_body():
     print("✓ preview_dataset posts a DatasetConfig body with limit/offset")
 
 
+def test_upload_dataset_posts_multipart():
+    import tempfile
+
+    client = FakeClient(FakeResponse(json_data={
+        "status": "success", "dataset_id": "upload_x", "filename": "d.jsonl", "size": 2,
+    }))
+    mcp_server.set_client(client)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            p = os.path.join(tmp, "d.jsonl")
+            with open(p, "w") as f:
+                f.write('{"prompt": "hi", "chosen": "yo"}\n')
+            out = run(mcp_server.upload_dataset(p))
+    finally:
+        mcp_server.set_client(None)
+
+    call = client.calls[0]
+    assert call["method"] == "POST"
+    assert call["path"] == "/dataset/upload-file"
+    field, (name, content) = call["files"][0]
+    assert field == "file"
+    assert name == "d.jsonl"
+    assert b'"prompt"' in content
+    parsed = json.loads(out)
+    assert parsed["dataset_id"] == "upload_x"
+    assert "upload" in parsed["hint"]
+    print("✓ upload_dataset posts the file as multipart and returns the dataset_id")
+
+
+def test_upload_dataset_missing_file_is_friendly():
+    client = FakeClient()
+    mcp_server.set_client(client)
+    try:
+        out = run(mcp_server.upload_dataset("/nonexistent/nope.jsonl"))
+    finally:
+        mcp_server.set_client(None)
+
+    parsed = json.loads(out)
+    assert parsed["error"] == "file_not_found"
+    assert client.calls == []  # never hit the network
+    print("✓ upload_dataset surfaces a missing local file without an HTTP call")
+
+
+def test_upload_image_dataset_from_manifest():
+    import tempfile
+
+    client = FakeClient(FakeResponse(json_data={
+        "status": "success", "batch_id": "images_x",
+        "jsonl_path": "/srv/uploads/images_x/train.jsonl", "image_count": 2,
+    }))
+    mcp_server.set_client(client)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in ("a.png", "b.png"):
+                with open(os.path.join(tmp, name), "wb") as f:
+                    f.write(b"fakepng-" + name.encode())
+            manifest = os.path.join(tmp, "train.jsonl")
+            with open(manifest, "w") as f:
+                f.write(json.dumps({"prompt": "a cat", "image": "a.png"}) + "\n")
+                f.write(json.dumps({"caption": "a dog", "image": os.path.join(tmp, "b.png")}) + "\n")
+            out = run(mcp_server.upload_image_dataset(manifest))
+    finally:
+        mcp_server.set_client(None)
+
+    call = client.calls[0]
+    assert call["path"] == "/dataset/upload-images"
+    names = [f[1][0] for f in call["files"]]
+    assert names == ["a.png", "b.png"]
+    captions = json.loads(call["data"]["captions"])
+    assert captions == {"a.png": "a cat", "b.png": "a dog"}
+    parsed = json.loads(out)
+    assert parsed["jsonl_path"] == "/srv/uploads/images_x/train.jsonl"
+    assert "dataset_jsonl_path" in parsed["hint"]
+    print("✓ upload_image_dataset ships manifest-referenced images with captions")
+
+
+def test_upload_image_dataset_from_directory_with_sidecars():
+    import tempfile
+
+    client = FakeClient(FakeResponse(json_data={
+        "status": "success", "jsonl_path": "/srv/uploads/images_y/train.jsonl",
+    }))
+    mcp_server.set_client(client)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            with open(os.path.join(tmp, "cat.jpg"), "wb") as f:
+                f.write(b"fakejpg")
+            with open(os.path.join(tmp, "cat.txt"), "w") as f:
+                f.write("a fluffy cat\n")
+            with open(os.path.join(tmp, "dog.jpg"), "wb") as f:
+                f.write(b"fakejpg2")
+            with open(os.path.join(tmp, "notes.md"), "w") as f:
+                f.write("not an image")
+            out = run(mcp_server.upload_image_dataset(tmp))
+    finally:
+        mcp_server.set_client(None)
+
+    call = client.calls[0]
+    names = sorted(f[1][0] for f in call["files"])
+    assert names == ["cat.jpg", "dog.jpg"]  # sidecar + non-image skipped
+    captions = json.loads(call["data"]["captions"])
+    assert captions == {"cat.jpg": "a fluffy cat"}  # dog.jpg falls back server-side
+    assert json.loads(out)["jsonl_path"].endswith("train.jsonl")
+    print("✓ upload_image_dataset reads a directory with .txt caption sidecars")
+
+
+def test_upload_image_dataset_missing_path_is_friendly():
+    client = FakeClient()
+    mcp_server.set_client(client)
+    try:
+        out = run(mcp_server.upload_image_dataset("/nonexistent/imgs"))
+    finally:
+        mcp_server.set_client(None)
+
+    parsed = json.loads(out)
+    assert parsed["error"] == "path_not_found"
+    assert client.calls == []
+    print("✓ upload_image_dataset surfaces a missing local path without an HTTP call")
+
+
 def test_http_error_is_returned_not_raised():
     client = FakeClient(FakeResponse(status_code=404, json_data={"detail": "Job not found"}))
     mcp_server.set_client(client)
@@ -216,6 +339,11 @@ def main():
         test_start_training_builds_config,
         test_start_training_upload_source,
         test_preview_dataset_body,
+        test_upload_dataset_posts_multipart,
+        test_upload_dataset_missing_file_is_friendly,
+        test_upload_image_dataset_from_manifest,
+        test_upload_image_dataset_from_directory_with_sidecars,
+        test_upload_image_dataset_missing_path_is_friendly,
         test_http_error_is_returned_not_raised,
         test_connection_error_is_friendly,
         test_build_server_registers_all_tools,

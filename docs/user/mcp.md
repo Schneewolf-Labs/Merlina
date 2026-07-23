@@ -85,6 +85,8 @@ claude mcp add merlina --env MERLINA_API_URL=http://localhost:8000 -- merlina-mc
 | `list_gpus`                | Available GPUs with memory/utilization                             |
 | `list_local_models`        | Base models already on disk (for offline use)                      |
 | `list_uploaded_datasets`   | Datasets uploaded to the server                                    |
+| `upload_dataset`           | Upload a local JSON/JSONL/CSV/Parquet dataset file to the server   |
+| `upload_image_dataset`     | Upload a local image dataset (JSONL manifest or folder) for diffusion |
 | `preview_dataset`          | Preview raw samples from a HuggingFace or uploaded dataset         |
 
 ### `start_training`
@@ -109,6 +111,20 @@ in `overrides`, which is merged at the top level and wins over the named args:
 The server runs pre-flight validation before queueing; if it fails, the tool
 result contains the validation errors. Use `validate_training_config` to check
 a config without committing GPU time.
+
+### Remote servers and local paths
+
+Filesystem paths inside a training config — a local `base_model` directory,
+`dataset_jsonl_path` for diffusion jobs, a `local_file` dataset source — are
+resolved on the **Merlina server's** filesystem, not on the machine running
+`merlina-mcp`. Against a remote server, use HuggingFace ids, or upload first:
+
+- `upload_dataset("/path/to/data.jsonl")` ships a text dataset over HTTP and
+  returns a `dataset_id` for `dataset_source_type='upload'`.
+- `upload_image_dataset("/path/to/images/")` (a folder with optional `.txt`
+  caption sidecars, or a JSONL manifest of `{prompt, image}` rows) uploads a
+  diffusion dataset and returns the server-side `jsonl_path` to pass as
+  `overrides={"dataset_jsonl_path": ...}`.
 
 ## How it fits together
 

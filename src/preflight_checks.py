@@ -280,7 +280,10 @@ class PreflightValidator:
             jsonl = os.path.expanduser(config.dataset_jsonl_path)
             if not os.path.exists(jsonl):
                 self.errors.append(
-                    f"dataset_jsonl_path does not exist: {jsonl}"
+                    f"dataset_jsonl_path does not exist: {jsonl} "
+                    "(paths are resolved on the machine running Merlina, not the "
+                    "API client — remote clients should upload via POST "
+                    "/dataset/upload-images or use dataset_name instead)"
                 )
             else:
                 details["dataset_jsonl_path"] = jsonl
