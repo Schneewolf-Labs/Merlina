@@ -1116,7 +1116,14 @@ def run_training_distributed(
             sys.executable, "-m", "accelerate.commands.launch",
             "--num_processes", str(num_gpus),
             "--mixed_precision", accel_mp,
-            "--multi_gpu",
+        ]
+        # --multi_gpu is only valid (and only meaningful) with >1 process.
+        # With num_gpus == 1 this launches an ordinary single-process run in
+        # its own subprocess — which is what isolates training from the API
+        # event loop (see _make_training_callback in merlina.py).
+        if num_gpus > 1:
+            cmd.append("--multi_gpu")
+        cmd += [
             worker_script,
             "--config-path", config_path,
             "--job-id", job_id,
