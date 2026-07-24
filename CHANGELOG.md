@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.1.1] - 2026-07-23
+
+### Fixed
+- **API going unresponsive during single-GPU training**: single-GPU jobs ran `run_training_sync` in a thread-pool executor, so the GIL-holding model load + train loop starved uvicorn's event loop — `/health`, `/status`, and `/jobs/{id}/stop` all hung for the entire run. Single-GPU jobs now route through the same subprocess path used for multi-GPU (`run_training_distributed` → `accelerate launch` → `train_worker.py`), which already handles progress-file tailing and stop forwarding; `--multi_gpu` is now conditional on `num_gpus > 1` so a 1-GPU launch is a plain single-process subprocess. `strategy="single"` still forces the old in-thread path.
+- **Training subprocess stdout buffering**: `PYTHONUNBUFFERED=1` is now set in the worker environment so tqdm/log progress streams live to the captured pipe instead of flushing in one burst at the end (the "1% ... 100%" artifact).
+
+
+
 ## [2.1.0] - 2026-07-23 "Workshop"
 
 ### Added
