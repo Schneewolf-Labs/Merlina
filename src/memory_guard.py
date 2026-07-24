@@ -67,10 +67,18 @@ UNIFIED_POOL_RATIO = 0.9
 MAX_RESERVE_FRACTION = 0.25
 
 # Fallback defaults, overridable via Settings (config.py) / .env.
-DEFAULT_RESERVE_GB = 12.0
-DEFAULT_SOFT_FREE_GB = 8.0
-DEFAULT_HARD_FREE_GB = 3.0
-DEFAULT_POLL_SECONDS = 5.0
+# Tuned up for large unified boards (DGX Spark / GB10, 128 GB): the old
+# 12/8 GB left almost no headroom for the *control plane* (the Merlina API,
+# an attached Jupyter, the OS). Training could sit at ~116 GB with the box
+# thrashing while free RAM stayed just above the 8 GB soft floor, so the
+# guard never fired yet /health went dark. Bigger reserve caps the CUDA
+# allocator lower; higher soft floor throttles before the box thrashes;
+# faster polling shrinks the reaction window. Small boards are unaffected
+# (MAX_RESERVE_FRACTION and the per-board floor scaling below cap these).
+DEFAULT_RESERVE_GB = 24.0
+DEFAULT_SOFT_FREE_GB = 16.0
+DEFAULT_HARD_FREE_GB = 6.0
+DEFAULT_POLL_SECONDS = 2.0
 
 _FORENSIC_LOG_MAX_BYTES = 2 * 1024 * 1024
 
@@ -359,10 +367,14 @@ class MemoryWatchdog(threading.Thread):
     ):
         super().__init__(name=f"MemoryWatchdog-{job_id or 'global'}", daemon=True)
         # Scale the floors down on small unified boards so they aren't
-        # permanently below the soft limit.
+        # permanently below the soft limit. The caps are a fraction of total
+        # RAM; raised from 0.10/0.04 to 0.18/0.08 so that on large boards
+        # (e.g. 128 GB Spark) the higher default floors (16/6 GB) actually
+        # apply — the control plane needs that headroom to stay responsive.
+        # Small boards still scale down (16 GB Jetson: 0.18*16 = 2.9 GB).
         total_gb = memory_reader().system_total
-        self.soft_free_gb = min(soft_free_gb, total_gb * 0.10) if total_gb else soft_free_gb
-        self.hard_free_gb = min(hard_free_gb, total_gb * 0.04) if total_gb else hard_free_gb
+        self.soft_free_gb = min(soft_free_gb, total_gb * 0.18) if total_gb else soft_free_gb
+        self.hard_free_gb = min(hard_free_gb, total_gb * 0.08) if total_gb else hard_free_gb
         self.poll_seconds = poll_seconds
         self.on_soft_limit = on_soft_limit
         self.on_hard_limit = on_hard_limit
