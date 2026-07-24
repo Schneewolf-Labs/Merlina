@@ -1116,7 +1116,14 @@ def run_training_distributed(
             sys.executable, "-m", "accelerate.commands.launch",
             "--num_processes", str(num_gpus),
             "--mixed_precision", accel_mp,
-            "--multi_gpu",
+        ]
+        # --multi_gpu is only valid (and only meaningful) with >1 process.
+        # With num_gpus == 1 this launches an ordinary single-process run in
+        # its own subprocess — which is what isolates training from the API
+        # event loop (see _make_training_callback in merlina.py).
+        if num_gpus > 1:
+            cmd.append("--multi_gpu")
+        cmd += [
             worker_script,
             "--config-path", config_path,
             "--job-id", job_id,
@@ -1128,6 +1135,10 @@ def run_training_distributed(
 
         # Set up environment
         env = os.environ.copy()
+        # Unbuffer the worker's stdout so tqdm progress bars and log lines
+        # stream to the captured pipe live, instead of arriving in one burst
+        # when the block buffer flushes (the "1% ... then 100%" artifact).
+        env["PYTHONUNBUFFERED"] = "1"
         if config.gpu_ids is not None:
             env["CUDA_VISIBLE_DEVICES"] = ",".join(str(g) for g in config.gpu_ids)
 

@@ -1271,11 +1271,19 @@ def _make_training_callback(event_loop):
 
         strategy = config_obj.multi_gpu_strategy
         num_gpus = _get_distributed_gpu_count(config_obj)
-        use_distributed = strategy != "single" and num_gpus > 1
+        # Run training in a subprocess whenever a GPU is present, even for a
+        # single GPU. The subprocess path (run_training_distributed ->
+        # accelerate launch -> train_worker.py) isolates the heavy, GIL-holding
+        # model-load + train loop from the API event loop, so /health, /status,
+        # and /jobs/*/stop stay responsive *during* training. Running in-thread
+        # (the old num_gpus > 1 gate) froze every endpoint for the whole run.
+        # strategy == "single" is the escape hatch back to in-thread execution.
+        use_subprocess = strategy != "single" and num_gpus >= 1
 
-        if use_distributed:
+        if use_subprocess:
+            mode = "DDP" if num_gpus > 1 else "single-GPU subprocess"
             logger.info(
-                f"Using distributed DDP training with {num_gpus} GPUs "
+                f"Using {mode} training with {num_gpus} GPU(s) "
                 f"(strategy={strategy})"
             )
             run_training_distributed(
