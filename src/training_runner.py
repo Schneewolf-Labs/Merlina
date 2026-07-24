@@ -1135,6 +1135,10 @@ def run_training_distributed(
 
         # Set up environment
         env = os.environ.copy()
+        # Unbuffer the worker's stdout so tqdm progress bars and log lines
+        # stream to the captured pipe live, instead of arriving in one burst
+        # when the block buffer flushes (the "1% ... then 100%" artifact).
+        env["PYTHONUNBUFFERED"] = "1"
         if config.gpu_ids is not None:
             env["CUDA_VISIBLE_DEVICES"] = ",".join(str(g) for g in config.gpu_ids)
 
