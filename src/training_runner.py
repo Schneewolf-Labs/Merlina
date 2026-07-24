@@ -920,15 +920,29 @@ def _monitor_distributed_progress(
     Blocks until the subprocess exits.
     """
     last_pos = 0
+    # Track when a stop was first forwarded so we can escalate. The graceful
+    # SIGTERM path depends on the worker's on_step_end callback firing and
+    # grimoire honoring request_stop(); if the loop is between long steps, is
+    # wedged, or the callback isn't reached, SIGTERM alone leaves the run
+    # effectively unstoppable. After a grace window we escalate to SIGKILL so
+    # a stop request is always honored.
+    stop_sigterm_at = None
+    STOP_GRACE_SECONDS = 180
 
     while proc.poll() is None:
         # Check for stop requests and forward to subprocess
         job = job_manager.get_job(job_id)
         if job and job.stop_requested:
-            logger.info(f"Forwarding stop request to distributed subprocess for job {job_id}")
             try:
-                # Send SIGTERM to the entire process group
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                if stop_sigterm_at is None:
+                    logger.info(f"Forwarding stop (SIGTERM) to subprocess for job {job_id}")
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                    stop_sigterm_at = time.monotonic()
+                elif time.monotonic() - stop_sigterm_at > STOP_GRACE_SECONDS:
+                    logger.warning(
+                        f"Job {job_id} did not exit {STOP_GRACE_SECONDS}s after "
+                        f"SIGTERM — escalating to SIGKILL")
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except (ProcessLookupError, OSError):
                 pass
 
