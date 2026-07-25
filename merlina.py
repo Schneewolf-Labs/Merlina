@@ -363,7 +363,7 @@ class DatasetSource(BaseModel):
 
 class DatasetFormat(BaseModel):
     """Configuration for dataset formatting"""
-    format_type: str = Field("chatml", description="Format type: chatml, llama3, mistral, qwen3, tokenizer, custom")
+    format_type: str = Field("chatml", description="Format type: chatml, llama3, mistral, qwen3, tokenizer, custom, raw (no formatting)")
 
     # For custom format
     custom_templates: Optional[dict] = Field(

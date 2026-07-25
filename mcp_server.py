@@ -403,7 +403,7 @@ async def preview_dataset(
         source_type: 'huggingface' (default) or 'upload'.
         split: Dataset split (default 'train').
         format_type: Format to validate against: chatml, llama3, mistral,
-            qwen3, custom (default 'chatml').
+            qwen3, custom, raw (default 'chatml').
         training_mode: Affects which columns are required (default 'orpo').
         limit: Number of samples to return (default 5).
         offset: Number of samples to skip (default 0).
@@ -480,7 +480,8 @@ async def start_training(
             a 'vlm_*'/'diffusion_*' mode.
         dataset_source_type: 'huggingface' (default) or 'upload'.
         dataset_split: Dataset split (default 'train').
-        dataset_format: chatml, llama3, mistral, qwen3, tokenizer, or custom.
+        dataset_format: chatml, llama3, mistral, qwen3, tokenizer, custom, or
+            raw (no formatting — columns passed through verbatim).
         learning_rate: Learning rate (default 5e-6).
         num_epochs: Number of epochs (default 2).
         use_lora: Train with LoRA adapters (default True).

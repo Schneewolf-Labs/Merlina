@@ -461,6 +461,17 @@ describe('buildDatasetConfig — full dataset coverage', () => {
             rejected_template: 'R:{rejected}',
         });
     });
+
+    it('sends bare format block when format_type=raw', () => {
+        setState(fullFormState({
+            extras: { 'dataset-format-type': 'raw' },
+        }));
+        const ds = buildDatasetConfig();
+        assert.equal(ds.format.format_type, 'raw');
+        assert.equal(ds.format.custom_templates, undefined);
+        assert.equal(ds.format.enable_thinking, undefined);
+        assert.equal(ds.format.auto_detect_thinking, undefined);
+    });
 });
 
 // ─── share_config flag ──────────────────────────────────────────────────────

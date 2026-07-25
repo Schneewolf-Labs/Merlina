@@ -586,7 +586,8 @@ class DatasetManager {
                 'llama3': 'Llama 3',
                 'mistral': 'Mistral Instruct',
                 'qwen3': `Qwen 3 (thinking ${datasetConfig.format.enable_thinking ? 'enabled' : 'disabled'})`,
-                'custom': 'Custom Template'
+                'custom': 'Custom Template',
+                'raw': 'Raw (No Formatting)'
             };
             if (formatTypeEl) formatTypeEl.textContent = formatNames[formatType] || formatType;
 

@@ -150,8 +150,9 @@ The dataset system uses a modular strategy pattern with three main abstractions:
 
 2. **DatasetFormatter** (base.py, formatters.py)
    - Abstract base class for formatting strategies
-   - Implementations: `ChatMLFormatter`, `Llama3Formatter`, `MistralFormatter`, `CustomFormatter`, `TokenizerFormatter`
+   - Implementations: `ChatMLFormatter`, `Llama3Formatter`, `MistralFormatter`, `CustomFormatter`, `TokenizerFormatter`, `RawFormatter`
    - `TokenizerFormatter` is special - it uses the model's native chat template from tokenizer_config.json
+   - `RawFormatter` (`format_type: "raw"`, alias `"none"`) applies no chat template - columns pass through verbatim (for pre-formatted or plain-text datasets)
    - Factory function `get_formatter()` creates appropriate formatter instances
 
 3. **DatasetPipeline** (base.py)

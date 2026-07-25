@@ -555,6 +555,7 @@ test.describe('Dataset format', () => {
         expect(options.some(o => /tokenizer/i.test(o))).toBeTruthy();
         expect(options.some(o => /chatml/i.test(o))).toBeTruthy();
         expect(options.some(o => /llama/i.test(o))).toBeTruthy();
+        expect(options.some(o => /raw/i.test(o))).toBeTruthy();
     });
 
     test('custom format config appears when Custom selected', async ({ page }) => {
