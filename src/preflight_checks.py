@@ -570,13 +570,78 @@ class PreflightValidator:
                 "has_token": bool(config.hf_token or os.getenv("HF_TOKEN"))
             }
 
+    def _check_hf_dataset_resolves(self, repo_id: str, hf_token: Optional[str], label: str) -> None:
+        """Verify an HF Hub dataset id actually resolves before GPU time is spent.
+
+        Unresolvable repos are hard errors (this is exactly the case where a
+        job would otherwise fail — or worse, silently fall back — at load
+        time). Network / hub outages only warn, so offline setups serving
+        from the local HF cache aren't blocked.
+        """
+        try:
+            from huggingface_hub import HfApi
+            from huggingface_hub.utils import GatedRepoError, RepositoryNotFoundError
+        except ImportError:
+            self.warnings.append(
+                f"huggingface_hub not importable — could not verify that {label} "
+                f"'{repo_id}' exists on the Hub."
+            )
+            return
+
+        try:
+            HfApi().dataset_info(repo_id, token=hf_token or None, timeout=10.0)
+        except GatedRepoError:
+            self.errors.append(
+                f"{label} '{repo_id}' is gated and the provided hf_token does not "
+                "grant access. Accept the dataset's terms on huggingface.co and/or "
+                "provide a valid hf_token."
+            )
+        except RepositoryNotFoundError:
+            self.errors.append(
+                f"{label} '{repo_id}' does not resolve on the HuggingFace Hub. "
+                "Check the id for typos, or provide hf_token if it is a private "
+                "dataset."
+            )
+        except Exception as e:
+            self.warnings.append(
+                f"Could not verify {label} '{repo_id}' on the Hub "
+                f"({type(e).__name__}: {e}). If the dataset is not already in the "
+                "local HF cache, the job will fail at load time."
+            )
+
     def _check_dataset_config(self, config: Any) -> Dict[str, Any]:
         """Validate dataset configuration"""
         dataset_source = config.dataset.source
+        hf_token = getattr(config, "hf_token", None)
+
+        # Diffusion-only dataset fields on a text-mode job would be silently
+        # ignored by every text runner — the job would train on
+        # dataset.source (or nothing) instead of the corpus the user named.
+        # TrainingConfig validation resolves/rejects these for API submits;
+        # this catches configs that reached the validator some other way.
+        cfg_dataset_name = getattr(config, "dataset_name", None)
+        if cfg_dataset_name and cfg_dataset_name != dataset_source.repo_id:
+            self.errors.append(
+                f"dataset_name ('{cfg_dataset_name}') is set but this text-mode job "
+                f"would train on dataset.source ('{dataset_source.repo_id}'). "
+                "Set dataset.source.repo_id to the intended dataset."
+            )
+        if getattr(config, "dataset_jsonl_path", None):
+            self.errors.append(
+                "dataset_jsonl_path is a diffusion-only field and is ignored by "
+                "text training modes — use dataset.source instead."
+            )
 
         if dataset_source.source_type == "huggingface":
             if not dataset_source.repo_id:
-                self.errors.append("HuggingFace dataset requires repo_id")
+                self.errors.append(
+                    "No dataset configured: HuggingFace dataset requires "
+                    "dataset.source.repo_id (there is no default dataset)."
+                )
+            else:
+                self._check_hf_dataset_resolves(
+                    dataset_source.repo_id, hf_token, "Dataset"
+                )
 
         elif dataset_source.source_type == "local_file":
             if not dataset_source.file_path:
@@ -590,6 +655,26 @@ class PreflightValidator:
 
         else:
             self.errors.append(f"Invalid dataset source_type: {dataset_source.source_type}")
+
+        # Additional / eval sources: same resolution guarantee as the primary.
+        extra_sources = list(getattr(config.dataset, "additional_sources", None) or [])
+        eval_source = getattr(config.dataset, "eval_source", None)
+        if eval_source is not None:
+            extra_sources.append(eval_source)
+        for extra in extra_sources:
+            source_type = getattr(extra, "source_type", None)
+            if source_type == "huggingface":
+                repo_id = getattr(extra, "repo_id", None)
+                if not repo_id:
+                    self.errors.append("Additional HuggingFace dataset source requires repo_id")
+                else:
+                    self._check_hf_dataset_resolves(repo_id, hf_token, "Additional dataset")
+            elif source_type == "local_file":
+                file_path = getattr(extra, "file_path", None)
+                if not file_path:
+                    self.errors.append("Additional local file dataset source requires file_path")
+                elif not Path(file_path).exists():
+                    self.errors.append(f"Additional dataset file not found: {file_path}")
 
         # Check format
         dataset_format = config.dataset.format

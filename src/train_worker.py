@@ -336,13 +336,19 @@ def run_worker(args):
     except Exception as e:
         logger.error(f"Failed to load training config: {e}", exc_info=True)
         if is_main:
-            with open(args.progress_file, "a") as f:
-                f.write(json.dumps({"type": "error", "error": f"Config load failed: {e}"}) + "\n")
+            # Each report is guarded independently: the progress file may be
+            # gone (e.g. parent died and cleaned up) and the DB may be locked
+            # — one failing must not stop the other from recording the error.
+            try:
+                with open(args.progress_file, "a") as f:
+                    f.write(json.dumps({"type": "error", "error": f"Config load failed: {e}"}) + "\n")
+            except Exception:
+                logger.exception("Could not write config-load error to progress file")
             try:
                 jm = JobManager(db_path=args.db_path)
                 jm.update_job(args.job_id, status="failed", error=str(e))
             except Exception:
-                pass
+                logger.exception("Could not record config-load failure in job DB")
         return
 
     logger.info(f"Worker started: rank={global_rank}, local_rank={local_rank}")
@@ -725,15 +731,21 @@ def run_worker(args):
             gc.collect()
             torch.cuda.empty_cache()
 
-            # Write completion to progress file
-            with open(args.progress_file, "a") as f:
-                f.write(json.dumps({
-                    "type": "completed",
-                    "was_stopped": was_stopped,
-                    "output_dir": final_output_dir,
-                    "final_step": final_step,
-                    "final_max_steps": final_max_steps,
-                }) + "\n")
+            # Write completion to progress file. Best-effort: the model is
+            # already saved, so a missing/unwritable progress file (e.g. the
+            # parent died and its temp dir is gone) must not fail the job —
+            # the DB status updates below are the source of truth.
+            try:
+                with open(args.progress_file, "a") as f:
+                    f.write(json.dumps({
+                        "type": "completed",
+                        "was_stopped": was_stopped,
+                        "output_dir": final_output_dir,
+                        "final_step": final_step,
+                        "final_max_steps": final_max_steps,
+                    }) + "\n")
+            except Exception:
+                logger.exception("Could not write completion to progress file")
 
             # Handle Hub upload (inline — no websocket needed in subprocess)
             if config.push_to_hub and config.hf_token:
@@ -766,19 +778,31 @@ def run_worker(args):
     except Exception as e:
         logger.error(f"Training failed: {e}", exc_info=True)
         if is_main:
-            if job_manager:
-                job_manager.update_job(args.job_id, status="failed", error=str(e))
-            # Write error to progress file
-            with open(args.progress_file, "a") as f:
-                f.write(json.dumps({"type": "error", "error": str(e)}) + "\n")
-            if config.use_wandb and wandb is not None and wandb.run is not None:
-                try:
+            # Guard every reporting step independently. A secondary failure
+            # here (locked DB, deleted progress dir, wandb teardown error)
+            # used to escape the handler, masking the original exception and
+            # leaving the job stuck in a non-terminal status.
+            try:
+                if job_manager:
+                    job_manager.update_job(args.job_id, status="failed", error=str(e))
+            except Exception:
+                logger.exception("Could not record training failure in job DB")
+            try:
+                with open(args.progress_file, "a") as f:
+                    f.write(json.dumps({"type": "error", "error": str(e)}) + "\n")
+            except Exception:
+                logger.exception("Could not write training failure to progress file")
+            try:
+                if config.use_wandb and wandb is not None and wandb.run is not None:
                     wandb.finish(exit_code=1)
-                except Exception:
-                    pass
+            except Exception:
+                logger.debug("wandb.finish failed during error handling", exc_info=True)
 
     finally:
-        memory_guard.shutdown()
+        try:
+            memory_guard.shutdown()
+        except Exception:
+            logger.exception("Memory guard shutdown failed")
         _cleanup_training_resources(model, trainer)
 
 

@@ -36,6 +36,15 @@ class JobRecord:
     stop_requested: bool = False
     upload_error: Optional[str] = None
     gguf_error: Optional[str] = None
+    # Subprocess bookkeeping so an API restart can find (and re-attach to)
+    # a still-running training worker instead of orphaning it.
+    worker_pid: Optional[int] = None
+    progress_file: Optional[str] = None
+
+
+# Sentinel so update_job can distinguish "leave field unchanged" (default)
+# from "set field to NULL" (explicit None) for the worker bookkeeping fields.
+_UNSET = object()
 
 
 class JobManager:
@@ -120,6 +129,14 @@ class JobManager:
             if 'gguf_error' not in existing_columns:
                 cursor.execute("ALTER TABLE jobs ADD COLUMN gguf_error TEXT")
                 logger.info("Added gguf_error column to jobs table")
+
+            if 'worker_pid' not in existing_columns:
+                cursor.execute("ALTER TABLE jobs ADD COLUMN worker_pid INTEGER")
+                logger.info("Added worker_pid column to jobs table")
+
+            if 'progress_file' not in existing_columns:
+                cursor.execute("ALTER TABLE jobs ADD COLUMN progress_file TEXT")
+                logger.info("Added progress_file column to jobs table")
 
             # Training metrics table (for time-series data)
             cursor.execute("""
@@ -224,6 +241,8 @@ class JobManager:
         stop_requested: Optional[bool] = None,
         upload_error: Optional[str] = None,
         gguf_error: Optional[str] = None,
+        worker_pid: Any = _UNSET,
+        progress_file: Any = _UNSET,
     ) -> bool:
         """
         Update job fields.
@@ -293,6 +312,16 @@ class JobManager:
         if gguf_error is not None:
             updates.append("gguf_error = ?")
             params.append(gguf_error)
+
+        # Sentinel-based so an explicit None clears the column (a job with no
+        # live worker must not keep advertising a stale pid).
+        if worker_pid is not _UNSET:
+            updates.append("worker_pid = ?")
+            params.append(worker_pid)
+
+        if progress_file is not _UNSET:
+            updates.append("progress_file = ?")
+            params.append(progress_file)
 
         if not updates:
             return False
@@ -546,4 +575,6 @@ class JobManager:
             stop_requested=bool(row["stop_requested"]) if "stop_requested" in row.keys() else False,
             upload_error=row["upload_error"] if "upload_error" in row.keys() else None,
             gguf_error=row["gguf_error"] if "gguf_error" in row.keys() else None,
+            worker_pid=row["worker_pid"] if "worker_pid" in row.keys() else None,
+            progress_file=row["progress_file"] if "progress_file" in row.keys() else None,
         )

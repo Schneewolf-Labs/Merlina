@@ -46,7 +46,7 @@ from dataset_handlers import (
 from src.job_manager import JobManager
 from src.websocket_manager import websocket_manager
 from src.preflight_checks import validate_config
-from src.config_manager import ConfigManager
+from src.config_manager import ConfigManager, strip_secrets
 from src.job_queue import JobQueue, JobPriority
 from src.gpu_utils import get_gpu_manager
 from src.presets import get_preset, get_all_presets
@@ -203,6 +203,27 @@ async def _preload_training_modules():
         name="TrainingRunnerWarmup",
         daemon=True,
     ).start()
+
+
+@app.on_event("startup")
+async def _reconcile_jobs_after_restart():
+    """Re-adopt training workers that survived a server restart.
+
+    Training runs in a detached subprocess, so a restart doesn't kill it.
+    This scan re-attaches a monitor to workers that are still alive (progress
+    keeps flowing, /stop keeps working) and marks jobs whose worker is gone
+    as failed instead of leaving them presenting as "training" forever.
+    """
+    loop = asyncio.get_running_loop()
+
+    def _run():
+        try:
+            from src.worker_reattach import reattach_orphaned_workers
+            reattach_orphaned_workers(job_manager, event_loop=loop)
+        except Exception as e:
+            logger.warning(f"Worker reattach scan failed: {e}")
+
+    threading.Thread(target=_run, name="WorkerReattach", daemon=True).start()
 
 
 # Backwards-compatible redirects for the old documentation URLs
@@ -381,12 +402,14 @@ class DatasetFormat(BaseModel):
 class DatasetConfig(BaseModel):
     """Complete dataset configuration"""
     source: DatasetSource = Field(
-        default=DatasetSource(
+        default_factory=lambda: DatasetSource(
             source_type="huggingface",
-            repo_id="schneewolflabs/Athanorlite-DPO",
             split="train"
         ),
-        description="Primary dataset source configuration"
+        description="Primary dataset source configuration. There is no default "
+                    "dataset — repo_id (or file_path / dataset_id) must be set, "
+                    "otherwise validation and pre-flight fail rather than "
+                    "silently training on an unintended corpus."
     )
 
     additional_sources: list[DatasetSource] = Field(
@@ -775,6 +798,69 @@ class TrainingConfig(BaseModel):
             raise ValueError(
                 "export_gguf is enabled but gguf_quant_types is empty — "
                 "pick at least one (e.g. 'Q4_K_M')."
+            )
+        return self
+
+    def _is_diffusion_job(self) -> bool:
+        mode = (self.model_type or "auto").lower()
+        train_mode = (self.training_mode or "").lower()
+        return mode == "diffusion" or train_mode.startswith("diffusion_")
+
+    @model_validator(mode="after")
+    def _resolve_dataset_name_for_text_modes(self):
+        """Make ``dataset_name`` count for every training mode.
+
+        ``dataset_name`` / ``dataset_split`` started as diffusion-only fields;
+        text-mode runners only read ``dataset.source``. A text-mode request
+        that set ``dataset_name`` used to be accepted and then silently
+        trained on whatever ``dataset.source`` held instead. Now:
+
+        - If the primary ``dataset.source`` is unset, ``dataset_name`` is
+          mapped into it (as a HuggingFace source).
+        - If both are set and disagree, the request is rejected instead of
+          picking one silently.
+        """
+        if self._is_diffusion_job() or not self.dataset_name:
+            return self
+
+        src = self.dataset.source
+        src_specified = bool(src.repo_id or src.file_path or src.dataset_id)
+        if not src_specified:
+            self.dataset.source = DatasetSource(
+                source_type="huggingface",
+                repo_id=self.dataset_name,
+                split=self.dataset_split or "train",
+            )
+        else:
+            matches = (
+                src.source_type == "huggingface"
+                and src.repo_id == self.dataset_name
+                and (not self.dataset_split or self.dataset_split == src.split)
+            )
+            if not matches:
+                described = src.repo_id or src.file_path or src.dataset_id
+                raise ValueError(
+                    f"dataset_name ('{self.dataset_name}') and dataset.source "
+                    f"({src.source_type}: '{described}') disagree — it is ambiguous "
+                    "which corpus to train on. For text training modes set "
+                    "dataset.source.repo_id, or drop dataset.source and pass only "
+                    "dataset_name."
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_diffusion_only_dataset_fields(self):
+        """``dataset_jsonl_path`` has no consumer outside the diffusion runner.
+
+        Accepting it on a text-mode job means the named data is silently
+        ignored and training proceeds on ``dataset.source`` — fail loudly
+        instead.
+        """
+        if not self._is_diffusion_job() and self.dataset_jsonl_path:
+            raise ValueError(
+                "dataset_jsonl_path is only supported for diffusion training "
+                "modes. For text modes, set dataset.source (HuggingFace repo, "
+                "local file, or uploaded dataset id) instead."
             )
         return self
 
@@ -1480,10 +1566,12 @@ async def get_job_config(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    # Credentials (hf_token, wandb_key) are stored with the job so retries
+    # work, but must never travel back out over the API.
     return {
         "status": "success",
         "job_id": job_id,
-        "config": job.config
+        "config": strip_secrets(job.config) if job.config else job.config
     }
 
 
@@ -1836,8 +1924,14 @@ async def stop_job(job_id: str):
             }
 
     # If job is running, request graceful stop
-    if queue_status.get("state") == "running" or job.status in ["training", "loading_model", "loading_dataset", "initializing"]:
+    if queue_status.get("state") == "running" or job.status in ["training", "loading_model", "loading_dataset", "initializing", "saving", "stopping"]:
         success = job_queue.cancel(job_id)  # This will set stop_requested flag
+        if not success:
+            # The queue may have lost track of the job (e.g. the API restarted
+            # and the worker was re-adopted by src/worker_reattach.py). The
+            # worker polls the DB flag directly, and any re-attached monitor
+            # escalates SIGTERM→SIGKILL, so setting the flag is enough.
+            success = job_manager.request_stop(job_id)
         if success:
             logger.info(f"Stop requested for running job {job_id}")
             return {
