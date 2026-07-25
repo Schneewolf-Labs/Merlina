@@ -158,6 +158,23 @@ Define your own format using placeholders:
 }
 ```
 
+### Raw (No Formatting)
+Pass the columns through exactly as they appear in the dataset — no chat template, no special tokens:
+
+```json
+{
+  "format": {
+    "format_type": "raw"
+  }
+}
+```
+
+Use this when:
+- Your dataset text is already fully formatted (special tokens baked in)
+- You're doing plain-text / completion-style training with no chat structure
+
+Note: the `system` and `reasoning` columns are ignored in raw mode — with no template there is nowhere to place them. If you need a system message, include it in the `prompt` text itself.
+
 ## Column Mapping
 
 If your dataset uses different column names, you can map them:
