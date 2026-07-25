@@ -1095,9 +1095,17 @@ def run_training_distributed(
     num_gpus = _get_distributed_gpu_count(config)
     logger.info(f"Launching distributed training for job {job_id} with {num_gpus} GPUs")
 
-    tmp_dir = tempfile.mkdtemp(prefix=f"merlina_{job_id}_")
+    # Run files live under the data dir, NOT tempfile.mkdtemp(): the config
+    # and progress file must survive an API restart so the restarted server
+    # can re-attach to a still-running worker (src/worker_reattach.py). /tmp
+    # is also actively hostile here — systemd PrivateTmp and tmp cleaners
+    # delete it out from under a worker that outlives its parent.
+    run_dir = Path(job_manager.db_path).parent / "worker_runs" / job_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    tmp_dir = str(run_dir)
     config_path = os.path.join(tmp_dir, "config.json")
     progress_file = os.path.join(tmp_dir, "progress.jsonl")
+    proc = None
 
     try:
         job_manager.update_job(job_id, status="initializing", progress=0.0)
@@ -1167,6 +1175,13 @@ def run_training_distributed(
             start_new_session=True,
         )
 
+        # Record the worker so a restarted API can find it again instead of
+        # orphaning it (see reattach_orphaned_workers in src/worker_reattach.py).
+        try:
+            job_manager.update_job(job_id, worker_pid=proc.pid, progress_file=progress_file)
+        except Exception:
+            logger.exception(f"Could not persist worker pid for job {job_id}")
+
         # Start a thread to log subprocess stdout
         def _log_stdout():
             for raw_line in proc.stdout:
@@ -1191,11 +1206,25 @@ def run_training_distributed(
         )
 
     finally:
-        # Clean up temp files
-        try:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-        except Exception:
-            pass
+        # Clean up only when the worker has actually exited. If it is still
+        # alive (e.g. the monitor itself raised), keep the pid record and the
+        # run files: deleting the progress file under a live worker destroys
+        # its only error-reporting channel, and dropping the pid makes the
+        # worker unfindable after the next restart.
+        if proc is None or proc.poll() is not None:
+            try:
+                job_manager.update_job(job_id, worker_pid=None)
+            except Exception:
+                pass
+            try:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
+        else:
+            logger.warning(
+                f"Worker for job {job_id} still running (pid {proc.pid}); "
+                f"leaving run files in place: {tmp_dir}"
+            )
 
 
 async def run_training_async(

@@ -440,9 +440,9 @@ async def validate_training_config(config: dict) -> str:
 
 async def start_training(
     output_name: str,
+    dataset_repo_id: str,
     base_model: str = "meta-llama/Meta-Llama-3-8B-Instruct",
     training_mode: str = "orpo",
-    dataset_repo_id: str = "schneewolflabs/Athanorlite-DPO",
     dataset_source_type: str = "huggingface",
     dataset_split: str = "train",
     dataset_format: str = "chatml",
@@ -472,11 +472,12 @@ async def start_training(
 
     Args:
         output_name: Name for the output model (required).
+        dataset_repo_id: HuggingFace dataset id, or uploaded dataset id when
+            dataset_source_type='upload' (required — there is no default
+            dataset).
         base_model: HuggingFace model id or local path to fine-tune.
         training_mode: 'sft', 'orpo', 'dpo', 'simpo', 'cpo', 'ipo', 'kto', or
             a 'vlm_*'/'diffusion_*' mode.
-        dataset_repo_id: HuggingFace dataset id, or uploaded dataset id when
-            dataset_source_type='upload'.
         dataset_source_type: 'huggingface' (default) or 'upload'.
         dataset_split: Dataset split (default 'train').
         dataset_format: chatml, llama3, mistral, qwen3, tokenizer, or custom.
