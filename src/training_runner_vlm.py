@@ -51,6 +51,7 @@ from src.websocket_manager import websocket_manager
 from src.utils import build_grimoire_config, get_num_gpus
 from src.model_card import generate_wandb_run_name
 from grimoire import TrainingConfig
+from src.checkpoint_policy import resolve_save_steps, describe as describe_save_steps
 
 logger = logging.getLogger(__name__)
 
@@ -438,6 +439,7 @@ def run_vlm_training_sync(
         # ---- eval_steps: <1 means ratio, >=1 absolute (same as text path) ----
         output_dir = f"./results/{job_id}"
         eval_steps = None
+        total_steps = None
         if config.eval_steps:
             if config.eval_steps < 1:
                 import math
@@ -448,6 +450,10 @@ def run_vlm_training_sync(
                 eval_steps = max(1, int(total_steps * config.eval_steps))
             else:
                 eval_steps = int(config.eval_steps)
+
+        _save_steps = resolve_save_steps(
+            getattr(config, "save_steps", None), eval_steps, total_steps)
+        logger.info(describe_save_steps(_save_steps))
 
         # ---- Grimoire config ----
         grimoire_config = build_grimoire_config(
@@ -468,7 +474,7 @@ def run_vlm_training_sync(
             eval_steps=eval_steps,
             eval_on_start=config.eval_on_start,
             eval_batch_size=getattr(config, "eval_batch_size", None),
-            save_steps=eval_steps,
+            save_steps=_save_steps,
             save_total_limit=2,
             seed=config.seed,
             run_name=wandb_run_name if config.use_wandb else config.output_name,
