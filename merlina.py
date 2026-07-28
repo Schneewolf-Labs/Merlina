@@ -660,6 +660,13 @@ class TrainingConfig(BaseModel):
     # Optional settings
     warmup_ratio: float = Field(0.05, ge=0.0, le=0.5)
     eval_steps: float = Field(0.2, gt=0, description="<1 = ratio of total steps, >=1 = absolute step count")
+    save_steps: Optional[float] = Field(
+        None, ge=0,
+        description="Intermediate checkpoint cadence. None follows eval_steps; 0 disables "
+                    "intermediate checkpoints (final model only); <1 = ratio of total steps; "
+                    ">=1 = absolute step count. Set 0 on unified-memory boards, where the "
+                    "full-model checkpoint write can trip the memory guard."
+    )
     use_4bit: bool = Field(True, description="Use 4-bit quantization")
     use_wandb: bool = Field(True, description="Log to Weights & Biases")
     push_to_hub: bool = Field(False, description="Push to HuggingFace Hub")

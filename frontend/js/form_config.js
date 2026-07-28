@@ -232,6 +232,7 @@ export function buildTrainingConfig({ gpuManager = null, includeSecrets = true }
         max_grad_norm: num('max-grad-norm', 0.3),
         warmup_ratio: num('warmup-ratio', 0.05),
         eval_steps: num('eval-steps', 0.2),
+        save_steps: numOrNull('save-steps'),
         shuffle_dataset: bool('shuffle-dataset', true),
         weight_decay: num('weight-decay', 0.01),
         lr_scheduler_type: str('lr-scheduler-type', 'cosine'),

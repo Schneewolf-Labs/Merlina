@@ -1279,6 +1279,7 @@ Complete training configuration schema.
   "max_grad_norm": 0.3,
   "warmup_ratio": 0.05,
   "eval_steps": 0.2,
+  "save_steps": null,
   "use_4bit": true,
   "use_wandb": true,
   "push_to_hub": false,

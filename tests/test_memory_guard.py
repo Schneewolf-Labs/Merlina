@@ -196,9 +196,10 @@ def test_watchdog_scales_floors_on_small_systems():
         return _sample(10.0, total_gb=16.0)
 
     wd = MemoryWatchdog(soft_free_gb=8.0, hard_free_gb=3.0, memory_reader=reader)
-    # 8GB soft floor on a 16GB board would trip immediately; scaled to 10%/4%
-    assert wd.soft_free_gb == 16.0 * 0.10
-    assert wd.hard_free_gb == 16.0 * 0.04
+    # 8GB soft floor on a 16GB board would trip immediately; scaled to 18%/8%
+    # (raised from 10%/4% so the defaults still apply on large unified boards)
+    assert wd.soft_free_gb == 16.0 * 0.18
+    assert wd.hard_free_gb == 16.0 * 0.08
 
 
 def test_watchdog_writes_forensic_log():

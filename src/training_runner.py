@@ -64,6 +64,7 @@ from dataset_handlers import (
 from src.job_manager import JobManager
 from src.websocket_manager import websocket_manager
 from src.preflight_checks import is_local_model_path
+from src.checkpoint_policy import resolve_save_steps, describe as describe_save_steps
 from src.utils import (
     build_grimoire_config,
     calculate_effective_batch_size,
@@ -1735,6 +1736,7 @@ def run_training_sync(
 
         # Convert eval_steps: <1 means ratio (e.g. 0.2 = every 20%), >=1 means absolute steps
         eval_steps = None
+        total_steps = None
         if config.eval_steps:
             if config.eval_steps < 1:
                 import math
@@ -1752,6 +1754,10 @@ def run_training_sync(
                 )
             else:
                 eval_steps = int(config.eval_steps)
+
+        _save_steps = resolve_save_steps(
+            getattr(config, "save_steps", None), eval_steps, total_steps)
+        logger.info(describe_save_steps(_save_steps))
 
         grimoire_config = build_grimoire_config(
             TrainingConfig,
@@ -1775,7 +1781,7 @@ def run_training_sync(
             logging_steps=config.logging_steps,
             eval_steps=eval_steps,
             eval_on_start=config.eval_on_start,
-            save_steps=eval_steps,
+            save_steps=_save_steps,
             save_total_limit=2,
             seed=config.seed,
             run_name=wandb_run_name if config.use_wandb else config.output_name,
