@@ -242,11 +242,17 @@ def _monitor_reattached_worker(
                 "status after the server re-attached to it."
             )
             logger.error(f"Job {job_id}: {error_msg}")
-            job_manager.update_job(job_id, status="failed", error=error_msg)
+            # Single update: a watcher that sees the terminal status must also see the
+            # cleared pid. Writing them separately leaves a window where the job looks
+            # finished but still advertises a worker that is already gone.
+            job_manager.update_job(
+                job_id, status="failed", error=error_msg, worker_pid=None
+            )
             from src.websocket_manager import websocket_manager
 
             _send_ws(websocket_manager.send_error(job_id=job_id, error=error_msg), event_loop)
-        job_manager.update_job(job_id, worker_pid=None)
+        else:
+            job_manager.update_job(job_id, worker_pid=None)
     except Exception:
         logger.exception(f"Failed to finalize re-attached job {job_id}")
 
