@@ -64,7 +64,11 @@ from dataset_handlers import (
 from src.job_manager import JobManager
 from src.websocket_manager import websocket_manager
 from src.preflight_checks import is_local_model_path
-from src.checkpoint_policy import resolve_save_steps, describe as describe_save_steps
+from src.checkpoint_policy import (
+    resolve_save_steps,
+    epoch_end_saves,
+    describe as describe_save_steps,
+)
 from src.utils import (
     build_grimoire_config,
     calculate_effective_batch_size,
@@ -1782,6 +1786,7 @@ def run_training_sync(
             eval_steps=eval_steps,
             eval_on_start=config.eval_on_start,
             save_steps=_save_steps,
+            save_on_epoch_end=epoch_end_saves(getattr(config, "save_steps", None)),
             save_total_limit=2,
             seed=config.seed,
             run_name=wandb_run_name if config.use_wandb else config.output_name,

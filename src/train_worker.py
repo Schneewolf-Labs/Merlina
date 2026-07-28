@@ -61,7 +61,11 @@ from dataset_handlers.factory import create_loader_from_config
 from src.job_manager import JobManager
 from src.model_card import generate_wandb_run_name
 from src.utils import build_grimoire_config, fix_vlm_state_dict_on_disk
-from src.checkpoint_policy import resolve_save_steps, describe as describe_save_steps
+from src.checkpoint_policy import (
+    resolve_save_steps,
+    epoch_end_saves,
+    describe as describe_save_steps,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -662,6 +666,7 @@ def run_worker(args):
             eval_steps=eval_steps,
             eval_on_start=config.eval_on_start,
             save_steps=_save_steps,
+            save_on_epoch_end=epoch_end_saves(getattr(config, "save_steps", None)),
             save_total_limit=2,
             seed=config.seed,
             run_name=wandb_run_name if config.use_wandb else config.output_name,

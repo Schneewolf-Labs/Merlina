@@ -2,7 +2,7 @@
 
 import pytest
 
-from src.checkpoint_policy import _NEVER, describe, resolve_save_steps
+from src.checkpoint_policy import _NEVER, describe, epoch_end_saves, resolve_save_steps
 
 
 class TestResolveSaveSteps:
@@ -48,3 +48,21 @@ class TestDescribe:
 
     def test_none(self):
         assert "disabled" in describe(None)
+
+
+class TestEpochEndSaves:
+    def test_disabled_only_when_save_steps_is_zero(self):
+        """save_steps=0 means no intermediate checkpoints -- including at epoch boundaries.
+
+        The end-of-epoch save is a separate path in the trainer writing the same full-model
+        snapshot, so leaving it on defeats the setting.
+        """
+        assert epoch_end_saves(0) is False
+        assert epoch_end_saves(0.0) is False
+
+    def test_enabled_by_default(self):
+        assert epoch_end_saves(None) is True
+
+    @pytest.mark.parametrize("value", [0.5, 1, 25, 100])
+    def test_enabled_for_any_real_cadence(self, value):
+        assert epoch_end_saves(value) is True
