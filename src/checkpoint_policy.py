@@ -51,6 +51,18 @@ def resolve_save_steps(
     return int(save_steps)
 
 
+def epoch_end_saves(save_steps: Optional[float]) -> bool:
+    """Whether the trainer should checkpoint at epoch boundaries.
+
+    ``save_steps=0`` means "no intermediate checkpoints". The end-of-epoch save is a separate
+    code path in the trainer, and it writes the same full-model snapshot, so leaving it on
+    defeats the setting: a 3-epoch run still takes two ~52 GB snapshots at the epoch
+    boundaries. Observed on a 27B ORPO LoRA, which aborted at step 32 of 93 -- immediately
+    after the epoch-1 boundary at step 31 -- with step-interval saves already disabled.
+    """
+    return save_steps != 0
+
+
 def describe(resolved: Optional[int]) -> str:
     """Human-readable summary for the training log."""
     if resolved is None:
