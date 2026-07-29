@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Config code sharing (`merlina-config-v1:…`)**: the model card's "Reproduce this training run" section now leads with a single-line, gzip+base64 encoded copy of the training config (the same wire format the QR image carries) instead of a wall of JSON. New `POST /configs/decode-text` endpoint and a *Load Config → From Code* button decode a pasted code straight into the form; raw envelope JSON (fenced or not) is accepted too, so pasting the README's JSON block still works. Decoding is bounded against oversized/decompression-bomb payloads. Tests: `tests/test_config_image.py`, `tests/test_share_config_readme.py`, and the "Load config from code" block in `tests/frontend/test_integration.spec.mjs`.
+
+### Changed
+- **Slimmer shared training config**: null-valued fields are now pruned from the shared config envelope (a dumped `TrainingConfig` is mostly nulls — every knob belonging to a training family the run didn't use), and the README's JSON block is collapsed inside a `<details>` element beneath the config code. Pruning is lossless: the pruned payload re-validates to a byte-identical `TrainingConfig`, and it shrinks the QR image's payload too.
+
 ### Fixed
 - **`dataset_name` silently ignored by non-diffusion training modes**: `dataset_name`/`dataset_split` were only read by the diffusion runner, so a text-mode (SFT/ORPO/DPO/…) request that named its corpus via `dataset_name` was accepted and then trained on whatever `dataset.source` held — previously the hardcoded default repo. `TrainingConfig` now maps `dataset_name` into `dataset.source` when the primary source is unset, and rejects the request when both are set and disagree. `dataset_jsonl_path` on a text-mode job is likewise rejected instead of silently ignored. Round-trips through `model_dump()` (the `/jobs/{id}/retry` path) stay valid.
 - **Pre-flight passed configs whose dataset never resolves**: `_check_dataset_config` now verifies every HuggingFace dataset source (primary, additional, and eval) actually resolves on the Hub — not-found and gated repos are hard errors, while network/hub outages only warn so cached/offline datasets still work. A missing `repo_id` and stray diffusion-only dataset fields on text jobs are also hard errors.

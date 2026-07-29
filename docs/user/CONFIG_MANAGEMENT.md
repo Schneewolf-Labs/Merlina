@@ -42,6 +42,27 @@ Each configuration file includes:
 3. Click **📂 Load** to load a configuration
 4. Click **🗑️ Delete** to remove a configuration
 
+### Loading a Configuration from a Model Card
+
+Models trained with Merlina and uploaded to the Hub carry their own training
+config in the README's *Reproduce this training run* section — a single
+`merlina-config-v1:…` line (with the full JSON tucked into a collapsible
+block underneath). To rebuild that run:
+
+1. Copy the `merlina-config-v1:…` code from the model card
+2. Click the **🪄 From Code** button
+3. Paste it and click **Load Configuration**
+
+The pasted config populates the form exactly as a saved preset would.
+Credentials are never part of a shared config — Merlina uses your own
+`HF_TOKEN` / `WANDB_API_KEY`. The box also accepts the raw JSON block if you'd
+rather copy that, and **🔳 From Image** does the same for a `merlina_config.png`
+(the QR/metadata image published when `share_config_image` is enabled).
+
+Publishing is controlled by two toggles in the HuggingFace Hub upload section:
+`share_config` (README code + JSON, on by default) and `share_config_image`
+(the scannable PNG, off by default).
+
 ## Using the API
 
 ### Save a Configuration
@@ -105,6 +126,22 @@ Content-Type: application/json
   "name": "imported-config"
 }
 ```
+
+### Decode a Shared Configuration
+
+```bash
+POST /configs/decode-text
+Content-Type: application/json
+
+{
+  "payload": "merlina-config-v1:H4sIA..."
+}
+```
+
+Returns the config envelope under `config` (same shape as `GET /configs/{name}`)
+without saving it. Raw envelope JSON is accepted as the payload too. The
+equivalent for a shared config image is `POST /configs/decode-image` with the
+PNG as a multipart `file`.
 
 ## Using the Python API
 

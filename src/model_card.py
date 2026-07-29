@@ -322,6 +322,24 @@ def _build_diffusion_usage_section(config: Any, training_mode: str, base_model: 
 _SHARE_TOGGLE_FIELDS = ("share_config", "share_config_image")
 
 
+def _prune_nulls(value: Any) -> Any:
+    """Recursively drop ``None`` values from dicts inside ``value``.
+
+    A dumped TrainingConfig is mostly nulls — every field belonging to a
+    training family this run didn't use (diffusion, VLM, W&B overrides) comes
+    back as ``None``. Dropping them is lossless on import: Pydantic fills the
+    same ``None`` back in from the field default, so a pruned envelope
+    re-validates to a byte-identical config (guarded by
+    ``tests/test_share_config_readme.py``). It just makes the shared payload
+    roughly a third smaller and far easier to read.
+    """
+    if isinstance(value, dict):
+        return {k: _prune_nulls(v) for k, v in value.items() if v is not None}
+    if isinstance(value, list):
+        return [_prune_nulls(v) for v in value]
+    return value
+
+
 def build_shareable_config_envelope(config: Any) -> Optional[dict]:
     """
     Build the secret-stripped, importable config envelope for ``config``.
@@ -330,6 +348,9 @@ def build_shareable_config_envelope(config: Any) -> Optional[dict]:
     both the README JSON block (:func:`_build_share_config_section`) and the
     QR/metadata image (:func:`upload_config_image`). It does **not** consult
     any ``share_*`` toggle; callers gate on their own flag first.
+
+    Null-valued fields are dropped (see :func:`_prune_nulls`) — they carry no
+    information and dominate the payload otherwise.
 
     Returns ``None`` when the config can't be serialized (e.g. a Mock in
     tests, or a plain object without ``model_dump``).
@@ -358,7 +379,7 @@ def build_shareable_config_envelope(config: Any) -> Optional[dict]:
     except Exception:  # pragma: no cover
         _merlina_version = "unknown"
 
-    return {
+    return _prune_nulls({
         "_metadata": {
             "name": getattr(config, "output_name", ""),
             "description": (
@@ -370,7 +391,7 @@ def build_shareable_config_envelope(config: Any) -> Optional[dict]:
             "merlina_version": _merlina_version,
         },
         **payload,
-    }
+    })
 
 
 def _build_share_config_section(config: Any) -> str:
@@ -381,9 +402,13 @@ def _build_share_config_section(config: Any) -> str:
     legacy/test config that pre-dates the field), or when the config can't
     be serialized (e.g. a Mock in tests). Otherwise returns markdown with:
 
-      * A short note explaining how to import the config
-      * A fenced JSON block containing the validated, secret-stripped
-        TrainingConfig payload (same shape /configs/save produces)
+      * A one-line ``merlina-config-v1:`` code — the whole config,
+        gzip+base64'd, pasteable into *Load Configuration → From Code*.
+        This is the primary channel: the hyperparameter table above already
+        says what was trained, so the machine-readable copy shouldn't
+        dominate the page.
+      * The same payload as pretty JSON, tucked inside a collapsed
+        ``<details>`` block for anyone who wants to read or hand-edit it.
 
     Secrets (``hf_token``, ``wandb_key``) are stripped unconditionally.
     """
@@ -403,15 +428,48 @@ def _build_share_config_section(config: Any) -> str:
         "## Reproduce this training run",
         "",
         "This model was trained with [Merlina](https://github.com/Schneewolf-Labs/Merlina). "
-        "Save the JSON below to `data/configs/<name>.json` (or import it via the "
-        "*Load Configuration* dialog) to reproduce the exact training setup. "
         "Credentials are not included — Merlina will use your own `HF_TOKEN` "
         "and `WANDB_API_KEY` from `.env` or the form.",
+        "",
+    ]
+
+    # Compact code first — stdlib-only, but stay defensive so a model upload
+    # is never lost to a serialization hiccup here.
+    code = None
+    try:
+        from src.config_image import encode_config_payload
+
+        code = encode_config_payload(envelope)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.debug("share config: compact code unavailable (%s)", exc)
+
+    if code:
+        lines.extend([
+            "Paste this code into Merlina's *Load Configuration → From Code* "
+            "to rebuild the exact training setup:",
+            "",
+            "```text",
+            code,
+            "```",
+            "",
+        ])
+        details_summary = "Prefer JSON? The same config, expanded"
+    else:
+        details_summary = "Full training configuration (JSON)"
+
+    lines.extend([
+        "<details>",
+        f"<summary>{details_summary}</summary>",
+        "",
+        "Save this to `data/configs/<name>.json`, or import it via the "
+        "*Load Configuration* dialog.",
         "",
         "```json",
         rendered,
         "```",
-    ]
+        "",
+        "</details>",
+    ])
     return "\n".join(lines)
 
 

@@ -626,3 +626,90 @@ test.describe('Local model picker', () => {
         await expect(page.locator('#offline-mode-badge')).toBeHidden();
     });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Load config from a pasted `merlina-config-v1:` code (model-card sharing)
+// ═════════════════════════════════════════════════════════════════════════════
+
+test.describe('Load config from code', () => {
+    const envelope = {
+        _metadata: {
+            name: 'pasted-model',
+            description: 'Training configuration shared from a Merlina-trained model.',
+            tags: [],
+            schema: 'merlina/training-config',
+            schema_version: 1,
+            merlina_version: '9.9.9',
+        },
+        base_model: 'org/pasted-base',
+        output_name: 'pasted-model',
+        training_mode: 'sft',
+        learning_rate: 0.00003,
+        num_epochs: 3,
+    };
+
+    // Same wire format src/config_image.py writes: gzip + urlsafe base64.
+    async function encodeConfig(obj) {
+        const { gzipSync } = await import('node:zlib');
+        const packed = gzipSync(Buffer.from(JSON.stringify(obj)), { level: 9 });
+        return 'merlina-config-v1:' + packed.toString('base64url');
+    }
+
+    test('decode-text endpoint accepts a gzipped config code', async ({ request }) => {
+        const response = await request.post('/configs/decode-text', {
+            data: { payload: await encodeConfig(envelope) },
+        });
+        expect(response.ok()).toBeTruthy();
+        const data = await response.json();
+        expect(data.name).toBe('pasted-model');
+        expect(data.config.base_model).toBe('org/pasted-base');
+    });
+
+    test('decode-text endpoint accepts raw envelope JSON', async ({ request }) => {
+        const response = await request.post('/configs/decode-text', {
+            data: { payload: JSON.stringify(envelope) },
+        });
+        expect(response.ok()).toBeTruthy();
+        expect((await response.json()).config.output_name).toBe('pasted-model');
+    });
+
+    test('decode-text endpoint rejects garbage with 422', async ({ request }) => {
+        const response = await request.post('/configs/decode-text', {
+            data: { payload: 'definitely not a config' },
+        });
+        expect(response.status()).toBe(422);
+    });
+
+    // The config-management buttons live in step 3, which is hidden until
+    // you navigate to it.
+    async function openConfigSection(page) {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
+    }
+
+    test('From Code button opens the paste modal', async ({ page }) => {
+        await openConfigSection(page);
+        await expect(page.locator('#load-from-code-btn')).toBeVisible();
+        await page.locator('#load-from-code-btn').click();
+        await expect(page.locator('#load-from-code-modal')).toBeVisible();
+        await expect(page.locator('#load-config-code-input')).toBeVisible();
+    });
+
+    test('pasting a code populates the form', async ({ page }) => {
+        await openConfigSection(page);
+        await page.locator('#load-from-code-btn').click();
+        await page.locator('#load-config-code-input').fill(await encodeConfig(envelope));
+        await page.locator('#load-config-code-submit').click();
+
+        await expect(page.locator('#base-model')).toHaveValue('org/pasted-base');
+        await expect(page.locator('#output-name')).toHaveValue('pasted-model');
+        await expect(page.locator('#load-from-code-modal')).toBeHidden();
+    });
+
+    test('submitting an empty box does not close the modal', async ({ page }) => {
+        await openConfigSection(page);
+        await page.locator('#load-from-code-btn').click();
+        await page.locator('#load-config-code-submit').click();
+        await expect(page.locator('#load-from-code-modal')).toBeVisible();
+    });
+});

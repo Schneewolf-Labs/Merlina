@@ -453,6 +453,9 @@
                         <button type="button" id="load-from-image-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
                             🔳 From Image
                         </button>
+                        <button type="button" id="load-from-code-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
+                            🪄 From Code
+                        </button>
                         <button type="button" id="manage-configs-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
                             🗂️ Manage
                         </button>
@@ -1946,6 +1949,27 @@
                 <div id="config-list" style="margin: 20px 0;">
                     <p style="text-align: center; color: #888;">Loading configurations...</p>
                 </div>
+            </div>
+        </div>
+
+        <!-- Load from Code Modal — paste the merlina-config-v1: block from a model card -->
+        <div id="load-from-code-modal" class="modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="load-from-code-modal-title">
+            <div class="modal-content" style="max-width: 700px;">
+                <button class="close" onclick="document.getElementById('load-from-code-modal').style.display='none'" aria-label="Close modal" type="button">&times;</button>
+                <h2 id="load-from-code-modal-title">Load Configuration from Code</h2>
+                <p style="color: #888; margin-bottom: 15px;">
+                    Paste the <code>merlina-config-v1:…</code> code from a Merlina model card
+                    (the "Reproduce this training run" section). Raw config JSON works too.
+                </p>
+                <div class="form-group">
+                    <label for="load-config-code-input">Config code</label>
+                    <textarea id="load-config-code-input" rows="5" spellcheck="false"
+                              placeholder="merlina-config-v1:H4sIA…"
+                              style="width: 100%; font-family: monospace; font-size: 0.85em;"></textarea>
+                </div>
+                <button type="button" id="load-config-code-submit" class="action-button" style="width: 100%;">
+                    ✨ Load Configuration
+                </button>
             </div>
         </div>
 
