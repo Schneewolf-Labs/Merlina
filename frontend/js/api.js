@@ -365,6 +365,15 @@ class MerlinaAPI {
         return data;
     }
 
+    // Decode a training config from a pasted `merlina-config-v1:` code
+    // (the compact block Merlina publishes in a model card) or raw JSON.
+    static async decodeConfigText(payload) {
+        return this.fetch('/configs/decode-text', {
+            method: 'POST',
+            body: JSON.stringify({ payload })
+        });
+    }
+
     // Job config endpoint (for loading config from previous job)
     static async getJobConfig(jobId) {
         return this.fetch(`/jobs/${jobId}/config`);

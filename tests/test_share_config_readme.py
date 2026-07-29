@@ -3,11 +3,14 @@ Tests for the "Reproduce this training run" model-card section.
 
 Guards the share_config flag's contract:
   * share_config=True  → README embeds the validated, secret-stripped
-    config inside a fenced ```json block with the standard schema header
+    config both as a one-line `merlina-config-v1:` code and as a fenced
+    ```json block (collapsed in <details>) with the standard schema header
     (matches what /configs/save writes to disk).
   * share_config=False → no embed, no leak.
   * Secrets (hf_token, wandb_key) are stripped unconditionally even when
     share_config=True.
+  * Null-valued fields are pruned from the shared payload, and pruning is
+    lossless — the pruned config re-validates to the original.
 """
 
 import json
@@ -81,6 +84,12 @@ def _extract_json_block(readme: str) -> Optional[dict]:
     return json.loads(match.group(1))
 
 
+def _extract_config_code(readme: str) -> Optional[str]:
+    """Pull the one-line `merlina-config-v1:` code out of a README."""
+    match = re.search(r"^(merlina-config-v1:\S+)$", readme, re.MULTILINE)
+    return match.group(1) if match else None
+
+
 # ---------------------------------------------------------------------------
 # share_config=True → embed
 # ---------------------------------------------------------------------------
@@ -143,6 +152,81 @@ class TestShareConfigEnabled:
         readme = generate_model_readme(cfg, "orpo")
         payload = _extract_json_block(readme)
         assert payload["_metadata"]["name"] == "cool-model-v2"
+
+
+# ---------------------------------------------------------------------------
+# Compactness: the section leads with a one-line code and hides the JSON
+# behind a <details> so the model card isn't a wall of hyperparameters.
+# ---------------------------------------------------------------------------
+
+
+class TestCompactSharing:
+    def test_section_includes_one_line_config_code(self):
+        readme = generate_model_readme(_Cfg(share_config=True), "orpo")
+        code = _extract_config_code(readme)
+        assert code is not None, "Expected a merlina-config-v1: code line"
+
+    def test_config_code_decodes_to_the_same_envelope(self):
+        from src.config_image import decode_config_payload
+
+        readme = generate_model_readme(_Cfg(share_config=True), "orpo")
+        decoded = decode_config_payload(_extract_config_code(readme))
+        assert decoded == _extract_json_block(readme)
+
+    def test_code_appears_before_the_json_block(self):
+        """The compact channel is the headline; JSON is the fallback."""
+        readme = generate_model_readme(_Cfg(share_config=True), "orpo")
+        assert readme.index("merlina-config-v1:") < readme.index("```json")
+
+    def test_json_block_is_collapsed_in_details(self):
+        readme = generate_model_readme(_Cfg(share_config=True), "orpo")
+        section = readme.split("## Reproduce this training run", 1)[1]
+        details_start = section.index("<details>")
+        assert details_start < section.index("```json")
+        assert "</details>" in section
+        # Blank line after </summary> — markdown inside <details> needs it.
+        assert "</summary>\n\n" in section
+
+    def test_null_fields_are_pruned_from_shared_payload(self):
+        """Every unused field of a dumped TrainingConfig comes back None.
+        Shipping ~40 nulls in a model card helps nobody."""
+        cfg = _Cfg(share_config=True)
+        readme = generate_model_readme(cfg, "orpo")
+        payload = _extract_json_block(readme)
+
+        def has_null(obj) -> bool:
+            if isinstance(obj, dict):
+                return any(v is None or has_null(v) for v in obj.values())
+            if isinstance(obj, list):
+                return any(has_null(v) for v in obj)
+            return False
+
+        assert not has_null(payload), f"Null values left in payload: {payload}"
+
+    def test_pruning_is_lossless_against_real_training_config(self):
+        """Dropping nulls must not change what the config validates to —
+        Pydantic fills the same None back in from the field default."""
+        from merlina import TrainingConfig
+        from src.model_card import build_shareable_config_envelope
+
+        full = TrainingConfig(
+            output_name="prune-me",
+            base_model="gpt2",
+            training_mode="orpo",
+            share_config=True,
+            dataset={"source": {"source_type": "huggingface", "repo_id": "x/y"}},
+        )
+        envelope = build_shareable_config_envelope(full)
+        pruned = {k: v for k, v in envelope.items() if k != "_metadata"}
+
+        rebuilt = TrainingConfig(**pruned).model_dump(mode="json")
+        original = full.model_dump(mode="json")
+        # Secrets and publishing toggles are stripped from the envelope by
+        # design, so compare everything else.
+        for field in (*SECRET_FIELDS, "share_config", "share_config_image"):
+            rebuilt.pop(field, None)
+            original.pop(field, None)
+        assert rebuilt == original
 
 
 # ---------------------------------------------------------------------------
@@ -253,3 +337,42 @@ class TestEmbeddedConfigIsImportable:
         rebuilt = TrainingConfig(**loaded)
         assert rebuilt.output_name == "reproducible"
         assert rebuilt.training_mode == "sft"
+
+    def test_published_code_round_trips_through_decode_endpoint(self):
+        """End-to-end: the code printed in a model card is exactly what
+        /configs/decode-text (the 'From Code' button) accepts."""
+        from fastapi.testclient import TestClient
+
+        from merlina import TrainingConfig, app
+
+        full = TrainingConfig(
+            output_name="code-round-trip",
+            base_model="gpt2",
+            training_mode="sft",
+            learning_rate=3e-5,
+            share_config=True,
+            dataset={"source": {"source_type": "huggingface", "repo_id": "x/y"}},
+        )
+        code = _extract_config_code(generate_model_readme(full, "sft"))
+        assert code is not None
+
+        client = TestClient(app)
+        resp = client.post("/configs/decode-text", json={"payload": code})
+        assert resp.status_code == 200, resp.text
+
+        body = resp.json()
+        assert body["name"] == "code-round-trip"
+
+        config = {k: v for k, v in body["config"].items() if k != "_metadata"}
+        rebuilt = TrainingConfig(**config)
+        assert rebuilt.output_name == "code-round-trip"
+        assert rebuilt.learning_rate == 3e-5
+
+    def test_decode_endpoint_rejects_garbage(self):
+        from fastapi.testclient import TestClient
+
+        from merlina import app
+
+        client = TestClient(app)
+        resp = client.post("/configs/decode-text", json={"payload": "not a config"})
+        assert resp.status_code == 422

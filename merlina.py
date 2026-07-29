@@ -3633,6 +3633,50 @@ async def decode_config_image(file: FastAPIUploadFile = File(...)):
     return {"status": "success", "config": envelope, "name": name}
 
 
+class DecodeConfigTextRequest(BaseModel):
+    """Request to decode a pasted Merlina config code"""
+    payload: str = Field(
+        ...,
+        description=(
+            "A `merlina-config-v1:` code (as published in a Merlina model "
+            "card or QR code), or raw config-envelope JSON."
+        ),
+    )
+
+
+@app.post("/configs/decode-text", tags=["Configs"], summary="Decode a pasted config code")
+async def decode_config_text(request: DecodeConfigTextRequest):
+    """
+    Decode a training config from a pasted ``merlina-config-v1:`` code.
+
+    This is the text twin of ``POST /configs/decode-image``: model cards
+    published with ``share_config`` carry the whole (secret-stripped) config
+    as one compact line, so reproducing a run is a copy-paste away. Raw
+    envelope JSON is accepted too. Returns the envelope under ``config``,
+    same shape as ``GET /configs/{name}``.
+    """
+    from src.config_image import decode_config_payload
+
+    envelope = decode_config_payload(request.payload)
+    if not envelope:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "That doesn't look like a Merlina config. Paste the "
+                "`merlina-config-v1:...` code from a model card, or the "
+                "config JSON itself."
+            ),
+        )
+
+    name = ""
+    meta = envelope.get("_metadata")
+    if isinstance(meta, dict):
+        name = meta.get("name") or ""
+
+    logger.info(f"Decoded pasted training config (name: {name or 'n/a'})")
+    return {"status": "success", "config": envelope, "name": name}
+
+
 # ===== Model Preload Endpoints =====
 
 class ModelPreloadRequest(BaseModel):
