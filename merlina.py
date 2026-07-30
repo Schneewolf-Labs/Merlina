@@ -1963,10 +1963,19 @@ async def delete_job(job_id: str):
     if not success:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    # A deleted job must not still be waiting to run: drop its queue entry so
+    # it stops showing up in queue listings and its config (which can hold an
+    # HF token) is released. A worker that grabbed the entry first sees the
+    # missing record and skips execution.
+    removed_from_queue = job_queue.remove(job_id)
+    if removed_from_queue:
+        logger.info(f"Deleted job {job_id} was queued - removed from queue")
+
     return {
         "status": "success",
         "message": f"Job {job_id} deleted successfully",
-        "job_id": job_id
+        "job_id": job_id,
+        "removed_from_queue": removed_from_queue
     }
 
 
@@ -1974,10 +1983,16 @@ async def delete_job(job_id: str):
 async def clear_all_jobs():
     """Delete all jobs and metrics"""
     count = job_manager.clear_all_jobs()
+
+    # Same reasoning as the single-job delete: every record is gone, so no
+    # queued job can still run.
+    removed_from_queue = job_queue.remove_all_queued()
+
     return {
         "status": "success",
         "message": f"Cleared all jobs ({count} jobs deleted)",
-        "deleted_count": count
+        "deleted_count": count,
+        "removed_from_queue": removed_from_queue
     }
 
 

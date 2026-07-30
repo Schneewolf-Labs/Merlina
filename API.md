@@ -458,6 +458,10 @@ DELETE /jobs/{job_id}
 
 Deletes a specific job and all associated metrics from the database.
 
+If the job was still waiting in the queue, its queue entry is dropped too, so a
+deleted job is never executed later. A running job is not stopped by this
+endpoint — use `POST /jobs/{job_id}/stop` first.
+
 **Path Parameters:**
 - `job_id` - Job identifier
 
@@ -466,9 +470,13 @@ Deletes a specific job and all associated metrics from the database.
 {
   "status": "success",
   "message": "Job job_20250116_143022 deleted successfully",
-  "job_id": "job_20250116_143022"
+  "job_id": "job_20250116_143022",
+  "removed_from_queue": true
 }
 ```
+
+`removed_from_queue` is `true` when the job was queued and its queue entry was
+removed, `false` when it wasn't waiting in the queue.
 
 **Status Codes:**
 - `200 OK` - Job deleted
@@ -482,16 +490,20 @@ Deletes a specific job and all associated metrics from the database.
 DELETE /jobs
 ```
 
-Deletes all jobs and metrics from the database.
+Deletes all jobs and metrics from the database, and clears every queued job
+from the queue (running jobs are left alone).
 
 **Response:**
 ```json
 {
   "status": "success",
   "message": "Cleared all jobs (42 jobs deleted)",
-  "deleted_count": 42
+  "deleted_count": 42,
+  "removed_from_queue": 3
 }
 ```
+
+`removed_from_queue` is the number of queued entries that were dropped.
 
 ---
 

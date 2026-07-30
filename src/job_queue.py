@@ -114,9 +114,32 @@ class JobQueue:
 
                 job_id = queued_job.job_id
 
-                # Remove from queued tracking
+                # Claim the queued entry. remove() races us for it under the
+                # same lock, so whoever pops it wins: a miss (or a cleared
+                # callback) means the job was dropped from the queue while it
+                # was waiting and must not run.
                 with self._queued_lock:
-                    self._queued_jobs.pop(job_id, None)
+                    claimed = self._queued_jobs.pop(job_id, None) is not None
+                    callback = queued_job.callback
+                    config = queued_job.config
+
+                if not claimed or callback is None:
+                    logger.info(f"Job {job_id} was removed from the queue before execution - skipping")
+                    with self._cancel_lock:
+                        self._cancelled_jobs.discard(job_id)
+                    self._queue.task_done()
+                    continue
+
+                # A job whose record was deleted while it sat in the queue must
+                # not execute: there is nothing left to report status to, and
+                # its stored config is gone. This also covers deletions that
+                # bypass the queue entirely (e.g. clearing all jobs).
+                if self.job_manager is not None and self.job_manager.get_job(job_id) is None:
+                    logger.info(f"Job {job_id} no longer exists (deleted while queued) - skipping execution")
+                    with self._cancel_lock:
+                        self._cancelled_jobs.discard(job_id)
+                    self._queue.task_done()
+                    continue
 
                 # Check if job was cancelled while in queue
                 with self._cancel_lock:
@@ -140,7 +163,7 @@ class JobQueue:
 
                 # Execute the job callback
                 try:
-                    queued_job.callback(job_id, queued_job.config)
+                    callback(job_id, config)
                 except Exception as e:
                     logger.error(f"Job {job_id} execution failed: {e}", exc_info=True)
                     if self.job_manager:
@@ -248,6 +271,65 @@ class JobQueue:
 
         logger.warning(f"Job {job_id} not found in queue or running jobs")
         return False
+
+    def remove(self, job_id: str) -> bool:
+        """
+        Drop a queued job from the queue and release its config.
+
+        Used when a job record is deleted: the queue must stop reporting the
+        job as queued, must not hand it to a worker, and must not keep its
+        config (which can hold API tokens) alive.
+
+        Running jobs are untouched - use cancel() to stop those.
+
+        Args:
+            job_id: Job identifier
+
+        Returns:
+            True if a queued entry was removed
+        """
+        with self._queued_lock:
+            queued_job = self._queued_jobs.pop(job_id, None)
+            if queued_job is None:
+                return False
+
+            # The item itself stays in the PriorityQueue (it has no removal
+            # API), so clear what the worker would act on: it sees the empty
+            # callback under _queued_lock and skips the job, and the config
+            # becomes collectable now rather than whenever the worker drains.
+            queued_job.callback = None
+            queued_job.config = None
+
+        with self._cancel_lock:
+            self._cancelled_jobs.discard(job_id)
+
+        logger.info(f"Removed queued job {job_id} from the queue")
+        return True
+
+    def remove_all_queued(self) -> int:
+        """
+        Drop every queued job from the queue and release their configs.
+
+        Running jobs are untouched.
+
+        Returns:
+            Number of queued entries removed
+        """
+        with self._queued_lock:
+            queued_jobs = list(self._queued_jobs.values())
+            self._queued_jobs.clear()
+            for queued_job in queued_jobs:
+                queued_job.callback = None
+                queued_job.config = None
+
+        with self._cancel_lock:
+            for queued_job in queued_jobs:
+                self._cancelled_jobs.discard(queued_job.job_id)
+
+        if queued_jobs:
+            logger.info(f"Removed {len(queued_jobs)} queued job(s) from the queue")
+
+        return len(queued_jobs)
 
     def get_queue_position(self, job_id: str) -> Optional[int]:
         """
