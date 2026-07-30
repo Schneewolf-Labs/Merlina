@@ -297,6 +297,134 @@ def test_no_stale_queued_state_after_run():
     print("\n✓ Test 8 passed!")
 
 
+def _blocking_pair():
+    """Build a (release_event, task, executed_list) trio for occupancy tests.
+
+    The task records every job it runs and blocks until the event is set, so a
+    single-worker queue can be pinned while other jobs pile up behind it.
+    """
+    release = threading.Event()
+    executed = []
+    lock = threading.Lock()
+
+    def task(job_id, config):
+        with lock:
+            executed.append(job_id)
+        release.wait(timeout=10)
+
+    return release, task, executed
+
+
+def test_deleted_job_is_not_executed():
+    """Test that a job whose record was deleted never runs"""
+    print("\n" + "="*60)
+    print("TEST 9: deleted job is not executed")
+    print("="*60)
+
+    import os
+    db_path = "/tmp/test_queue_deleted_job.db"
+    if os.path.exists(db_path):
+        os.remove(db_path)
+
+    job_manager = JobManager(db_path=db_path)
+    queue = JobQueue(max_concurrent_jobs=1, job_manager=job_manager)
+
+    release, task, executed = _blocking_pair()
+
+    # Pin the only worker so the second job is guaranteed to sit in the queue
+    job_manager.create_job("blocker", {"test": "config"})
+    queue.submit("blocker", {}, task, JobPriority.NORMAL)
+    assert wait_for_job_start(queue), "blocker job never started"
+
+    job_manager.create_job("doomed", {"test": "config"})
+    queue.submit("doomed", {}, task, JobPriority.NORMAL)
+
+    # Job record deleted while the job is still waiting in the queue
+    assert job_manager.delete_job("doomed"), "expected the job record to be deleted"
+
+    release.set()
+    assert queue.wait_for_completion(timeout=30), "queue did not drain"
+
+    print(f"Jobs executed: {executed}")
+    assert "doomed" not in executed, "deleted job was executed"
+    assert "blocker" in executed, "blocker job should still have run"
+
+    queue.shutdown(wait=True)
+    os.remove(db_path)
+    print("\n✓ Test 9 passed!")
+
+
+def test_remove_clears_queued_entry_and_config():
+    """Test that remove() drops a queued job's entry and releases its config"""
+    print("\n" + "="*60)
+    print("TEST 10: remove() clears queue entry and config")
+    print("="*60)
+
+    queue = JobQueue(max_concurrent_jobs=1)
+
+    release, task, executed = _blocking_pair()
+
+    queue.submit("blocker", {}, task, JobPriority.NORMAL)
+    assert wait_for_job_start(queue), "blocker job never started"
+
+    queue.submit("deleted", {"hf_token": "secret"}, task, JobPriority.NORMAL)
+    tracked = queue._queued_jobs["deleted"]
+
+    assert queue.remove("deleted") is True, "expected the queued job to be removed"
+    assert queue.remove("deleted") is False, "removing twice should report nothing to remove"
+
+    status = queue.get_status("deleted")
+    print(f"Status after removal: {status}")
+    assert status["state"] == "unknown", f"job still tracked after removal: {status}"
+    assert queue.get_queue_stats()["queued"] == 0
+    assert [j["job_id"] for j in queue.list_queued_jobs()] == []
+
+    # The config (which can hold API tokens) must not be kept alive by the
+    # stale PriorityQueue item
+    assert tracked.config is None, "config still referenced after removal"
+    assert tracked.callback is None, "callback still referenced after removal"
+
+    release.set()
+    assert queue.wait_for_completion(timeout=30), "queue did not drain"
+    print(f"Jobs executed: {executed}")
+    assert "deleted" not in executed, "removed job was executed"
+
+    queue.shutdown(wait=True)
+    print("\n✓ Test 10 passed!")
+
+
+def test_remove_all_queued():
+    """Test that remove_all_queued() empties the queue without touching runners"""
+    print("\n" + "="*60)
+    print("TEST 11: remove_all_queued()")
+    print("="*60)
+
+    queue = JobQueue(max_concurrent_jobs=1)
+
+    release, task, executed = _blocking_pair()
+
+    queue.submit("blocker", {}, task, JobPriority.NORMAL)
+    assert wait_for_job_start(queue), "blocker job never started"
+
+    for i in range(3):
+        queue.submit(f"pending-{i}", {"duration": 1}, task, JobPriority.NORMAL)
+
+    removed = queue.remove_all_queued()
+    print(f"Removed {removed} queued job(s)")
+    assert removed == 3, f"expected 3 removals, got {removed}"
+    assert queue.get_queue_stats()["queued"] == 0
+    assert queue.get_queue_stats()["running"] == 1, "running job should be untouched"
+
+    release.set()
+    assert queue.wait_for_completion(timeout=30), "queue did not drain"
+
+    print(f"Jobs executed: {executed}")
+    assert executed == ["blocker"], f"removed jobs were executed: {executed}"
+
+    queue.shutdown(wait=True)
+    print("\n✓ Test 11 passed!")
+
+
 def run_all_tests():
     """Run all tests"""
     print("\n" + "🧪 "*20)
@@ -312,6 +440,9 @@ def run_all_tests():
         test_wait_for_completion_timeout()
         test_submit_rollback_on_db_failure()
         test_no_stale_queued_state_after_run()
+        test_deleted_job_is_not_executed()
+        test_remove_clears_queued_entry_and_config()
+        test_remove_all_queued()
 
         print("\n" + "✅ "*20)
         print("ALL TESTS PASSED!")

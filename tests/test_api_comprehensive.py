@@ -165,6 +165,8 @@ def mock_job_queue():
     mock = Mock()
     mock.submit.return_value = 1  # Queue position
     mock.cancel.return_value = True
+    mock.remove.return_value = False
+    mock.remove_all_queued.return_value = 0
     mock.get_status.return_value = {
         "state": "queued",
         "position": 1
@@ -611,20 +613,33 @@ class TestValidationAndJobManagement:
         data = response.json()
         assert data["status"] == "success"
 
-    def test_delete_job_not_found(self, client, mock_job_manager):
+    def test_delete_job_not_found(self, client, mock_job_manager, mock_job_queue):
         """Test DELETE /jobs/{job_id} for non-existent job"""
         mock_job_manager.delete_job.return_value = False
 
         response = client.delete("/jobs/nonexistent_job")
         assert response.status_code == 404
+        # Nothing was deleted, so the queue must be left alone
+        mock_job_queue.remove.assert_not_called()
 
-    def test_clear_all_jobs(self, client):
+    def test_delete_queued_job_clears_queue_entry(self, client, mock_job_queue):
+        """Deleting a queued job also drops it from the queue"""
+        mock_job_queue.remove.return_value = True
+
+        response = client.delete("/jobs/test_job_001")
+        assert response.status_code == 200
+        mock_job_queue.remove.assert_called_once_with("test_job_001")
+        assert response.json()["removed_from_queue"] is True
+
+    def test_clear_all_jobs(self, client, mock_job_queue):
         """Test DELETE /jobs endpoint"""
         response = client.delete("/jobs")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
         assert "deleted_count" in data
+        # Every record is gone, so no queued job may still be waiting to run
+        mock_job_queue.remove_all_queued.assert_called_once()
 
 
 # ============================================================================
