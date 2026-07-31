@@ -891,6 +891,17 @@ class MerlinaApp {
             }
         }
 
+        // Namespace picker — lists the orgs the HF token can publish to so
+        // uploads don't silently land in the personal account.
+        import('./hf_namespaces.js').then(({ setupNamespacePicker }) => {
+            setupNamespacePicker({
+                buttonId: 'refresh-hf-namespaces',
+                selectId: 'hf-namespace',
+                tokenId: 'hf-token',
+                hintId: 'hf-namespace-hint'
+            });
+        }).catch(err => console.warn('Namespace picker unavailable:', err));
+
         // (GGUF export controls live in the Export section now.)
     }
 

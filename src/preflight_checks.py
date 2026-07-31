@@ -762,9 +762,15 @@ class PreflightValidator:
             import re
             # Check for invalid characters
             if not re.match(r'^[a-zA-Z0-9._-]+$', output_name):
+                hint = (
+                    " To upload under an organization, leave the org out of the "
+                    "name and set the HuggingFace namespace instead."
+                    if "/" in output_name else ""
+                )
                 self.errors.append(
                     f"Output name '{output_name}' contains invalid characters. "
                     "Use only letters, numbers, underscores, hyphens, and periods."
+                    + hint
                 )
 
             # Check length
@@ -821,7 +827,63 @@ class PreflightValidator:
                 )
             checks["huggingface"] = bool(hf_token)
 
+            namespace_check = self._check_hf_namespace(config, hf_token)
+            if namespace_check is not None:
+                checks["huggingface_namespace"] = namespace_check
+
         return checks
+
+    def _check_hf_namespace(self, config: Any, hf_token: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Verify the requested upload namespace is one the token can push to.
+
+        Best-effort and warning-only: a network hiccup here must not block a
+        training run. Returns None when there's nothing to check.
+        """
+        namespace = getattr(config, "hf_namespace", None)
+        if not namespace or not hf_token:
+            return None
+
+        from src.hf_namespaces import list_namespaces, normalize_namespace, resolve_hub_repo_id
+
+        namespace = normalize_namespace(namespace)
+        result: Dict[str, Any] = {
+            "namespace": namespace,
+            "repo_id": resolve_hub_repo_id(config.output_name, namespace),
+        }
+
+        try:
+            available = list_namespaces(hf_token)
+        except Exception as exc:
+            logger.debug(f"Could not verify HuggingFace namespace: {exc}")
+            result["verified"] = False
+            return result
+
+        names = {entry["name"] for entry in available.get("namespaces", [])}
+        writable = {
+            entry["name"] for entry in available.get("namespaces", [])
+            if entry.get("can_write", True)
+        }
+        result["verified"] = True
+
+        if namespace not in names:
+            self.warnings.append(
+                f"HuggingFace namespace '{namespace}' is not one of this token's "
+                f"namespaces ({', '.join(sorted(names)) or 'none'}). The upload "
+                "will likely fail — pick an org you belong to."
+            )
+            result["accessible"] = False
+        elif namespace not in writable:
+            self.warnings.append(
+                f"Your role in '{namespace}' looks read-only. The upload may be "
+                "rejected — you need write access to create repos there."
+            )
+            result["accessible"] = True
+            result["writable"] = False
+        else:
+            result["accessible"] = True
+            result["writable"] = True
+
+        return result
 
     def _check_dependencies(self) -> Dict[str, Any]:
         """Check for required dependencies"""

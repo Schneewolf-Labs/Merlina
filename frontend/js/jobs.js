@@ -674,6 +674,19 @@ class JobManager {
         if (mergeCheckbox) mergeCheckbox.checked = jobConfig?.merge_lora_before_upload ?? true;
         if (privateCheckbox) privateCheckbox.checked = jobConfig?.hf_hub_private ?? true;
 
+        // Namespace picker: default to whatever the job was configured with,
+        // and let the user re-check which orgs the token can publish to.
+        import('./hf_namespaces.js').then(({ setupNamespacePicker, setNamespaceValue, resetNamespaceHint }) => {
+            resetNamespaceHint('upload-hf-namespace-hint');
+            setNamespaceValue('upload-hf-namespace', jobConfig?.hf_namespace || '');
+            setupNamespacePicker({
+                buttonId: 'upload-refresh-namespaces',
+                selectId: 'upload-hf-namespace',
+                tokenId: 'upload-hf-token',
+                hintId: 'upload-hf-namespace-hint'
+            });
+        }).catch(err => console.warn('Namespace picker unavailable:', err));
+
         document.getElementById('upload-hub-modal').style.display = 'flex';
     }
 
@@ -688,6 +701,7 @@ class JobManager {
         // the backend resolves it and returns 400 if neither source has one.
 
         const outputName = document.getElementById('upload-repo-name')?.value?.trim() || null;
+        const namespace = document.getElementById('upload-hf-namespace')?.value?.trim() || null;
         const mergeLora = document.getElementById('upload-merge-lora')?.checked ?? true;
         const isPrivate = document.getElementById('upload-private')?.checked ?? true;
 
@@ -698,6 +712,7 @@ class JobManager {
             const result = await MerlinaAPI.uploadJob(this.currentJobId, {
                 hf_token: hfToken,
                 output_name: outputName,
+                hf_namespace: namespace,
                 merge_lora_before_upload: mergeLora,
                 hf_hub_private: isPrivate
             });

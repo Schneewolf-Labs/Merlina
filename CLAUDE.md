@@ -529,6 +529,34 @@ When pushing models to HuggingFace Hub (`push_to_hub=True`):
 - Never commit HF tokens to version control
 - Use tokens with appropriate write permissions
 
+### HuggingFace Namespace (Org) Selection
+
+`output_name` is a bare model name — it also names the local directory under
+`./models/` — so an upload has to decide *whose* namespace the repo belongs to.
+`hf_namespace` (on `TrainingConfig`, `UploadJobRequest`, and
+`ModelUploadRequest`) holds the org or account to publish under; empty means the
+token owner's personal account. `POST /hf/namespaces` lists what a token can
+publish to (account + orgs, with `can_write` flagging read-only memberships) so
+the UI can offer a picker instead of asking people to type an org name.
+
+**The rule every upload path follows** (`src/hf_namespaces.py`):
+
+1. `resolve_hub_repo_id(output_name, hf_namespace)` — an `output_name` that
+   already contains a `/` wins; otherwise the namespace is prefixed; otherwise
+   the bare name is passed through.
+2. Call `create_repo()` with that id, then **use the `repo_id` it returns for
+   every subsequent call**. `create_repo()` resolves a bare name against the
+   token's account, but `upload_folder()` resolves nothing — passing the bare
+   name to the upload is what produced
+   `RepositoryNotFoundError: 404 ... /api/models/<name>/preupload/main`.
+
+Both upload paths (`src/training_runner.py:_run_background_upload` and
+`src/train_worker.py:_do_hub_upload`) do this, and the resolved id is what the
+README upload, the config image, and the `upload_state.json` record all use.
+Pre-flight (`_check_hf_namespace`) warns — never blocks — when the chosen
+namespace isn't one the token belongs to, or when the role there looks
+read-only.
+
 ## Artemis VLM (Project Artemis — multimodal extension)
 
 The ArtemisVLM model classes live in the **standalone `artemis-vlm` package** ([Schneewolf-Labs/Artemis](https://github.com/Schneewolf-Labs/Artemis)) — a LLaVA-style graft that adds vision-language capability to any A-series (or any `MistralForCausalLM`-class) decoder. The package is `pip install`-ed via `requirements.txt` and imported as `from artemis_vlm import ...`.

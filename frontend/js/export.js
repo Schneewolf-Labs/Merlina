@@ -297,6 +297,17 @@ export class ExportManager {
     // --------------------------- HF Hub upload ---------------------------
 
     _bindHubStart() {
+        // Namespace picker — lists the orgs this token can publish to so an
+        // org upload doesn't silently resolve to the personal account.
+        import('./hf_namespaces.js').then(({ setupNamespacePicker }) => {
+            setupNamespacePicker({
+                buttonId: 'export-hub-refresh-namespaces',
+                selectId: 'export-hub-namespace',
+                tokenId: 'export-hub-token',
+                hintId: 'export-hub-namespace-hint'
+            });
+        }).catch(err => console.warn('Namespace picker unavailable:', err));
+
         const btn = document.getElementById('export-hub-start');
         if (!btn) return;
         btn.addEventListener('click', () => this._startHubUpload());
@@ -310,6 +321,7 @@ export class ExportManager {
 
         const payload = {
             repo_id: document.getElementById('export-hub-repo-id').value.trim() || null,
+            hf_namespace: document.getElementById('export-hub-namespace')?.value?.trim() || null,
             private: document.getElementById('export-hub-private').checked,
             commit_message: document.getElementById('export-hub-commit-message').value.trim() || null,
             include_adapter: document.getElementById('export-hub-incl-adapter').checked,

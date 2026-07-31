@@ -184,6 +184,7 @@ function fullFormState({ extras = {}, cards, radios } = {}) {
             'push-hub': false,
             'merge-lora-before-upload': true,
             'hf-hub-private': true,
+            'hf-namespace': '',
             'share-config': true,
             'wandb-project': '',
             'wandb-run-name': '',
@@ -344,6 +345,22 @@ describe('buildTrainingConfig — secret handling', () => {
         assert.deepEqual([...SECRET_FIELDS], ['hf_token', 'wandb_key']);
         // Frozen arrays in JS are still arrays — pushing to them throws.
         assert.throws(() => SECRET_FIELDS.push('extra'));
+    });
+});
+
+// ─── HuggingFace namespace (org selection) ──────────────────────────────────
+
+describe('buildTrainingConfig — HuggingFace namespace', () => {
+    it('carries the selected org into the config', () => {
+        setState(fullFormState({ extras: { 'hf-namespace': 'Schneewolf-Labs' } }));
+        const config = buildTrainingConfig({ includeSecrets: true });
+        assert.equal(config.hf_namespace, 'Schneewolf-Labs');
+    });
+
+    it('emits null when the personal account is selected', () => {
+        setState(fullFormState({ extras: { 'hf-namespace': '' } }));
+        const config = buildTrainingConfig({ includeSecrets: true });
+        assert.equal(config.hf_namespace, null);
     });
 });
 

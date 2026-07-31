@@ -203,9 +203,13 @@ class MerlinaAPI {
         return this.fetch(`/jobs/${jobId}/retry`, { method: 'POST' }, LONG_TIMEOUT);
     }
 
-    static async uploadJob(jobId, { hf_token, output_name = null, merge_lora_before_upload = true, hf_hub_private = true } = {}) {
+    static async uploadJob(jobId, { hf_token, output_name = null, hf_namespace, merge_lora_before_upload = true, hf_hub_private = true } = {}) {
         const body = { hf_token, merge_lora_before_upload, hf_hub_private };
         if (output_name) body.output_name = output_name;
+        // Sent whenever the caller states one — including null, which means
+        // "upload to my personal account" and overrides the job's original
+        // namespace. Omitting the key entirely keeps that namespace.
+        if (hf_namespace !== undefined) body.hf_namespace = hf_namespace;
         return this.fetch(`/jobs/${jobId}/upload`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -395,6 +399,14 @@ class MerlinaAPI {
     // Server-side secret availability (hf_token, wandb_api_key)
     static async getEnvSecrets() {
         return this.fetch('/env/secrets');
+    }
+
+    // HuggingFace namespaces (personal account + orgs) a token can push to
+    static async getHfNamespaces(hfToken = null) {
+        return this.fetch('/hf/namespaces', {
+            method: 'POST',
+            body: JSON.stringify({ hf_token: hfToken })
+        }, LONG_TIMEOUT);
     }
 
     // Disk cleanup & analysis endpoints

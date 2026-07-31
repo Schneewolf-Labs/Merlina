@@ -183,6 +183,43 @@ Returns database, WebSocket, and queue statistics.
 
 ---
 
+#### List HuggingFace Namespaces
+
+```http
+POST /hf/namespaces
+```
+
+Lists the namespaces a HuggingFace token can publish to — the token owner's
+own account plus every organization they belong to. Use it to pick
+`hf_namespace` before training or uploading; a bare `output_name` always
+resolves to the personal account, which is what makes org uploads 404.
+
+**Request Body:**
+```json
+{
+  "hf_token": "hf_..."
+}
+```
+
+`hf_token` is optional when `HF_TOKEN` is set in the server's `.env`.
+
+**Response:**
+```json
+{
+  "user": "nbeerbower",
+  "namespaces": [
+    {"name": "nbeerbower", "type": "user", "full_name": "", "role": "owner", "can_write": true},
+    {"name": "Schneewolf-Labs", "type": "org", "full_name": "Schneewolf Labs", "role": "admin", "can_write": true}
+  ]
+}
+```
+
+**Errors:**
+- `400` — no token available, or the Hub rejected it
+- `502` — the Hub could not be reached
+
+---
+
 ### Training Job Management
 
 #### Validate Training Configuration
@@ -1297,6 +1334,7 @@ Complete training configuration schema.
   "push_to_hub": false,
   "merge_lora_before_upload": true,
   "hf_hub_private": true,
+  "hf_namespace": "Schneewolf-Labs",
   "hf_token": "hf_...",
   "wandb_key": "...",
 
