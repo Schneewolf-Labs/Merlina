@@ -451,6 +451,7 @@ async def start_training(
     use_lora: bool = True,
     use_4bit: bool = True,
     push_to_hub: bool = False,
+    hf_namespace: Optional[str] = None,
     priority: str = "normal",
     overrides: Optional[dict] = None,
 ) -> str:
@@ -487,6 +488,8 @@ async def start_training(
         use_lora: Train with LoRA adapters (default True).
         use_4bit: Use 4-bit quantization to save VRAM (default True).
         push_to_hub: Push the result to HuggingFace Hub when done (default False).
+        hf_namespace: Organization (or account) to publish under when pushing.
+            Empty uploads to the token owner's own account.
         priority: Queue priority: 'low', 'normal', or 'high'.
         overrides: Optional dict merged into the config for any advanced field
             (e.g. {"lora_r": 32, "beta": 0.2, "gradient_checkpointing": true}).
@@ -507,6 +510,7 @@ async def start_training(
         "learning_rate": learning_rate,
         "num_epochs": num_epochs,
         "push_to_hub": push_to_hub,
+        "hf_namespace": hf_namespace,
         "dataset": {
             "source": source,
             "format": {"format_type": dataset_format},

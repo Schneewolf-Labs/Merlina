@@ -51,6 +51,7 @@ from grimoire.data import tokenize_sft, tokenize_preference, tokenize_kto
 
 from huggingface_hub import HfApi
 from src.model_card import generate_model_readme, upload_model_readme, generate_wandb_run_name, upload_config_image
+from src.hf_namespaces import resolve_hub_repo_id
 
 from dataset_handlers import (
     DatasetPipeline,
@@ -235,16 +236,24 @@ def _run_background_upload(
         api = HfApi()
         repo_visibility = "private" if config.hf_hub_private else "public"
 
+        # Resolve the namespace (org or user account) the repo belongs to.
+        # config.output_name is a bare model name; without the prefix the
+        # upload lands in — or 404s against — the wrong namespace.
+        target_repo_id = resolve_hub_repo_id(
+            config.output_name, getattr(config, "hf_namespace", None)
+        )
+
         # Create or get the repository
         repo_url = api.create_repo(
-            repo_id=config.output_name,
+            repo_id=target_repo_id,
             token=config.hf_token,
             private=config.hf_hub_private,
             exist_ok=True
         )
-        # Use the fully-qualified repo_id (with namespace) from create_repo
-        # config.output_name may lack the user/org prefix, causing 404s on upload
-        full_repo_id = repo_url.repo_id
+        # Use the fully-qualified repo_id (with namespace) from create_repo —
+        # create_repo resolves a bare name against the token's account, but
+        # upload_folder does not, which is what caused 404s on upload.
+        full_repo_id = getattr(repo_url, "repo_id", None) or target_repo_id
         logger.info(f"📦 Repository ready: {full_repo_id}")
 
         # Diffusion LoRAs are uploaded as plain folders — no merge path
@@ -261,7 +270,7 @@ def _run_background_upload(
                 commit_message=f"Upload diffusion LoRA trained with Merlina ({training_mode})",
             )
             logger.info("✅ Diffusion LoRA uploaded successfully!")
-            logger.info(f"💡 To use: pipe.load_lora_weights('{config.output_name}')")
+            logger.info(f"💡 To use: pipe.load_lora_weights('{full_repo_id}')")
         # Handle LLM/VLM upload based on whether LoRA was used and merge preference
         elif config.use_lora and config.merge_lora_before_upload:
             # The merge already happened synchronously upstream. Use the
@@ -292,7 +301,7 @@ def _run_background_upload(
                     commit_message=f"Upload LoRA adapter trained with Merlina ({training_mode})"
                 )
                 logger.info(f"✅ LoRA adapter uploaded successfully!")
-                logger.info(f"💡 To use: PeftModel.from_pretrained('{config.base_model}', '{config.output_name}')")
+                logger.info(f"💡 To use: PeftModel.from_pretrained('{config.base_model}', '{full_repo_id}')")
 
         else:
             # For adapter-only or full model uploads, use upload_folder() directly
@@ -316,7 +325,7 @@ def _run_background_upload(
 
             if config.use_lora:
                 logger.info(f"✅ LoRA adapter uploaded successfully!")
-                logger.info(f"💡 To use: PeftModel.from_pretrained('{config.base_model}', '{config.output_name}')")
+                logger.info(f"💡 To use: PeftModel.from_pretrained('{config.base_model}', '{full_repo_id}')")
             else:
                 logger.info(f"✅ Model uploaded successfully!")
 
@@ -382,7 +391,10 @@ def _run_background_upload(
             from .upload_state import record_upload
             record_upload(
                 Path(final_output_dir),
-                repo_id=getattr(config, "output_name", ""),
+                repo_id=resolve_hub_repo_id(
+                    getattr(config, "output_name", ""),
+                    getattr(config, "hf_namespace", None),
+                ),
                 repo_url="",
                 private=getattr(config, "hf_hub_private", True),
                 commit_message=f"Upload via Merlina ({training_mode})",

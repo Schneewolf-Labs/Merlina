@@ -1071,6 +1071,18 @@
                                     <small style="color: #888; font-size: 0.85em;">Required to push models. Get your token from <a href="https://huggingface.co/settings/tokens" target="_blank" style="color: #f97316;">huggingface.co/settings/tokens</a></small>
                                 </div>
 
+                                <!-- Namespace (account or organization) -->
+                                <div class="form-group">
+                                    <label for="hf-namespace">Upload To (Account or Organization)</label>
+                                    <div style="display: flex; gap: 8px; align-items: center;">
+                                        <select id="hf-namespace" class="magic-input" style="flex: 1;">
+                                            <option value="">Personal account (default)</option>
+                                        </select>
+                                        <button type="button" id="refresh-hf-namespaces" class="action-button" style="white-space: nowrap; padding: 8px 14px;">🔄 Check Orgs</button>
+                                    </div>
+                                    <small id="hf-namespace-hint" style="color: #888; font-size: 0.85em;">Click "Check Orgs" to list the organizations your token can publish to.</small>
+                                </div>
+
                                 <!-- Privacy Toggle -->
                                 <label class="magic-checkbox" style="margin-top: 10px;">
                                     <input type="checkbox" id="hf-hub-private" checked>
@@ -1480,9 +1492,20 @@
                         <div id="export-hub-status-banner" style="margin-bottom: 12px; display: none;"></div>
 
                         <div class="form-group">
+                            <label for="export-hub-namespace">Upload To (Account or Organization)</label>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <select id="export-hub-namespace" class="magic-input" style="flex: 1;">
+                                    <option value="">Personal account (default)</option>
+                                </select>
+                                <button type="button" id="export-hub-refresh-namespaces" class="action-button" style="white-space: nowrap; padding: 8px 14px;">🔄 Check Orgs</button>
+                            </div>
+                            <small id="export-hub-namespace-hint" style="color: #888; font-size: 0.85em;">Click "Check Orgs" to list the organizations your token can publish to.</small>
+                        </div>
+
+                        <div class="form-group">
                             <label for="export-hub-repo-id">Repository ID</label>
-                            <input type="text" id="export-hub-repo-id" class="magic-input" placeholder="user-or-org/model-name">
-                            <small style="color: #888; font-size: 0.85em;">Defaults to the model folder name. Add an org prefix (e.g. <code>myteam/</code>) to publish under an organization.</small>
+                            <input type="text" id="export-hub-repo-id" class="magic-input" placeholder="model-name">
+                            <small style="color: #888; font-size: 0.85em;">Defaults to the model folder name. Picking an organization above publishes it as <code>org/model-name</code>; an explicit <code>org/name</code> here wins.</small>
                         </div>
 
                         <label class="magic-checkbox" style="margin-top: 6px;">
@@ -1889,6 +1912,16 @@
                     <label for="upload-hf-token">HuggingFace Token</label>
                     <input type="password" id="upload-hf-token" placeholder="hf_... (or leave blank to use server's .env HF_TOKEN)" class="magic-input">
                     <small style="color: #888; font-size: 0.85em;">Optional if <code>HF_TOKEN</code> is set in the server's <code>.env</code>.</small>
+                </div>
+                <div class="form-group">
+                    <label for="upload-hf-namespace">Upload To (Account or Organization)</label>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <select id="upload-hf-namespace" class="magic-input" style="flex: 1;">
+                            <option value="">Personal account (default)</option>
+                        </select>
+                        <button type="button" id="upload-refresh-namespaces" class="action-button" style="white-space: nowrap; padding: 8px 14px;">🔄 Check Orgs</button>
+                    </div>
+                    <small id="upload-hf-namespace-hint" style="color: #888; font-size: 0.85em;">Click "Check Orgs" to list the organizations your token can publish to.</small>
                 </div>
                 <div class="form-group">
                     <label for="upload-repo-name">Repository Name (optional override)</label>

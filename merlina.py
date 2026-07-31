@@ -468,6 +468,28 @@ class DatasetConfig(BaseModel):
     training_mode: str = Field("orpo", description="Training mode: 'sft', 'orpo', 'dpo', 'simpo', 'cpo', 'ipo', or 'kto'. For SFT/KTO, rejected column is optional.")
 
 
+def _clean_hf_namespace(value: Optional[str]) -> Optional[str]:
+    """Normalize and validate a user-supplied HuggingFace namespace.
+
+    Returns ``None`` for blank input. Raises ``ValueError`` (surfaced by
+    Pydantic as a 422) if the namespace isn't a legal Hub owner name, so a
+    typo fails at request time instead of after hours of training.
+
+    Callers must skip the assignment when the value is already ``None`` —
+    writing to the field marks it as explicitly set, which the upload
+    endpoint uses to tell "not specified" from "clear the namespace".
+    """
+    from src.hf_namespaces import is_valid_name, normalize_namespace
+
+    cleaned = normalize_namespace(value)
+    if cleaned and not is_valid_name(cleaned):
+        raise ValueError(
+            f"Invalid HuggingFace namespace '{cleaned}'. Use only letters, "
+            "numbers, hyphens, underscores, and periods (no slashes)."
+        )
+    return cleaned
+
+
 # Pydantic models
 class TrainingConfig(BaseModel):
     # Model settings
@@ -672,6 +694,12 @@ class TrainingConfig(BaseModel):
     push_to_hub: bool = Field(False, description="Push to HuggingFace Hub")
     merge_lora_before_upload: bool = Field(True, description="Merge LoRA with base model before uploading (if False, uploads LoRA adapter only)")
     hf_hub_private: bool = Field(True, description="Make HuggingFace Hub repository private")
+    hf_namespace: Optional[str] = Field(
+        None,
+        description="HuggingFace namespace (org or username) to upload under. "
+                    "Empty uploads to the token's own account. Ignored when "
+                    "output_name already contains a namespace."
+    )
     hf_token: Optional[str] = Field(None, description="HuggingFace token for pushing")
     wandb_key: Optional[str] = Field(None, description="Weights & Biases API key")
 
@@ -789,6 +817,13 @@ class TrainingConfig(BaseModel):
         """
         self.hf_token = resolve_hf_token(self.hf_token)
         self.wandb_key = resolve_wandb_key(self.wandb_key)
+        return self
+
+    @model_validator(mode="after")
+    def _normalize_hf_namespace(self):
+        """Trim the namespace (tolerating a pasted profile URL) and validate it."""
+        if self.hf_namespace is not None:
+            self.hf_namespace = _clean_hf_namespace(self.hf_namespace)
         return self
 
     @model_validator(mode="after")
@@ -985,6 +1020,11 @@ class ModelUploadRequest(BaseModel):
         None,
         description="Override the Hub repo ID. Defaults to the model directory name."
     )
+    hf_namespace: Optional[str] = Field(
+        None,
+        description="Namespace (org or username) to upload under. Ignored when "
+                    "repo_id already contains one."
+    )
     private: bool = Field(True, description="Create/update repo as private")
     commit_message: Optional[str] = Field(None, description="Commit message")
     hf_token: Optional[str] = Field(None, description="HuggingFace token; falls back to env")
@@ -1007,6 +1047,8 @@ class ModelUploadRequest(BaseModel):
     @model_validator(mode="after")
     def _fill_hf_token_from_env(self):
         self.hf_token = resolve_hf_token(self.hf_token)
+        if self.hf_namespace is not None:
+            self.hf_namespace = _clean_hf_namespace(self.hf_namespace)
         return self
 
 
@@ -1275,6 +1317,40 @@ async def get_env_secrets_status():
     have to paste them into the UI.
     """
     return env_secret_status()
+
+
+class HFNamespacesRequest(BaseModel):
+    """Ask the Hub which namespaces a token may publish to."""
+    hf_token: Optional[str] = Field(
+        None,
+        description="HuggingFace token. Falls back to HF_TOKEN in the server's .env."
+    )
+
+    @model_validator(mode="after")
+    def _fill_hf_token_from_env(self):
+        self.hf_token = resolve_hf_token(self.hf_token)
+        return self
+
+
+@app.post("/hf/namespaces", tags=["System"], summary="List HuggingFace namespaces for a token")
+async def list_hf_namespaces(request: HFNamespacesRequest):
+    """
+    List the namespaces (the token owner's account plus every organization
+    they belong to) that a HuggingFace token can publish models to.
+
+    The UI uses this to offer an org picker at upload time — uploading with a
+    bare model name silently targets the personal account, which is what makes
+    org uploads 404.
+    """
+    from src.hf_namespaces import HFNamespaceError, list_namespaces
+
+    try:
+        return await asyncio.to_thread(list_namespaces, request.hf_token)
+    except HFNamespaceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.warning(f"Failed to list HuggingFace namespaces: {exc}")
+        raise HTTPException(status_code=502, detail=f"Could not list namespaces: {exc}")
 
 
 @app.get("/llama-cpp/status", tags=["System"], summary="llama.cpp availability")
@@ -1738,12 +1814,20 @@ class UploadJobRequest(BaseModel):
         description="HuggingFace API token. Optional if HF_TOKEN is set in the server's .env"
     )
     output_name: Optional[str] = Field(None, description="Override repository name (defaults to original output_name)")
+    hf_namespace: Optional[str] = Field(
+        None,
+        description="Namespace (org or username) to upload under. Send null "
+                    "explicitly to publish to the token's own account; omit the "
+                    "field to keep the namespace the job was trained with."
+    )
     merge_lora_before_upload: bool = Field(True, description="Merge LoRA with base model before uploading")
     hf_hub_private: bool = Field(True, description="Make HuggingFace Hub repository private")
 
     @model_validator(mode="after")
     def _fill_hf_token_from_env(self):
         self.hf_token = resolve_hf_token(self.hf_token)
+        if self.hf_namespace is not None:
+            self.hf_namespace = _clean_hf_namespace(self.hf_namespace)
         return self
 
 
@@ -1799,6 +1883,10 @@ async def upload_job(job_id: str, request: UploadJobRequest):
     config.hf_hub_private = request.hf_hub_private
     if request.output_name:
         config.output_name = request.output_name
+    # Distinguish "not specified" (keep the job's namespace) from an explicit
+    # null (publish to the token's own account).
+    if "hf_namespace" in request.model_fields_set:
+        config.hf_namespace = request.hf_namespace
 
     training_mode = config.training_mode
 
@@ -4565,6 +4653,10 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
     # event loop so a slow/hung download can't freeze the API.
     is_vlm = await asyncio.to_thread(_resolve_is_vlm, request.model_type, base_model)
     repo_id = request.repo_id or name
+    # Reported back to the caller so the UI shows where the model actually
+    # lands (the upload itself re-resolves this the same way).
+    from src.hf_namespaces import resolve_hub_repo_id
+    resolved_repo_id = resolve_hub_repo_id(repo_id, request.hf_namespace)
     commit_message = request.commit_message or f"Upload via Merlina (post-hoc)"
 
     # Build the allow_patterns for upload_folder based on the
@@ -4587,6 +4679,7 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
 
     cfg = SimpleNamespace(
         output_name=repo_id,
+        hf_namespace=request.hf_namespace,
         base_model=base_model,
         hf_token=request.hf_token,
         hf_hub_private=request.private,
@@ -4621,7 +4714,7 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
     job_manager.create_job(job_id, {
         "type": "post_hoc_upload",
         "model_name": name,
-        "repo_id": repo_id,
+        "repo_id": resolved_repo_id,
         "include_merged": request.include_merged,
         "include_gguf": request.include_gguf,
         "include_adapter": request.include_adapter,
@@ -4673,7 +4766,7 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
     return {
         "job_id": job_id,
         "model_name": name,
-        "repo_id": repo_id,
+        "repo_id": resolved_repo_id,
         "started": True,
         "queue_position": position,
     }

@@ -130,14 +130,23 @@ def _do_hub_upload(config, final_output_dir: str, training_mode: str, job_id: st
     from huggingface_hub import HfApi
     from peft import PeftModel
     from src.model_card import generate_model_readme, upload_model_readme, upload_config_image
+    from src.hf_namespaces import resolve_hub_repo_id
 
     api = HfApi()
-    api.create_repo(
-        repo_id=config.output_name,
+    target_repo_id = resolve_hub_repo_id(
+        config.output_name, getattr(config, "hf_namespace", None)
+    )
+    repo_url = api.create_repo(
+        repo_id=target_repo_id,
         token=config.hf_token,
         private=config.hf_hub_private,
         exist_ok=True,
     )
+    # create_repo() resolves a bare name against the token's account, but
+    # upload_folder() does not — always upload to the fully-qualified id it
+    # hands back, or the upload 404s under an org namespace.
+    full_repo_id = getattr(repo_url, "repo_id", None) or target_repo_id
+    logger.info(f"Repository ready: {full_repo_id}")
 
     if config.use_lora and config.merge_lora_before_upload:
         try:
@@ -172,7 +181,7 @@ def _do_hub_upload(config, final_output_dir: str, training_mode: str, job_id: st
 
             api.upload_folder(
                 folder_path=merge_dir,
-                repo_id=config.output_name,
+                repo_id=full_repo_id,
                 token=config.hf_token,
                 commit_message=f"Upload merged model ({training_mode})",
             )
@@ -183,26 +192,26 @@ def _do_hub_upload(config, final_output_dir: str, training_mode: str, job_id: st
             logger.warning(f"CPU merge failed ({e}), uploading adapter only")
             api.upload_folder(
                 folder_path=final_output_dir,
-                repo_id=config.output_name,
+                repo_id=full_repo_id,
                 token=config.hf_token,
                 commit_message=f"Upload LoRA adapter ({training_mode})",
             )
     else:
         api.upload_folder(
             folder_path=final_output_dir,
-            repo_id=config.output_name,
+            repo_id=full_repo_id,
             token=config.hf_token,
             commit_message=f"Upload model ({training_mode})",
         )
 
     readme_content = generate_model_readme(config, training_mode)
-    upload_model_readme(config.output_name, readme_content, config.hf_token)
+    upload_model_readme(full_repo_id, readme_content, config.hf_token)
 
     # Optionally publish the shareable config image (QR + PNG metadata).
     # Best-effort and self-gated on config.share_config_image.
-    upload_config_image(config.output_name, config, config.hf_token)
+    upload_config_image(full_repo_id, config, config.hf_token)
 
-    logger.info(f"Model published at: https://huggingface.co/{config.output_name}")
+    logger.info(f"Model published at: https://huggingface.co/{full_repo_id}")
     if job_manager:
         final_status = "stopped" if was_stopped else "completed"
         job_manager.update_job(job_id, status=final_status, progress=1.0, output_dir=final_output_dir)

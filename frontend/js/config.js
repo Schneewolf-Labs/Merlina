@@ -629,6 +629,14 @@ class ConfigManager {
             this.setCheckboxValue('merge-lora-before-upload', config.merge_lora_before_upload ?? true);
         }
 
+        // Upload namespace (org or account). The dropdown is only populated
+        // after a "Check Orgs" fetch, so add the saved value as an option.
+        if (config.hf_namespace) {
+            import('./hf_namespaces.js')
+                .then(({ setNamespaceValue }) => setNamespaceValue('hf-namespace', config.hf_namespace))
+                .catch(err => console.warn('Could not restore hf_namespace:', err));
+        }
+
         // Share-config toggle (controls whether the training config is
         // embedded in the model README at upload time).
         if (config.share_config !== undefined) {

@@ -269,6 +269,9 @@ export function buildTrainingConfig({ gpuManager = null, includeSecrets = true }
         push_to_hub: bool('push-hub', false),
         merge_lora_before_upload: bool('merge-lora-before-upload', true),
         hf_hub_private: bool('hf-hub-private', true),
+        // Org/user namespace the model is uploaded under. Empty = the
+        // token owner's personal account.
+        hf_namespace: str('hf-namespace', '') || null,
 
         // GGUF export — Cast Spell does not trigger GGUF (it's done from
         // the dedicated Export tab on a finished model). We still emit

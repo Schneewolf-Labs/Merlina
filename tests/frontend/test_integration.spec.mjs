@@ -290,6 +290,52 @@ test.describe('LoRA settings', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
+// HuggingFace namespace (org) selection
+// ═════════════════════════════════════════════════════════════════════════════
+
+test.describe('HuggingFace namespace picker', () => {
+    test('namespace picker appears with the Hub config', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
+
+        // Hidden until "Push to HuggingFace Hub" is enabled.
+        await expect(page.locator('#hf-namespace')).toBeHidden();
+
+        await page.locator('#push-hub').check();
+        await expect(page.locator('#hf-hub-config')).toBeVisible();
+        await expect(page.locator('#hf-namespace')).toBeVisible();
+        await expect(page.locator('#refresh-hf-namespaces')).toBeVisible();
+    });
+
+    test('defaults to the personal account (empty namespace)', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
+        await page.locator('#push-hub').check();
+        await expect(page.locator('#hf-namespace')).toHaveValue('');
+    });
+
+    test('Check Orgs reports failures in the hint instead of throwing', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
+        await page.locator('#push-hub').check();
+        await page.locator('#refresh-hf-namespaces').click();
+        // The test server has no usable Hub token, so the picker must
+        // degrade to an inline message rather than a broken dropdown.
+        await expect(page.locator('#hf-namespace-hint')).not.toHaveText(
+            /Click "Check Orgs"/, { timeout: 10000 });
+        await expect(page.locator('#hf-namespace')).toBeVisible();
+    });
+
+    test('upload modal and export panel expose their own pickers', async ({ page }) => {
+        await page.goto('/');
+        await expect(page.locator('#upload-hf-namespace')).toHaveCount(1);
+        await expect(page.locator('#upload-refresh-namespaces')).toHaveCount(1);
+        await expect(page.locator('#export-hub-namespace')).toHaveCount(1);
+        await expect(page.locator('#export-hub-refresh-namespaces')).toHaveCount(1);
+    });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
 // API connectivity
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -404,6 +450,15 @@ test.describe('API endpoints', () => {
         const data = await response.json();
         expect(data.count).toBe(0);
         expect(data.applied).toBe(false);
+    });
+
+    test('hf namespaces endpoint reports token problems cleanly', async ({ request }) => {
+        // No usable Hub token in the test server — the endpoint must answer
+        // with a 4xx/5xx explanation, never a stack trace or a 404.
+        const response = await request.post('/hf/namespaces', { data: { hf_token: '' } });
+        expect(response.status()).toBeGreaterThanOrEqual(400);
+        const data = await response.json();
+        expect(data).toHaveProperty('detail');
     });
 
     test('wandb clear dry-run reports without deleting', async ({ request }) => {
