@@ -43,6 +43,7 @@ from src.memory_guard import (
     compute_allocator_fraction,
     detect_unified_memory,
     effective_reserve_gb,
+    reclaim_cuda_cache,
 )
 
 
@@ -141,8 +142,13 @@ def test_compute_allocator_fraction():
 # Watchdog state machine
 # ---------------------------------------------------------------------------
 
-def _make_watchdog(readings, log_path=None, soft=8.0, hard=3.0):
-    """Watchdog fed from a scripted list of free-GB readings."""
+def _make_watchdog(readings, log_path=None, soft=8.0, hard=3.0,
+                   reclaimer=None, reclaim_cooldown=60.0):
+    """Watchdog fed from a scripted list of free-GB readings.
+
+    Note: a reclaim attempt resamples via memory_reader, consuming the next
+    scripted reading — script the post-reclaim value right after the dip.
+    """
     it = iter(readings)
     state = {"current": readings[0]}
 
@@ -163,6 +169,8 @@ def _make_watchdog(readings, log_path=None, soft=8.0, hard=3.0):
         log_path=log_path,
         memory_reader=reader,
         job_id="job_test",
+        reclaimer=reclaimer,
+        reclaim_cooldown_seconds=reclaim_cooldown,
     )
     return wd, soft_hits, hard_hits
 
@@ -213,6 +221,110 @@ def test_watchdog_writes_forensic_log():
         assert len(lines) == 2
         assert "[job_test]" in lines[0]
         assert "sys_avail=" in lines[0] and "cuda_alloc=" in lines[0]
+
+
+# ---------------------------------------------------------------------------
+# Reclaim-before-stop (post-eval CUDA cache slack)
+# ---------------------------------------------------------------------------
+
+def test_watchdog_reclaim_clears_soft_pressure():
+    # Dip to 7.5GB is pure allocator cache (post-eval); reclaim frees it and
+    # the resample reads 15GB — no stop requested, watchdog stays armed.
+    calls = []
+    wd, soft_hits, hard_hits = _make_watchdog(
+        [50, 50, 7.5, 15], reclaimer=lambda: calls.append(1) or 6.9)
+    wd.check_once()  # 50 (one reading is consumed at watchdog init)
+    wd.check_once()  # 7.5 -> reclaim -> resample 15 -> recovered
+    assert len(calls) == 1
+    assert soft_hits == [] and hard_hits == []
+    assert wd.soft_triggered is False
+    assert wd.reclaim_attempts == 1 and wd.reclaim_recoveries == 1
+    assert wd.last_sample.system_available == 15
+
+
+def test_watchdog_reclaim_insufficient_escalates():
+    # Reclaim barely helps (7.5 -> 7.6): still under the floor, so the soft
+    # escalation fires with the post-reclaim sample.
+    wd, soft_hits, _ = _make_watchdog([50, 7.5, 7.6], reclaimer=lambda: 0.1)
+    wd.check_once()
+    wd.check_once()
+    assert len(soft_hits) == 1
+    assert soft_hits[0].system_available == 7.6
+    assert wd.soft_triggered is True
+    assert wd.reclaim_attempts == 1 and wd.reclaim_recoveries == 0
+
+
+def test_watchdog_reclaim_cooldown_escalates_on_fast_return():
+    # First dip: reclaim clears it. Pressure returns within the cooldown —
+    # the cache isn't the problem, so this time the stop goes through
+    # without another (pointless) empty_cache round-trip.
+    calls = []
+    wd, soft_hits, _ = _make_watchdog(
+        [50, 7.5, 15, 7.5], reclaimer=lambda: calls.append(1) or 6.9)
+    wd.check_once()  # 50
+    wd.check_once()  # 7.5 -> reclaim -> 15
+    wd.check_once()  # 7.5 again, within cooldown -> escalate
+    assert len(calls) == 1
+    assert len(soft_hits) == 1
+    assert soft_hits[0].system_available == 7.5
+    assert wd.soft_triggered is True
+
+
+def test_watchdog_hard_floor_never_reclaims():
+    # At the critical floor the abort must not wait on a GPU sync.
+    calls = []
+    wd, soft_hits, hard_hits = _make_watchdog(
+        [50, 2.0], reclaimer=lambda: calls.append(1) or 6.9)
+    wd.check_once()
+    wd.check_once()
+    assert len(hard_hits) == 1
+    assert calls == []
+
+
+def test_watchdog_reclaimer_failure_still_escalates():
+    def broken():
+        raise RuntimeError("driver hiccup")
+
+    wd, soft_hits, _ = _make_watchdog([50, 7.5], reclaimer=broken)
+    wd.check_once()
+    wd.check_once()
+    assert len(soft_hits) == 1
+    assert soft_hits[0].system_available == 7.5
+
+
+def test_reclaim_cuda_cache_without_cuda_returns_zero():
+    fake = _fake_torch("n/a", 0.0, cuda_available=False)
+    with mock.patch.dict(sys.modules, {"torch": fake}):
+        assert reclaim_cuda_cache() == 0.0
+
+
+def test_reclaim_cuda_cache_reports_freed_gb():
+    reserved = [8 * 1024**3, 1 * 1024**3]  # before / after empty_cache
+    fake_cuda = SimpleNamespace(
+        is_available=lambda: True,
+        is_initialized=lambda: True,
+        memory_reserved=lambda: reserved.pop(0),
+        empty_cache=lambda: None,
+    )
+    with mock.patch.dict(sys.modules, {"torch": SimpleNamespace(cuda=fake_cuda)}):
+        freed = reclaim_cuda_cache(context="test")
+    assert abs(freed - 7.0) < 1e-9
+
+
+def test_eval_teardown_reclaims_cache():
+    # The callback's on_evaluate delegates to _teardown_eval_memory; the
+    # callback class itself can't be instantiated under the mocked grimoire
+    # base class, so the module function is the testable seam. Import needs
+    # the mocked ML stack (conftest under pytest); standalone runs without
+    # those mocks just skip.
+    try:
+        from src import training_runner
+    except Exception:
+        print("  (skipped: training_runner deps unavailable standalone)")
+        return
+    with mock.patch.object(training_runner, "reclaim_cuda_cache") as rc:
+        training_runner._teardown_eval_memory()
+    rc.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -306,6 +418,18 @@ def test_guard_active_and_soft_stop_requests_trainer_stop():
     finally:
         guard.shutdown()
     assert guard.active is False
+
+
+def test_guard_wires_cache_reclaimer_into_watchdog():
+    guard = TrainingMemoryGuard(
+        "job_x", settings=_guard_settings(), memory_reader=lambda: _sample(50.0)
+    )
+    guard.install()
+    try:
+        assert guard._watchdog.reclaimer is reclaim_cuda_cache
+        assert guard._watchdog.reclaim_cooldown_seconds == 60.0
+    finally:
+        guard.shutdown()
 
 
 def test_guard_soft_before_trainer_does_not_crash():

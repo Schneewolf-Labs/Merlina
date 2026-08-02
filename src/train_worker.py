@@ -319,6 +319,25 @@ class FileProgressCallback(TrainerCallback):
                 self.job_manager.update_job(self.job_id, eval_loss=record["eval_loss"])
 
 
+class EvalMemoryTeardownCallback(TrainerCallback):
+    """Release the eval pass's CUDA cache back to the shared pool before
+    training resumes (worker-side twin of
+    src.training_runner.EvalMemoryTeardownCallback — same fix, this is the
+    trainer the subprocess path actually runs).
+
+    Eval leaves a multi-GB reserved-but-unallocated gap in the caching
+    allocator; on a unified-memory machine (DGX Spark) that gap is host RAM
+    the OS can't use, and it's what pushed free RAM under the memory
+    guard's soft floor right after eval. Only wired in when the guard is
+    active. Unlike FileProgressCallback this is added on *every* DDP rank —
+    each process owns its own allocator cache.
+    """
+
+    def on_evaluate(self, trainer, metrics):
+        from src.memory_guard import reclaim_cuda_cache
+        reclaim_cuda_cache(context="post-eval teardown")
+
+
 def run_worker(args):
     """Main training logic executed by each DDP process."""
     # Install SIGTERM handler
@@ -697,6 +716,8 @@ def run_worker(args):
             callbacks.append(
                 FileProgressCallback(args.job_id, args.progress_file, job_manager)
             )
+        if memory_guard.active:
+            callbacks.append(EvalMemoryTeardownCallback())
 
         trainer = GrimoireTrainer(
             model=model,

@@ -448,10 +448,19 @@ against this with three layers, all inert on discrete-GPU systems:
    reserve (`MEMORY_GUARD_RESERVE_GB`, default 12 GB, capped at 25% of the
    pool) off-limits, so spikes fail as ordinary catchable OOMs.
 2. **Watchdog** — a per-job thread samples free system RAM. Below the soft
-   floor (`MEMORY_GUARD_SOFT_FREE_GB`, 8 GB) it calls `trainer.request_stop()`
-   (graceful, checkpoint saved); below the hard floor
-   (`MEMORY_GUARD_HARD_FREE_GB`, 3 GB) it raises `MemoryPressureAbort` in the
-   training thread. Floors auto-scale down on small boards.
+   floor (`MEMORY_GUARD_SOFT_FREE_GB`, 8 GB) it first **reclaims** the CUDA
+   allocator's reserved-but-unallocated cache (`reclaim_cuda_cache()` —
+   post-eval slack is the classic multi-GB offender) and only calls
+   `trainer.request_stop()` (graceful, checkpoint saved) if free RAM is
+   still under the floor, or if pressure returns within
+   `MEMORY_GUARD_RECLAIM_COOLDOWN_SECONDS` (60 s) of the last reclaim.
+   Below the hard floor (`MEMORY_GUARD_HARD_FREE_GB`, 3 GB) it raises
+   `MemoryPressureAbort` in the training thread with no reclaim attempt.
+   Floors auto-scale down on small boards. As a proactive complement, all
+   three trainer paths (`training_runner`, `train_worker`,
+   `training_runner_vlm`) add an `EvalMemoryTeardownCallback` when the
+   guard is active, which empties the allocator cache right after each
+   eval pass — so the slack never reads as memory pressure at all.
 3. **Forensic log** — every sample is appended and fsync'd to
    `data/memory_guard.log`, so a post-reboot investigation has the memory
    timeline the crashed kernel can't give you. Check this file (and `dmesg`)

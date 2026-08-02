@@ -92,6 +92,10 @@ class Settings(BaseSettings):
     memory_guard_hard_free_gb: float = 3.0  # below this free RAM: abort the job
     memory_guard_poll_seconds: float = 5.0
     memory_guard_log_enabled: bool = True   # fsync'd forensic log at data/memory_guard.log
+    # Before a soft-floor stop, the watchdog releases the CUDA allocator's
+    # idle cache (post-eval slack) and re-checks. If pressure comes back
+    # within this window it stops for real instead of thrashing the cache.
+    memory_guard_reclaim_cooldown_seconds: float = 60.0
 
     # Offline mode: never hit the HuggingFace Hub. Exports HF_HUB_OFFLINE /
     # TRANSFORMERS_OFFLINE so transformers/datasets/huggingface_hub resolve
