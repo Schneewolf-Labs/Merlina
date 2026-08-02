@@ -17,11 +17,15 @@ Three defenses, all wired through this module:
    cleanly; the machine survives.
 
 2. **Watchdog thread** — ``MemoryWatchdog`` samples system + CUDA memory.
-   Below a soft free-RAM floor it requests a graceful trainer stop (the
-   checkpoint is saved); below a hard floor it aborts the training thread
-   with :class:`MemoryPressureAbort` (host-side spikes — full-precision
-   loads, dataset mapping, leaks — never go through the CUDA allocator,
-   so the cap alone can't catch them).
+   Below a soft free-RAM floor it first tries to *reclaim* the CUDA
+   allocator's reserved-but-unallocated cache (``reclaim_cuda_cache``) —
+   on a shared pool that cache is host RAM the OS can't touch, and after
+   an eval pass it can be several GB of pure slack. Only if free RAM is
+   still under the floor after reclaiming does it request a graceful
+   trainer stop (the checkpoint is saved); below a hard floor it aborts
+   the training thread with :class:`MemoryPressureAbort` (host-side
+   spikes — full-precision loads, dataset mapping, leaks — never go
+   through the CUDA allocator, so the cap alone can't catch them).
 
 3. **Forensic log** — every sample is appended and fsync'd to
    ``data/memory_guard.log`` so if the box does go down there is a record
@@ -34,6 +38,7 @@ pre-flight checks.
 """
 
 import ctypes
+import gc
 import logging
 import os
 import threading
@@ -79,6 +84,11 @@ DEFAULT_RESERVE_GB = 24.0
 DEFAULT_SOFT_FREE_GB = 16.0
 DEFAULT_HARD_FREE_GB = 6.0
 DEFAULT_POLL_SECONDS = 2.0
+
+# Minimum spacing between watchdog reclaim attempts. If pressure returns
+# this quickly after a reclaim, the allocator cache isn't the problem —
+# escalate to a graceful stop instead of thrashing empty_cache().
+DEFAULT_RECLAIM_COOLDOWN_SECONDS = 60.0
 
 _FORENSIC_LOG_MAX_BYTES = 2 * 1024 * 1024
 
@@ -278,6 +288,39 @@ def apply_memory_limits(
         return None
 
 
+def reclaim_cuda_cache(context: str = "") -> float:
+    """Release the CUDA caching allocator's reserved-but-unallocated memory
+    back to the OS. Returns the GB actually released (0.0 when there is
+    nothing to give back, or CUDA isn't up). Best-effort, never raises.
+
+    On a discrete GPU this is mostly pointless mid-run — the allocator
+    reuses its own cache. On a unified-memory machine that cache *is* host
+    RAM the OS can't use. An eval pass is the classic offender: its batch
+    and logit buffers leave a multi-GB gap between ``memory_reserved`` and
+    ``memory_allocated`` that reads as vanished system memory the moment
+    training resumes.
+    """
+    try:
+        import torch
+        if not (torch.cuda.is_available() and torch.cuda.is_initialized()):
+            return 0.0
+        before = torch.cuda.memory_reserved()
+        # Drop dead Python references first so their CUDA blocks become
+        # cache that empty_cache() can actually hand back.
+        gc.collect()
+        torch.cuda.empty_cache()
+        freed = max(0.0, (before - torch.cuda.memory_reserved()) / (1024 ** 3))
+        if context:
+            logger.info(
+                f"Memory guard: released {freed:.2f}GB of CUDA allocator cache "
+                f"back to the shared pool ({context})"
+            )
+        return freed
+    except Exception as e:
+        logger.debug(f"CUDA cache reclaim failed: {e}")
+        return 0.0
+
+
 def _abort_thread(thread: threading.Thread, exc_type: type) -> bool:
     """Asynchronously raise ``exc_type`` in ``thread`` (CPython only).
 
@@ -343,11 +386,18 @@ class MemoryWatchdog(threading.Thread):
     """
     Background sampler with two escalation levels.
 
-    * ``system_available < soft_free_gb`` → ``on_soft_limit()`` once.
-      Wired to a graceful ``trainer.request_stop()`` so the checkpoint is
-      saved and the job ends as "stopped".
-    * ``system_available < hard_free_gb`` → ``on_hard_limit()`` once.
-      Wired to aborting the training thread — losing the job is the
+    * ``system_available < soft_free_gb`` → try ``reclaimer()`` first (give
+      the CUDA allocator's idle cache back to the OS — post-eval slack is
+      the common cause) and resample; if free RAM is still under the floor,
+      ``on_soft_limit()`` once. Wired to a graceful
+      ``trainer.request_stop()`` so the checkpoint is saved and the job
+      ends as "stopped". A reclaim that clears the pressure leaves the
+      watchdog armed, but another attempt within
+      ``reclaim_cooldown_seconds`` escalates instead — pressure returning
+      that fast means the cache isn't the problem.
+    * ``system_available < hard_free_gb`` → ``on_hard_limit()`` once, with
+      no reclaim attempt — at the critical floor every moment counts and
+      ``empty_cache()`` can block on a GPU sync; losing the job is the
       accepted cost of keeping the machine alive.
 
     Every sample is appended (and fsync'd) to ``log_path`` so a post-reboot
@@ -364,6 +414,8 @@ class MemoryWatchdog(threading.Thread):
         log_path: Optional[Path] = None,
         memory_reader: Callable[[], MemorySample] = _default_memory_reader,
         job_id: Optional[str] = None,
+        reclaimer: Optional[Callable[[], float]] = None,
+        reclaim_cooldown_seconds: float = DEFAULT_RECLAIM_COOLDOWN_SECONDS,
     ):
         super().__init__(name=f"MemoryWatchdog-{job_id or 'global'}", daemon=True)
         # Scale the floors down on small unified boards so they aren't
@@ -381,11 +433,16 @@ class MemoryWatchdog(threading.Thread):
         self.log_path = log_path
         self.memory_reader = memory_reader
         self.job_id = job_id
+        self.reclaimer = reclaimer
+        self.reclaim_cooldown_seconds = reclaim_cooldown_seconds
 
         self._stop_event = threading.Event()
         self.soft_triggered = False
         self.hard_triggered = False
         self.last_sample: Optional[MemorySample] = None
+        self.reclaim_attempts = 0
+        self.reclaim_recoveries = 0
+        self._last_reclaim_ts: Optional[float] = None
 
     def run(self) -> None:
         while not self._stop_event.is_set():
@@ -412,6 +469,18 @@ class MemoryWatchdog(threading.Thread):
             if self.on_hard_limit:
                 self.on_hard_limit(sample)
         elif sample.system_available < self.soft_free_gb and not self.soft_triggered:
+            reclaimed = self._attempt_reclaim(sample)
+            if reclaimed is not None:
+                self.last_sample = reclaimed
+                if reclaimed.system_available >= self.soft_free_gb:
+                    self.reclaim_recoveries += 1
+                    logger.warning(
+                        f"Memory watchdog: pressure cleared by CUDA cache reclaim — "
+                        f"{reclaimed.system_available:.1f}GB free "
+                        f"(soft floor {self.soft_free_gb:.1f}GB). {reclaimed.format_line()}"
+                    )
+                    return reclaimed
+                sample = reclaimed
             self.soft_triggered = True
             logger.warning(
                 f"Memory watchdog: pressure — {sample.system_available:.1f}GB free "
@@ -420,6 +489,33 @@ class MemoryWatchdog(threading.Thread):
             if self.on_soft_limit:
                 self.on_soft_limit(sample)
         return sample
+
+    def _attempt_reclaim(self, sample: MemorySample) -> Optional[MemorySample]:
+        """Run the reclaimer and resample. Returns the post-reclaim sample,
+        or None when no attempt was made — no reclaimer wired, the last
+        attempt was under the cooldown, or the reclaimer itself failed."""
+        if self.reclaimer is None:
+            return None
+        if (
+            self._last_reclaim_ts is not None
+            and sample.timestamp - self._last_reclaim_ts < self.reclaim_cooldown_seconds
+        ):
+            return None
+        self._last_reclaim_ts = sample.timestamp
+        self.reclaim_attempts += 1
+        try:
+            freed = self.reclaimer() or 0.0
+        except Exception as e:
+            logger.warning(f"Memory watchdog: CUDA cache reclaim failed: {e}")
+            return None
+        logger.info(
+            f"Memory watchdog: {sample.system_available:.1f}GB free < "
+            f"{self.soft_free_gb:.1f}GB soft floor — released {freed:.2f}GB of "
+            "CUDA allocator cache before escalating"
+        )
+        post = self.memory_reader()
+        self._write_forensic_line(post)
+        return post
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -526,6 +622,11 @@ class TrainingMemoryGuard:
             log_path=log_path,
             memory_reader=self._memory_reader,
             job_id=self.job_id,
+            reclaimer=reclaim_cuda_cache,
+            reclaim_cooldown_seconds=getattr(
+                settings, "memory_guard_reclaim_cooldown_seconds",
+                DEFAULT_RECLAIM_COOLDOWN_SECONDS,
+            ) if settings else DEFAULT_RECLAIM_COOLDOWN_SECONDS,
         )
         self._watchdog.start()
         self.active = True

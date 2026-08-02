@@ -63,6 +63,7 @@ from dataset_handlers import (
     create_loader_from_config
 )
 from src.job_manager import JobManager
+from src.memory_guard import reclaim_cuda_cache
 from src.websocket_manager import websocket_manager
 from src.preflight_checks import is_local_model_path
 from src.checkpoint_policy import (
@@ -742,6 +743,30 @@ class WebSocketCallback(TrainerCallback):
             update_data["eval_loss"] = float(metrics["eval/loss"])
         if update_data:
             self.job_manager.update_job(self.job_id, **update_data)
+
+
+def _teardown_eval_memory() -> None:
+    """Give the eval pass's CUDA cache back to the OS before training
+    resumes. Module-level (not a callback method) so it stays testable when
+    the grimoire base class is mocked out."""
+    reclaim_cuda_cache(context="post-eval teardown")
+
+
+class EvalMemoryTeardownCallback(TrainerCallback):
+    """Tear down the eval pass's CUDA cache before training resumes.
+
+    Evaluation allocates its own batch and logit buffers; when it ends the
+    caching allocator keeps that memory reserved. On a unified-memory
+    machine (DGX Spark) the reserved-but-idle cache is host RAM the OS
+    can't use — the multi-GB reserved/allocated gap right after eval is
+    exactly what pushed free RAM under the memory guard's soft floor and
+    got jobs stopped at their first eval. Only wired in when the memory
+    guard is active (on discrete GPUs the allocator reuses its cache and
+    emptying it mid-run just costs a sync).
+    """
+
+    def on_evaluate(self, trainer, metrics):
+        _teardown_eval_memory()
 
 
 # Trainer-side attribute names that commonly hold strong references back to
@@ -1820,6 +1845,10 @@ def run_training_sync(
             ),
         )
 
+        callbacks = [WebSocketCallback(job_id, job_manager, event_loop)]
+        if memory_guard.active:
+            callbacks.append(EvalMemoryTeardownCallback())
+
         trainer = GrimoireTrainer(
             model=model,
             tokenizer=tokenizer,
@@ -1828,7 +1857,7 @@ def run_training_sync(
             train_dataset=train_dataset,
             eval_dataset=eval_dataset,
             peft_config=peft_config,
-            callbacks=[WebSocketCallback(job_id, job_manager, event_loop)],
+            callbacks=callbacks,
         )
 
         # Let the memory guard request a graceful stop once a trainer exists

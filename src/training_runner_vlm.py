@@ -43,6 +43,7 @@ from artemis_vlm import (
 )
 from src.training_runner import (
     WebSocketCallback,
+    EvalMemoryTeardownCallback,
     send_websocket_update,
     _cleanup_training_resources,
 )
@@ -491,6 +492,10 @@ def run_vlm_training_sync(
         )
 
         # ---- Trainer ----
+        callbacks = [WebSocketCallback(job_id, job_manager, event_loop)]
+        if memory_guard.active:
+            callbacks.append(EvalMemoryTeardownCallback())
+
         trainer = GrimoireTrainer(
             model=model,
             tokenizer=tokenizer,
@@ -500,7 +505,7 @@ def run_vlm_training_sync(
             eval_dataset=eval_dataset,
             data_collator=collator,           # the prerequisite from grimoire 1.1.x
             peft_config=None,                 # Stage-1/2 are full-FT (no LoRA)
-            callbacks=[WebSocketCallback(job_id, job_manager, event_loop)],
+            callbacks=callbacks,
         )
 
         memory_guard.set_trainer(trainer)
