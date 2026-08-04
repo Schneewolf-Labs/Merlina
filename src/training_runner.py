@@ -1568,6 +1568,14 @@ def run_training_sync(
             tokenizer=tokenizer if config.dataset.format.format_type == 'tokenizer' else None
         )
 
+        # eval_steps=0 turns evaluation off. The transforms further down assume an eval dataset
+        # exists, so this path keeps the split and simply withholds it from the trainer rather
+        # than threading None through all of them. train_worker (the path the job queue uses)
+        # skips the split entirely and trains on the full dataset.
+        evals_disabled = not config.eval_steps
+        if evals_disabled:
+            logger.info("eval_steps=0 — evaluation disabled")
+
         # Create pipeline and prepare dataset
         pipeline = DatasetPipeline(
             loader=loader,
@@ -1814,7 +1822,7 @@ def run_training_sync(
             config=grimoire_config,
             loss_fn=loss_fn,
             train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
+            eval_dataset=None if evals_disabled else eval_dataset,
             peft_config=peft_config,
             callbacks=[WebSocketCallback(job_id, job_manager, event_loop)],
         )

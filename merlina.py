@@ -659,7 +659,12 @@ class TrainingConfig(BaseModel):
 
     # Optional settings
     warmup_ratio: float = Field(0.05, ge=0.0, le=0.5)
-    eval_steps: float = Field(0.2, gt=0, description="<1 = ratio of total steps, >=1 = absolute step count")
+    eval_steps: float = Field(
+        0.2, ge=0,
+        description="Evaluation cadence. 0 disables evaluation entirely — no eval split is held "
+                    "back and the full dataset is used for training; <1 = ratio of total steps; "
+                    ">=1 = absolute step count."
+    )
     save_steps: Optional[float] = Field(
         None, ge=0,
         description="Intermediate checkpoint cadence. None follows eval_steps; 0 disables "

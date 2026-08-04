@@ -213,6 +213,15 @@ class DatasetPipeline:
             )
             return train_dataset, eval_dataset
 
+        # test_size=0 means evaluation is off: hold nothing back, train on everything.
+        # Splitting anyway would quietly discard rows for an eval that never runs.
+        if not self.test_size:
+            logger.info(
+                "test_size=0 — evaluation disabled, using all %d samples for training",
+                len(dataset),
+            )
+            return dataset, None
+
         # Otherwise, random train/test split.
         logger.info(f"Splitting dataset (test_size={self.test_size}, shuffle={self.shuffle})...")
         split = dataset.train_test_split(test_size=self.test_size, seed=self.seed, shuffle=self.shuffle)

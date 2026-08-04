@@ -496,11 +496,17 @@ def run_worker(args):
             tokenizer=tokenizer if config.dataset.format.format_type == "tokenizer" else None,
         )
 
+        # eval_steps=0 turns evaluation off completely. Hold nothing back in that case —
+        # an eval split that is never scored is just training data thrown away.
+        evals_disabled = not config.eval_steps
+        if evals_disabled:
+            logger.info("eval_steps=0 — evaluation disabled; training on the full dataset")
+
         pipeline = DatasetPipeline(
             loader=loader,
             formatter=formatter,
             column_mapping=config.dataset.column_mapping,
-            test_size=config.dataset.test_size,
+            test_size=0.0 if evals_disabled else config.dataset.test_size,
             max_samples=config.dataset.max_samples,
             seed=config.seed,
             shuffle=config.shuffle_dataset,
@@ -695,7 +701,9 @@ def run_worker(args):
             config=grimoire_config,
             loss_fn=loss_fn,
             train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
+            # Explicitly None when evals are off, so a trainer that would otherwise evaluate
+            # at epoch boundaries has nothing to evaluate on.
+            eval_dataset=None if evals_disabled else eval_dataset,
             peft_config=peft_config,
             callbacks=callbacks,
         )
