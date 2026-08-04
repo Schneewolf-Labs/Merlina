@@ -25,6 +25,7 @@ from .constants import (
     MAX_EFFECTIVE_BATCH_SIZE,
     MAX_RECOMMENDED_LEARNING_RATE,
     FLASH_ATTENTION_MIN_COMPUTE_CAP,
+    KNOWN_MODEL_SIZES,
     get_vram_estimate,
     get_disk_space_estimate,
     is_gated_model,
@@ -106,6 +107,15 @@ def get_model_size_from_name(model_name: str) -> Optional[float]:
 
     model_lower = model_name.lower()
 
+    # Mixture-of-experts pattern: "8x7b" = 8 experts of 7B each. Must be
+    # checked before the plain patterns, which would otherwise match the
+    # "7b" and undercount by 8x. N*M slightly overestimates the true total
+    # (attention layers are shared across experts), which is the safe
+    # direction for an OOM check.
+    moe_match = re.search(r'(\d+)\s*x\s*(\d+(?:\.\d+)?)\s*b(?:illion)?(?:\b|$)', model_lower)
+    if moe_match:
+        return float(moe_match.group(1)) * float(moe_match.group(2))
+
     # Common patterns: "7b", "7B", "7-b", "7_b", "7billion"
     patterns = [
         r'(\d+(?:\.\d+)?)\s*b(?:illion)?(?:\b|$)',  # 7b, 7B, 7billion
@@ -117,6 +127,13 @@ def get_model_size_from_name(model_name: str) -> Optional[float]:
         match = re.search(pattern, model_lower)
         if match:
             return float(match.group(1))
+
+    # No explicit size token — fall back to known model families whose names
+    # don't include one (e.g. "mistralai/Mistral-Nemo-Instruct-2407" is 12B)
+    normalized = re.sub(r'[_\s]+', '-', model_lower)
+    for name_key, size in KNOWN_MODEL_SIZES.items():
+        if name_key in normalized:
+            return size
 
     return None
 

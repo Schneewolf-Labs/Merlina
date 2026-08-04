@@ -29,6 +29,26 @@ FULL_PRECISION_VRAM_MULTIPLIER = 3.5
 
 
 # =============================================================================
+# Known Model Sizes (billions of parameters)
+# =============================================================================
+
+# Model families whose names carry no parameter-count token, so size can't be
+# parsed from the name (e.g. "Mistral-Nemo" is a 12B model). Keys are matched
+# as case-insensitive substrings after underscores/spaces are normalized to
+# hyphens. Longer keys must come before their prefixes (e.g. "codestral-mamba"
+# before "codestral") since the first match wins. This table is only consulted
+# when the name has no explicit size token, so variants like
+# "Mistral-NeMo-Minitron-8B" still resolve from the "8b" in their name.
+KNOWN_MODEL_SIZES: Dict[str, float] = {
+    "mistral-nemo": 12.0,
+    "mistral-small": 22.0,
+    "mistral-large": 123.0,
+    "codestral-mamba": 7.0,
+    "codestral": 22.0,
+}
+
+
+# =============================================================================
 # Disk Space Estimates (in GB)
 # =============================================================================
 
