@@ -1757,10 +1757,13 @@ async def upload_job(job_id: str, request: UploadJobRequest):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    if job.status not in ("completed", "stopped"):
+    # 'failed' is allowed because a run that died part-way usually leaves an intact periodic
+    # checkpoint, and those GPU hours are worth recovering. The artifacts still have to exist —
+    # the checks below reject a failure that never got as far as writing one.
+    if job.status not in ("completed", "stopped", "failed"):
         raise HTTPException(
             status_code=400,
-            detail=f"Only completed or stopped jobs can be uploaded. Job is '{job.status}'."
+            detail=f"Only completed, stopped or failed jobs can be uploaded. Job is '{job.status}'."
         )
 
     if not job.output_dir:
@@ -1775,6 +1778,36 @@ async def upload_job(job_id: str, request: UploadJobRequest):
             status_code=400,
             detail=f"Model directory not found: {output_dir}. The model files may have been deleted."
         )
+
+    # A failed run has no finalised model directory, only ``checkpoint-<step>`` subdirs holding
+    # accelerate state dicts. Extract the newest one into a real PEFT adapter so the rest of the
+    # upload path — which expects an adapter directory — works unchanged.
+    if job.status == "failed":
+        from src.checkpoint_rescue import extract_adapter, find_resumable_adapter
+
+        ckpt = find_resumable_adapter(output_dir)
+        if ckpt is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Job failed and no checkpoint containing LoRA weights was found under "
+                    f"{output_dir}. Nothing to recover."
+                ),
+            )
+        rescue_dir = os.path.join(output_dir, "rescued_adapter")
+        try:
+            from pydantic import TypeAdapter as _TA
+            _cfg = _TA(TrainingConfig).validate_python(job.config) if job.config else None
+            await asyncio.to_thread(extract_adapter, ckpt, rescue_dir, _cfg)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Could not extract an adapter from {ckpt}: {exc}",
+            )
+        logger.info("Recovered adapter from %s for failed job %s", ckpt, job_id)
+        output_dir = rescue_dir
 
     if not job.config:
         raise HTTPException(

@@ -795,7 +795,27 @@ def run_worker(args):
             # leaving the job stuck in a non-terminal status.
             try:
                 if job_manager:
-                    job_manager.update_job(args.job_id, status="failed", error=str(e))
+                    # Record where the artifacts live even though the run failed. A crash
+                    # part-way through usually leaves an intact periodic checkpoint, and
+                    # without output_dir on the record nothing can find it — the GPU hours
+                    # sit stranded on disk while the API reports no artifacts.
+                    failed_output_dir = f"./results/{args.job_id}"
+                    try:
+                        from .checkpoint_rescue import find_resumable_adapter
+                        recoverable = find_resumable_adapter(failed_output_dir) is not None
+                    except Exception:
+                        recoverable = False
+                    if recoverable:
+                        logger.info(
+                            "Recoverable checkpoint found under %s — recording output_dir so "
+                            "the adapter can still be uploaded.", failed_output_dir,
+                        )
+                        job_manager.update_job(
+                            args.job_id, status="failed", error=str(e),
+                            output_dir=failed_output_dir,
+                        )
+                    else:
+                        job_manager.update_job(args.job_id, status="failed", error=str(e))
             except Exception:
                 logger.exception("Could not record training failure in job DB")
             try:
