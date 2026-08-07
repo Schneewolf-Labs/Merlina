@@ -191,6 +191,13 @@ class MerlinaAPI {
         }, LONG_TIMEOUT);
     }
 
+    static async estimateVRAM(config) {
+        return this.fetch('/estimate/vram', {
+            method: 'POST',
+            body: JSON.stringify(config)
+        });
+    }
+
     static async getJobStatus(jobId) {
         return this.fetch(`/status/${jobId}`);
     }

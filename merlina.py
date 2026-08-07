@@ -1430,6 +1430,72 @@ async def validate_training_config(config: TrainingConfig):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.post("/estimate/vram", response_model=dict, tags=["Training"], summary="Estimate training VRAM for a configuration")
+async def estimate_training_vram_endpoint(config: TrainingConfig):
+    """
+    Architecture-aware VRAM estimate for a training configuration.
+
+    Reads the model's real config.json (local directory or HuggingFace Hub,
+    cache-aware) and returns a per-component breakdown: weights, LoRA/optimizer
+    states, activations, logits memory, reference model, and overhead. Does not
+    require a GPU — the UI calls this before submitting a job.
+    """
+    from src.vram_estimator import estimate_vram, get_model_profile
+
+    def _estimate():
+        hf_token = config.hf_token or os.getenv("HF_TOKEN")
+        profile = get_model_profile(config.base_model, hf_token=hf_token)
+        if profile is None:
+            return None
+        return estimate_vram(
+            profile,
+            batch_size=config.batch_size,
+            max_length=config.max_length,
+            training_mode=config.training_mode,
+            use_4bit=config.use_4bit,
+            use_lora=config.use_lora,
+            lora_r=config.lora_r,
+            target_modules=config.target_modules,
+            modules_to_save=config.modules_to_save,
+            gradient_checkpointing=config.gradient_checkpointing,
+            optimizer_type=config.optimizer_type,
+            attn_implementation=config.attn_implementation,
+            use_liger=config.use_liger,
+        )
+
+    try:
+        estimate = await asyncio.wait_for(asyncio.to_thread(_estimate), timeout=20.0)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="VRAM estimation timed out")
+    except Exception as e:
+        logger.error(f"VRAM estimation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if estimate is None:
+        return {
+            "available": False,
+            "reason": (
+                f"Could not determine the architecture of '{config.base_model}' "
+                "(no readable config.json and no size in the name)."
+            ),
+        }
+
+    result = estimate.to_dict()
+    result["available"] = True
+
+    # Include what the GPU can actually offer when one is present, so the UI
+    # can show estimate-vs-capacity in the same place.
+    try:
+        if torch.cuda.is_available():
+            result["gpu_total_gb"] = round(
+                torch.cuda.get_device_properties(0).total_memory / (1024**3), 2
+            )
+    except Exception:
+        pass
+
+    return result
+
+
 def _make_training_callback(event_loop):
     """Create a training callback that auto-selects single-process or DDP.
 

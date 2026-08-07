@@ -821,6 +821,7 @@ No frontend configuration needed!
 
 **Validation:**
 - `POST /validate` - Validate configuration before training
+- `POST /estimate/vram` - Architecture-aware VRAM estimate with per-component breakdown (see `src/vram_estimator.py`; reads the model's real config.json, no GPU required)
 
 **Job Management:**
 - `GET /jobs/history?status=&limit=&offset=` - Get paginated job history

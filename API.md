@@ -284,6 +284,58 @@ Validates training configuration before starting. Checks GPU availability, VRAM,
 
 ---
 
+#### Estimate Training VRAM
+
+```http
+POST /estimate/vram
+```
+
+Architecture-aware VRAM estimate for a training configuration. Reads the model's real `config.json` (local directory or HuggingFace Hub, cache-aware) and returns a per-component breakdown. Does not require a GPU.
+
+**Request Body:** Same as `/validate` (see [TrainingConfig Schema](#trainingconfig))
+
+**Response:**
+```json
+{
+  "available": true,
+  "total_gb": 15.42,
+  "breakdown_gb": {
+    "model_weights": 5.4,
+    "trainable_params": 0.62,
+    "gradients": 0.62,
+    "optimizer_states": 0.31,
+    "activations": 3.05,
+    "logits_and_loss": 4.92,
+    "cuda_context": 0.9,
+    "fragmentation_buffer": 1.1
+  },
+  "confidence": "high",
+  "notes": [
+    "ORPO runs chosen+rejected together, doubling the effective forward batch to 2."
+  ],
+  "model_profile": {
+    "num_params_billions": 8.03,
+    "hidden_size": 4096,
+    "num_hidden_layers": 32,
+    "vocab_size": 128256,
+    "source": "hub_config",
+    "params_exact": true
+  },
+  "gpu_total_gb": 24.0
+}
+```
+
+When the model architecture cannot be determined, `available` is `false` and a `reason` string explains why.
+
+`confidence` is `high` (exact parameter count from safetensors metadata), `medium` (parameters derived from config.json dims), or `low` (architecture guessed from the model name).
+
+**Status Codes:**
+- `200 OK` - Estimate completed (check `available`)
+- `400 Bad Request` - Invalid configuration
+- `504 Gateway Timeout` - Estimation timed out
+
+---
+
 #### Create Training Job
 
 ```http
