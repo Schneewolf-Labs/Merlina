@@ -15,17 +15,11 @@ import psutil
 
 from .utils import get_num_gpus, calculate_effective_batch_size
 from .constants import (
-    VRAM_ESTIMATES_4BIT,
-    FULL_PRECISION_VRAM_MULTIPLIER,
-    DISK_SPACE_ESTIMATES,
-    DEFAULT_DISK_SPACE_ESTIMATE,
-    GATED_MODEL_PREFIXES,
     MAX_RECOMMENDED_LORA_RANK,
     MIN_EFFECTIVE_BATCH_SIZE,
     MAX_EFFECTIVE_BATCH_SIZE,
     MAX_RECOMMENDED_LEARNING_RATE,
     FLASH_ATTENTION_MIN_COMPUTE_CAP,
-    get_vram_estimate,
     get_disk_space_estimate,
     is_gated_model,
 )
@@ -33,92 +27,15 @@ from .constants import (
 logger = logging.getLogger(__name__)
 
 
-def estimate_training_vram(
-    model_size_billions: float,
-    batch_size: int,
-    max_length: int,
-    use_4bit: bool = True,
-    use_lora: bool = True,
-    gradient_checkpointing: bool = False
-) -> float:
-    """
-    Estimate VRAM requirements for training based on configuration.
-
-    This is an approximation based on common patterns. Actual usage varies
-    based on model architecture, optimizer states, and other factors.
-
-    Args:
-        model_size_billions: Model size in billions of parameters (e.g., 7 for 7B)
-        batch_size: Per-device batch size
-        max_length: Maximum sequence length
-        use_4bit: Whether 4-bit quantization is enabled
-        use_lora: Whether LoRA is enabled (reduces trainable params)
-        gradient_checkpointing: Whether gradient checkpointing is enabled
-
-    Returns:
-        Estimated VRAM in GB
-    """
-    # Base model memory
-    if use_4bit:
-        # 4-bit: ~0.5 bytes per parameter + overhead
-        model_mem = model_size_billions * 0.6
-    else:
-        # FP16: ~2 bytes per parameter
-        model_mem = model_size_billions * 2.0
-
-    # Optimizer states (AdamW: 2 states per trainable param)
-    if use_lora:
-        # LoRA typically trains ~0.1-1% of parameters
-        trainable_ratio = 0.01
-    else:
-        trainable_ratio = 1.0
-
-    # Optimizer states in FP32 (8 bytes per trainable param for AdamW)
-    optimizer_mem = model_size_billions * trainable_ratio * 8
-
-    # Activation memory (rough estimate)
-    # Scales with batch_size * max_length * hidden_size
-    # Using approximation: hidden_size ≈ model_size_billions * 512
-    hidden_size_approx = model_size_billions * 512
-    activation_mem = (batch_size * max_length * hidden_size_approx * 2) / (1024**3)
-
-    if gradient_checkpointing:
-        activation_mem *= 0.3  # Checkpointing reduces activation memory significantly
-
-    # Total estimate with some buffer
-    total = model_mem + optimizer_mem + activation_mem
-    buffer = total * 0.15  # 15% buffer for fragmentation and overhead
-
-    return total + buffer
-
-
 def get_model_size_from_name(model_name: str) -> Optional[float]:
     """
     Extract model size in billions from model name.
 
-    Args:
-        model_name: Model name or path
-
-    Returns:
-        Model size in billions, or None if not detected
+    Kept as a thin re-export — the implementation (and the much better
+    config-based sizing) lives in src/vram_estimator.py.
     """
-    import re
-
-    model_lower = model_name.lower()
-
-    # Common patterns: "7b", "7B", "7-b", "7_b", "7billion"
-    patterns = [
-        r'(\d+(?:\.\d+)?)\s*b(?:illion)?(?:\b|$)',  # 7b, 7B, 7billion
-        r'(\d+(?:\.\d+)?)-b(?:\b|$)',  # 7-b
-        r'(\d+(?:\.\d+)?)_b(?:\b|$)',  # 7_b
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, model_lower)
-        if match:
-            return float(match.group(1))
-
-    return None
+    from .vram_estimator import get_model_size_from_name as _impl
+    return _impl(model_name)
 
 
 def is_local_model_path(model_path: str) -> bool:
@@ -348,18 +265,37 @@ class PreflightValidator:
         }
 
     def _check_vram(self, config: Any) -> Dict[str, Any]:
-        """Check if available VRAM is sufficient with detailed estimation"""
+        """Check if available VRAM is sufficient with detailed estimation.
+
+        Uses the architecture-aware estimator in src/vram_estimator.py: the
+        model's real config.json (local dir or HF Hub cache) supplies hidden
+        size, layer count, and — critically — vocab size, so the estimate
+        reflects what actually OOMs (logits memory, activations, reference
+        models) instead of a name-regex guess.
+        """
         if not torch.cuda.is_available():
             return {"skipped": "No GPU available"}
 
-        # Get model size from name
-        model_size = get_model_size_from_name(config.base_model)
+        from .vram_estimator import estimate_vram, get_model_profile, suggest_reductions
 
-        if model_size is None:
+        hf_token = getattr(config, "hf_token", None) or os.getenv("HF_TOKEN")
+        profile = get_model_profile(config.base_model, hf_token=hf_token)
+
+        if profile is None:
             self.warnings.append(
-                f"Could not detect model size from '{config.base_model}'. "
-                "Please ensure you have sufficient GPU memory."
+                f"Could not determine the size of '{config.base_model}' (no "
+                "readable config.json and no size in the name). Please ensure "
+                "you have sufficient GPU memory."
             )
+            # Without a model profile the crude batch×sequence guard is the
+            # only protection left, so apply it here.
+            batch_seq_product = config.batch_size * config.max_length
+            if batch_seq_product > 8192:
+                self.warnings.append(
+                    f"Large batch×sequence product ({config.batch_size}×{config.max_length}"
+                    f"={batch_seq_product}). This may cause OOM. Consider reducing "
+                    f"batch_size to 1 or max_length to {4096 // config.batch_size}."
+                )
             return {"estimate_unavailable": True, "model_size_detected": False}
 
         # Check available VRAM
@@ -385,30 +321,24 @@ class PreflightValidator:
             system_available = psutil.virtual_memory().available / (1024**3)
             available_vram = max(0.0, min(available_vram - reserve, system_available - reserve))
 
-        # Use enhanced VRAM estimation
-        estimated_vram = estimate_training_vram(
-            model_size_billions=model_size,
+        # Architecture-aware estimation with per-component breakdown
+        estimate = estimate_vram(
+            profile,
             batch_size=config.batch_size,
             max_length=config.max_length,
+            training_mode=getattr(config, "training_mode", "orpo"),
             use_4bit=config.use_4bit,
             use_lora=config.use_lora,
-            gradient_checkpointing=getattr(config, 'gradient_checkpointing', False)
+            lora_r=getattr(config, "lora_r", 64),
+            target_modules=getattr(config, "target_modules", None),
+            modules_to_save=getattr(config, "modules_to_save", None),
+            gradient_checkpointing=getattr(config, "gradient_checkpointing", False),
+            optimizer_type=getattr(config, "optimizer_type", "paged_adamw_8bit"),
+            attn_implementation=getattr(config, "attn_implementation", "auto"),
+            use_liger=getattr(config, "use_liger", False),
         )
-
-        # Check batch_size × max_length combination
-        batch_seq_product = config.batch_size * config.max_length
-        if batch_seq_product > 8192:  # Warning threshold
-            self.warnings.append(
-                f"Large batch×sequence product ({config.batch_size}×{config.max_length}={batch_seq_product}). "
-                f"This may cause OOM. Consider reducing batch_size to 1 or max_length to {4096 // config.batch_size}."
-            )
-
-        if batch_seq_product > 16384:  # Error threshold for smaller GPUs
-            if available_vram < 24:  # Less than 24GB
-                self.errors.append(
-                    f"Batch×sequence product ({batch_seq_product}) is very large for {available_vram:.0f}GB GPU. "
-                    f"Reduce batch_size (currently {config.batch_size}) or max_length (currently {config.max_length})."
-                )
+        estimated_vram = estimate.total_gb
+        model_size = round((profile.num_params or 0) / 1e9, 1)
 
         # Warn about full precision memory usage
         if not config.use_4bit:
@@ -417,35 +347,37 @@ class PreflightValidator:
                 "Consider enabling 4-bit quantization to reduce memory usage."
             )
 
-        # Check if sufficient
+        # Check if sufficient. Suggestions are ranked by which component
+        # actually dominates the estimate (activations vs logits vs states).
         if available_vram < estimated_vram:
-            suggestions = []
-            if not config.use_4bit:
-                suggestions.append("enable 4-bit quantization")
-            if config.batch_size > 1:
-                suggestions.append(f"reduce batch_size (currently {config.batch_size})")
-            if config.max_length > 1024:
-                suggestions.append(f"reduce max_length (currently {config.max_length})")
-            if not getattr(config, 'gradient_checkpointing', False):
-                suggestions.append("enable gradient_checkpointing")
-
-            suggestion_text = ", ".join(suggestions) if suggestions else "use a smaller model"
-
+            suggestion_text = ", ".join(suggest_reductions(estimate, config))
             self.errors.append(
-                f"Insufficient VRAM: Training ~{model_size}B model requires ~{estimated_vram:.1f}GB, "
+                f"Insufficient VRAM: Training ~{model_size}B model requires ~{estimated_vram:.1f}GB "
+                f"(largest consumer: {estimate.dominant_component()} at "
+                f"~{estimate.breakdown.get(estimate.dominant_component(), 0):.1f}GB), "
                 f"but only {available_vram:.1f}GB available. Try: {suggestion_text}."
             )
         elif available_vram < estimated_vram * 1.2:
+            suggestion_text = ", ".join(suggest_reductions(estimate, config)[:2])
             self.warnings.append(
                 f"VRAM is tight: ~{estimated_vram:.1f}GB estimated, {available_vram:.1f}GB available. "
-                "Training may fail. Consider enabling gradient_checkpointing or reducing batch size."
+                f"Training may fail. Consider: {suggestion_text}."
+            )
+
+        if estimate.confidence == "low":
+            self.warnings.append(
+                f"VRAM estimate is low-confidence: could not read config.json for "
+                f"'{config.base_model}', so the architecture was guessed from the name."
             )
 
         return {
             "available_gb": round(available_vram, 2),
             "estimated_required_gb": round(estimated_vram, 2),
             "model_size_billions": model_size,
-            "batch_seq_product": batch_seq_product,
+            "breakdown_gb": {k: round(v, 2) for k, v in estimate.breakdown.items()},
+            "confidence": estimate.confidence,
+            "notes": estimate.notes,
+            "model_profile": profile.to_dict(),
             "sufficient": available_vram >= estimated_vram,
             "unified_memory": unified.is_unified
         }
