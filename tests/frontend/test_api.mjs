@@ -194,6 +194,24 @@ describe('MerlinaAPI.fetch body handling', () => {
         }
     });
 
+    it('estimateVRAM posts the config to /estimate/vram', async () => {
+        let captured = null;
+        globalThis.fetch = async (url, options) => {
+            captured = { url, options };
+            return okResponse('{"available": true, "total_gb": 15.4, "breakdown_gb": {}}');
+        };
+        try {
+            const data = await MerlinaAPI.estimateVRAM({ base_model: 'test/model-8b' });
+            assert.ok(captured.url.endsWith('/estimate/vram'));
+            assert.equal(captured.options.method, 'POST');
+            assert.deepEqual(JSON.parse(captured.options.body), { base_model: 'test/model-8b' });
+            assert.equal(data.available, true);
+            assert.equal(data.total_gb, 15.4);
+        } finally {
+            restoreFetch();
+        }
+    });
+
     it('categorizes an aborted request as TIMEOUT', async () => {
         globalThis.fetch = async () => {
             const err = new Error('The operation was aborted');

@@ -199,14 +199,46 @@ class MerlinaApp {
             return;
         }
 
-        // Show VRAM estimate
-        const vramEstimate = Validator.estimateVRAM(config);
+        // Show VRAM estimate. Prefer the server's architecture-aware
+        // estimate (reads the model's real config.json and breaks memory
+        // down per component); fall back to the rough client-side heuristic
+        // if the endpoint is unreachable.
+        let vramMessage;
+        try {
+            const est = await MerlinaAPI.estimateVRAM(config);
+            if (est.available) {
+                const b = est.breakdown_gb || {};
+                const lines = [
+                    ['Model weights', b.model_weights],
+                    ['Reference model', b.reference_model],
+                    ['Trainable params + grads', (b.trainable_params || 0) + (b.gradients || 0)],
+                    ['Optimizer states', b.optimizer_states],
+                    ['Activations', b.activations],
+                    ['Logits & loss', b.logits_and_loss],
+                    ['Overhead', (b.cuda_context || 0) + (b.fragmentation_buffer || 0)]
+                ].filter(([, v]) => v && v >= 0.05)
+                 .map(([label, v]) => `  ${label}: ${v.toFixed(1)} GB`);
+                const capacity = est.gpu_total_gb ? ` (GPU: ${est.gpu_total_gb} GB)` : '';
+                vramMessage =
+                    `Estimated VRAM usage (${est.confidence} confidence):\n` +
+                    lines.join('\n') +
+                    `\n  Total: ${est.total_gb} GB${capacity}`;
+            }
+        } catch (error) {
+            console.warn('Server VRAM estimate unavailable, using local heuristic:', error);
+        }
+        if (!vramMessage) {
+            const vramEstimate = Validator.estimateVRAM(config);
+            vramMessage =
+                `Estimated VRAM usage (rough estimate):\n` +
+                `  Base model: ${vramEstimate.base} GB\n` +
+                `  Training overhead: ${vramEstimate.training} GB\n` +
+                `  Total: ${vramEstimate.total} GB`;
+        }
+
         const proceed = confirm(
             `🔮 Ready to cast training spell?\n\n` +
-            `Estimated VRAM usage:\n` +
-            `  Base model: ${vramEstimate.base} GB\n` +
-            `  Training overhead: ${vramEstimate.training} GB\n` +
-            `  Total: ${vramEstimate.total} GB\n\n` +
+            `${vramMessage}\n\n` +
             `Proceed with training?`
         );
 
