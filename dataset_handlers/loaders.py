@@ -305,6 +305,12 @@ class LocalFileLoader(DatasetLoader):
                         data = json.load(f)
                     dataset = Dataset.from_list(data if isinstance(data, list) else [data])
 
+            elif self.file_format == 'jsonl':
+                # The API advertises 'jsonl' as a valid file_format, so accept it. The 'json'
+                # branch above already sniffs JSON-lines and routes it correctly; rejecting the
+                # documented spelling meant a valid config failed only once the worker started.
+                dataset = load_dataset('json', data_files=str(self.file_path), split='train')
+
             elif self.file_format == 'csv':
                 dataset = load_dataset('csv', data_files=str(self.file_path), split='train')
 
