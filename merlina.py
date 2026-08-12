@@ -521,8 +521,15 @@ class TrainingConfig(BaseModel):
     num_epochs: int = Field(2, ge=1, le=10)
     batch_size: int = Field(1, ge=1, le=8)
     gradient_accumulation_steps: int = Field(16, ge=1, le=128)
-    max_length: int = Field(2048, ge=512, le=8192)
-    max_prompt_length: int = Field(1024, ge=256, le=4096)
+    # These ceilings are not hardware limits, they are guesses that predate long-context
+    # models. A 4096-token prompt cap silently truncates 30% of a real agentic dataset
+    # (RaifuWars Warrior: mean 3,513 prompt tokens, p95 5,329), and truncation runs from the
+    # right — which for tool-calling data removes the legal action list the answer must be
+    # drawn from. The model is then trained to name options it was never shown, and nothing
+    # reports it. Raised to the context lengths current bases actually support; VRAM remains
+    # the real constraint and is checked separately.
+    max_length: int = Field(2048, ge=512, le=131072)
+    max_prompt_length: int = Field(1024, ge=256, le=131072)
 
     # Model type
     model_type: str = Field(
