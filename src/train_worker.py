@@ -651,11 +651,29 @@ def run_worker(args):
         wandb_project = None
         log_with = None
         if config.use_wandb and is_main and wandb is not None:
-            if config.wandb_key:
-                wandb.login(key=config.wandb_key)
-            wandb_run_name = config.wandb_run_name or generate_wandb_run_name(config)
-            wandb_project = config.wandb_project or "merlina-training"
-            log_with = "wandb"
+            # Preflight only *warns* when no W&B key is present, promising that "training will
+            # proceed but metrics won't be logged". Enabling the tracker anyway breaks that
+            # promise: accelerate initialises wandb, which raises
+            # `UsageError: api_key not configured (no-tty)` and kills the run after the model and
+            # dataset have already been loaded. Degrade to no logging instead, so the warning is
+            # true and a missing key costs metrics rather than the whole job.
+            try:
+                if config.wandb_key:
+                    wandb.login(key=config.wandb_key)
+                elif not getattr(wandb.api, "api_key", None):
+                    # Covers ~/.netrc and a prior `wandb login`, not just the env var.
+                    raise RuntimeError("no W&B API key available")
+                wandb_run_name = config.wandb_run_name or generate_wandb_run_name(config)
+                wandb_project = config.wandb_project or "merlina-training"
+                log_with = "wandb"
+            except Exception as e:
+                logger.warning(
+                    f"use_wandb is set but W&B could not be initialised ({e}); "
+                    "continuing without W&B logging"
+                )
+                wandb_run_name = None
+                wandb_project = None
+                log_with = None
 
         output_dir = f"./results/{args.job_id}"
 
