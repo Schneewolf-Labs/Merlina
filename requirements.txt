@@ -15,6 +15,11 @@ python-multipart>=0.0.6
 # torchvision IS required for VLM training (image processors need it) — make sure
 # your pre-installed torch stack includes a matching torchvision build.
 transformers>=5.0.0
+# Fused kernels for hybrid linear-attention models (Qwen3.5/3.6/3.8). Pure Python
+# plus Triton, so it installs anywhere. Its partner causal_conv1d needs nvcc and is
+# built as a wheel in the Dockerfile's first stage — transformers requires BOTH
+# before it will use the fused path, so this alone changes nothing.
+flash-linear-attention>=0.5.0
 accelerate>=0.24.0
 # Grimoire RL training engine. Published as `grimoire-rl` on PyPI; import
 # name stays `grimoire`. 1.2.0 added the APIs Merlina depends on.
