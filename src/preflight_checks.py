@@ -133,6 +133,7 @@ class PreflightValidator:
             ("GPU", self._check_gpu),
             ("Disk Space", lambda: self._check_disk_space(config)),
             ("Tokens", lambda: self._check_tokens(config)),
+            ("Kernels", lambda: {"linear_attention": self._check_linear_attention_kernels(config)}),
             ("Dependencies", self._check_dependencies),
         ]
         if not is_diffusion:
@@ -381,6 +382,53 @@ class PreflightValidator:
             "sufficient": available_vram >= estimated_vram,
             "unified_memory": unified.is_unified
         }
+
+    def _check_linear_attention_kernels(self, config: Any) -> None:
+        """Warn when a hybrid linear-attention model will train on the reference path.
+
+        Qwen3.5/3.6/3.8 and friends interleave linear-attention layers with full-attention ones.
+        Those layers have a fused training path that is off unless both optional kernels are
+        installed, and nothing in the loss curve reveals which path ran — a run that takes seven
+        times longer than it needs to looks entirely normal.
+
+        Measured on ReAligned-Qwen3.5-4B, 4096 tokens, batch 1, gradient checkpointing on,
+        steady-state step after warm-up:
+
+            torch fallback         13.67 s/step
+            fla + causal_conv1d     1.84 s/step     7.4x
+
+        Equivalence checked on identical input: cosine 0.99996 in float64, differences at bf16
+        round-off.
+        """
+        from .vram_estimator import get_model_profile
+
+        hf_token = getattr(config, "hf_token", None) or os.getenv("HF_TOKEN")
+        try:
+            profile = get_model_profile(config.base_model, hf_token=hf_token)
+        except Exception:
+            return
+        if not profile or profile.linear_attention_layers <= 0:
+            return
+
+        missing = []
+        for module, hint in (
+            ("fla", "pip install flash-linear-attention"),
+            ("causal_conv1d", "pip install --no-build-isolation causal-conv1d"),
+        ):
+            try:
+                __import__(module)
+            except ImportError:
+                missing.append((module, hint))
+        if not missing:
+            return
+
+        names = ", ".join(m for m, _ in missing)
+        hints = "; ".join(h for _, h in missing)
+        self.warnings.append(
+            f"{config.base_model} has {profile.linear_attention_layers} linear-attention layers, "
+            f"but {names} is not installed, so training falls back to the reference "
+            f"implementation (~7x slower per step, measured). Install with: {hints}"
+        )
 
     def _check_disk_space(self, config: Any) -> Dict[str, Any]:
         """Check available disk space for model checkpoints."""

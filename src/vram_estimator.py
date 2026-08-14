@@ -125,6 +125,11 @@ class ModelProfile:
     intermediate_size: Optional[int] = None
     vocab_size: Optional[int] = None
     tie_word_embeddings: bool = False
+    # Hybrid architectures (Qwen3.5/3.6/3.8 and friends) interleave linear-attention layers with
+    # full-attention ones. Those layers have a fused training path that is off unless optional
+    # kernels are installed, and the difference is 7x per step — worth surfacing, so the profile
+    # carries enough to detect it.
+    linear_attention_layers: int = 0
     source: str = "unknown"                     # local_config | hub_config | name_heuristic
     params_exact: bool = False                  # True when read from safetensors metadata
 
@@ -229,6 +234,9 @@ def _profile_from_config_dict(model_id: str, cfg: Dict[str, Any], source: str) -
         intermediate_size=text_cfg.get("intermediate_size"),
         vocab_size=text_cfg.get("vocab_size"),
         tie_word_embeddings=bool(cfg.get("tie_word_embeddings", text_cfg.get("tie_word_embeddings", False))),
+        linear_attention_layers=sum(
+            1 for t in (text_cfg.get("layer_types") or []) if t == "linear_attention"
+        ),
         source=source,
     )
     if profile.has_dims:
