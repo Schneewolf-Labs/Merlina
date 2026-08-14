@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.2.0] - 2026-08-14 "Fused Kernels"
+
+### Added
+-
+
+### Changed
+-
+
+### Fixed
+-
+
+
+
 ### Added
 - **Fused-kernel check for hybrid linear-attention models** (`src/preflight_checks.py`, `src/vram_estimator.py`): Qwen3.5/3.6/3.8 and friends interleave linear-attention layers with full-attention ones, and transformers has a fused training path for them — gated on **both** `flash-linear-attention` and `causal_conv1d`, so having one is the same as having neither. Nothing in the loss curve, the output, or the logs reveals which path ran, so a job that takes seven times longer than it needs to looks entirely normal. Measured on ReAligned-Qwen3.5-4B at 4096 tokens, batch 1, gradient checkpointing, steady state after warm-up: **13.67 s/step on the reference path, 1.84 s/step fused (7.4x)**, equivalence cosine 0.99996 in float64. `ModelProfile` now carries `linear_attention_layers`, counted from the model's own `layer_types` rather than a name heuristic, and pre-flight warns (never errors — the kernels are optional and a build can fail for unrelated reasons) naming the missing module and its install command. Tests: `tests/test_linear_attention_kernels.py`.
 - **Linear-attention kernels shipped in the Docker image** (`Dockerfile`, `requirements.txt`): `flash-linear-attention` is pure Python plus Triton and moves into requirements; `causal_conv1d` compiles CUDA from source and needs `nvcc`, which the `-runtime` base image does not ship, so it is built as a wheel in a `-devel` first stage with only the wheel copied forward — the final image stays on `-runtime` instead of carrying the whole toolkit. The wheel build is best-effort: an architecture or CUDA combination that cannot build it still yields a working image, just a slower one, and the pre-flight warning above makes that visible at submission time rather than silent.
