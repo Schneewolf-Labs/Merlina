@@ -4,7 +4,7 @@ Base classes for dataset handling
 
 import os
 from abc import ABC, abstractmethod
-from typing import Optional, Callable
+from typing import Any, Optional, Callable
 from datasets import Dataset, concatenate_datasets
 import logging
 from .messages_converter import has_messages_format, convert_messages_dataset
@@ -66,6 +66,7 @@ class DatasetPipeline:
         shuffle: bool = True,
         training_mode: str = "orpo",
         convert_messages_format: bool = True,
+        tokenizer: Any = None,
         additional_loaders: Optional[list[tuple]] = None,
         deduplicate: bool = False,
         dedupe_strategy: DedupeStrategy = "prompt_chosen",
@@ -111,6 +112,9 @@ class DatasetPipeline:
         self.shuffle = shuffle
         self.training_mode = training_mode
         self.convert_messages_format = convert_messages_format
+        # Held for messages conversion, not formatting: tool calls have to be rendered in the
+        # target model's dialect even when the formatter is a template-free one like chatml.
+        self.tokenizer = tokenizer
         self.additional_loaders = additional_loaders or []
         self.deduplicate = deduplicate
         self.dedupe_strategy = dedupe_strategy
@@ -137,7 +141,7 @@ class DatasetPipeline:
             # Tool-calling rows need the target template to render calls in the right dialect.
             # TokenizerFormatter carries it; the plain-text path does not need one.
             dataset = convert_messages_dataset(
-                dataset, getattr(self.formatter, "tokenizer", None)
+                dataset, self.tokenizer or getattr(self.formatter, "tokenizer", None)
             )
 
         if column_mapping:
