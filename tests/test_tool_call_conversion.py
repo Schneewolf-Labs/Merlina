@@ -218,3 +218,32 @@ def test_a_template_that_swallows_content_is_reported_not_guessed(tok):
 
     with pytest.raises(ToolFlattenError):
         convert_messages_to_standard(tool_row({"action_id": "a7"}), Swallowing())
+
+
+def test_pipeline_uses_its_own_tokenizer_not_the_formatters():
+    """The tokenizer must reach conversion even when the formatter does not want one.
+
+    `create_dataset_pipeline` only hands a tokenizer to the formatter for `format_type='tokenizer'`,
+    and the default is `chatml`. Reading it off the formatter therefore found nothing on the
+    default path, and a tool-calling dataset failed with "set model_name..." even though
+    model_name had been set. Caught against a live server after the first fix shipped.
+    """
+    from dataset_handlers.base import DatasetPipeline
+
+    class Loader:
+        def load(self):
+            raise AssertionError("not needed")
+
+        def get_source_info(self):
+            return {}
+
+    pipeline = DatasetPipeline(
+        loader=Loader(),
+        formatter=object(),  # no .tokenizer attribute, like ChatMLFormatter
+        tokenizer=StubTokenizer(),
+    )
+    assert pipeline.tokenizer is not None
+
+    row = tool_row({"action_id": "a7"})
+    out = convert_messages_to_standard(row, pipeline.tokenizer)
+    assert "<function=take_action>" in out["chosen"]

@@ -225,5 +225,8 @@ def create_pipeline_from_config(
         max_samples=max_samples,
         seed=seed,
         shuffle=shuffle,
-        training_mode=training_mode
+        training_mode=training_mode,
+        # Forwarded regardless of format_type: chatml is the default, and a tool-calling dataset
+        # still needs the model's template to render calls faithfully.
+        tokenizer=tokenizer,
     )
