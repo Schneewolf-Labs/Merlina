@@ -2728,10 +2728,39 @@ def preview_formatted_dataset(config: DatasetConfig, offset: int = 0, limit: int
                     format_type='tokenizer',
                     tokenizer=cached_tokenizer
                 )
+            elif config.model_name:
+                # Load it rather than quietly previewing a different format. Silently substituting
+                # chatml shows the user a preview that does not match what training will build,
+                # and for a tool-calling dataset it fails outright, because rendering a tool call
+                # needs the model's own template. Same cache the preload endpoint fills, so this
+                # costs a download once and is free afterwards.
+                logger.info(f"Loading tokenizer for preview: {config.model_name}")
+                try:
+                    loaded = AutoTokenizer.from_pretrained(
+                        config.model_name, trust_remote_code=True,
+                    )
+                    with _tokenizer_cache_lock:
+                        tokenizer_cache[config.model_name] = loaded
+                    formatter = get_formatter(format_type='tokenizer', tokenizer=loaded)
+                except Exception as exc:
+                    logger.warning(
+                        f"Could not load tokenizer for {config.model_name} ({exc}); "
+                        "previewing with 'chatml' instead."
+                    )
+                    formatter_type = 'chatml'
+                    formatter = get_formatter(
+                        format_type=formatter_type,
+                        custom_templates=config.format.custom_templates,
+                        enable_thinking=config.format.enable_thinking,
+                        auto_detect_thinking=config.format.auto_detect_thinking,
+                    )
             else:
-                # Fall back to chatml
-                logger.warning("Cannot preview with 'tokenizer' format without preloading the model. Using 'chatml' for preview.")
-                logger.info("Tip: Use the 'Validate & Preload Model' button to enable tokenizer format preview.")
+                # No model to load one from -- the substitution is the only option left, but say
+                # so plainly, since the preview will not match training.
+                logger.warning(
+                    "'tokenizer' format requested with no model_name; previewing with 'chatml'. "
+                    "The preview will not match what training builds."
+                )
                 formatter_type = 'chatml'
                 formatter = get_formatter(
                     format_type=formatter_type,

@@ -415,6 +415,29 @@ Merlina supports multiple training modes, selectable via the `training_mode` con
 
 ## Important Implementation Notes
 
+### Tool-calling datasets
+
+Datasets with a `tools` column and assistant turns carrying `tool_calls` (content is `null`)
+require the target model's tokenizer, and `format_type: "tokenizer"` with `model_name` set.
+
+**Never hardcode the tool-call encoding.** It differs between model families, and the difference is
+invisible until inference:
+
+- Hermes / Qwen2: `<tool_call>{"name": ..., "arguments": ...}</tool_call>`
+- Qwen3.5: `<tool_call><function=name><parameter=key>value</parameter></function></tool_call>`
+
+Train one and prompt the other and the model's calls never parse, while the loss curve looks
+completely healthy. `dataset_handlers/tool_calls.py` renders every piece through the tokenizer's
+own template and asserts the flattened strings re-template to the native rendering byte for byte;
+it raises rather than guessing when no tokenizer is available.
+
+Preview auto-loads the tokenizer when `model_name` is set, caching it the same way
+`POST /model/preload` does. Preloading first makes the first preview instant.
+
+Sequence length is worth checking before training on this kind of data: the tool call sits at the
+*end* of each example, so a `max_length` below the p100 token count silently truncates the label
+and trains on nothing. The default 2048 truncated 100% of one real tool-calling dataset.
+
 ### Tokenizer Format
 
 When using `format_type: "tokenizer"`, the system automatically uses the model's native chat template from `tokenizer_config.json`. This is the recommended approach as it ensures format compatibility with the base model.
