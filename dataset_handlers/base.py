@@ -134,7 +134,11 @@ class DatasetPipeline:
 
         if convert_messages and has_messages_format(dataset):
             logger.info("  Detected messages format, converting to standard format...")
-            dataset = convert_messages_dataset(dataset)
+            # Tool-calling rows need the target template to render calls in the right dialect.
+            # TokenizerFormatter carries it; the plain-text path does not need one.
+            dataset = convert_messages_dataset(
+                dataset, getattr(self.formatter, "tokenizer", None)
+            )
 
         if column_mapping:
             logger.info(f"  Applying column mapping: {column_mapping}")
