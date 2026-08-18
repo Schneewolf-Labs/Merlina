@@ -259,43 +259,6 @@ UPLOAD_TTL_HOURS = 24
 tokenizer_cache = {}  # model_name -> tokenizer instance
 _tokenizer_cache_lock = threading.Lock()
 
-# Keep backwards compatibility - jobs dict now proxies to job_manager
-class JobsProxy:
-    """Proxy dict-like access to job_manager for backwards compatibility"""
-    def __getitem__(self, job_id: str):
-        job = job_manager.get_job(job_id)
-        if not job:
-            raise KeyError(job_id)
-        return {
-            "status": job.status,
-            "progress": job.progress,
-            "current_step": job.current_step,
-            "total_steps": job.total_steps,
-            "loss": job.loss,
-            "error": job.error,
-            "upload_error": job.upload_error,
-            "gguf_error": job.gguf_error,
-            "wandb_url": job.wandb_url
-        }
-
-    def __setitem__(self, job_id: str, value: dict):
-        # Update job in database
-        job_manager.update_job(job_id, **value)
-
-    def __contains__(self, job_id: str):
-        return job_manager.get_job(job_id) is not None
-
-    def items(self):
-        jobs_list = job_manager.list_jobs()
-        for job in jobs_list:
-            yield job.job_id, {
-                "status": job.status,
-                "progress": job.progress,
-                "name": job.config.get("output_name", job.job_id) if job.config else job.job_id
-            }
-
-jobs = JobsProxy()
-
 
 def _new_job_id() -> str:
     """Generate a unique job id.
@@ -1252,7 +1215,7 @@ async def health_check():
 
     # Check database connectivity
     try:
-        db_stats = job_manager.get_stats()
+        db_stats = await asyncio.to_thread(job_manager.get_stats)
         checks["database"] = {
             "connected": True,
             "total_jobs": db_stats.get("total_jobs", 0)
@@ -1607,7 +1570,7 @@ async def create_training_job(config: TrainingConfig, priority: Optional[str] = 
 
     # Create job in database
     job_id = _new_job_id()
-    job_manager.create_job(job_id, config.model_dump())
+    await asyncio.to_thread(job_manager.create_job, job_id, config.model_dump())
 
     # From this point the job exists server-side: any internal failure must
     # still produce a JSON body that names the job, never a broken response.
@@ -1621,7 +1584,9 @@ async def create_training_job(config: TrainingConfig, priority: Optional[str] = 
     except Exception as e:
         logger.error(f"Failed to queue job {job_id}: {e}", exc_info=True)
         try:
-            job_manager.update_job(job_id, status="failed", error=f"Failed to queue job: {e}")
+            await asyncio.to_thread(
+                job_manager.update_job, job_id, status="failed", error=f"Failed to queue job: {e}"
+            )
         except Exception:
             logger.exception(f"Could not mark job {job_id} as failed after queue error")
         raise HTTPException(
@@ -1651,25 +1616,24 @@ async def create_training_job(config: TrainingConfig, priority: Optional[str] = 
 @app.get("/status/{job_id}", response_model=JobStatus, tags=["Training"], summary="Get training job status")
 async def get_job_status(job_id: str):
     """Get status of a training job with queue information"""
-    if job_id not in jobs:
+    job = await asyncio.to_thread(job_manager.get_job, job_id)
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-
-    job = jobs[job_id]
 
     # Get queue status
     queue_status = job_queue.get_status(job_id)
 
     return JobStatus(
         job_id=job_id,
-        status=job["status"],
-        progress=job.get("progress", 0.0),
-        current_step=job.get("current_step"),
-        total_steps=job.get("total_steps"),
-        loss=job.get("loss"),
-        error=job.get("error"),
-        upload_error=job.get("upload_error"),
-        gguf_error=job.get("gguf_error"),
-        wandb_url=job.get("wandb_url"),
+        status=job.status,
+        progress=job.progress,
+        current_step=job.current_step,
+        total_steps=job.total_steps,
+        loss=job.loss,
+        error=job.error,
+        upload_error=job.upload_error,
+        gguf_error=job.gguf_error,
+        wandb_url=job.wandb_url,
         queue_position=queue_status.get("position"),
         queue_state=queue_status.get("state")
     )
@@ -1677,12 +1641,13 @@ async def get_job_status(job_id: str):
 @app.get("/jobs", tags=["Jobs"], summary="List all jobs")
 async def list_jobs():
     """List all jobs"""
+    jobs_list = await asyncio.to_thread(job_manager.list_jobs)
     return {
-        job_id: {
-            "status": job["status"],
-            "progress": job.get("progress", 0.0)
+        job.job_id: {
+            "status": job.status,
+            "progress": job.progress
         }
-        for job_id, job in jobs.items()
+        for job in jobs_list
     }
 
 
@@ -1692,7 +1657,7 @@ async def get_job_history(limit: int = 50, offset: int = 0, status: Optional[str
     Get job history with pagination.
     Now persisted across server restarts!
     """
-    jobs_list = job_manager.list_jobs(status=status, limit=limit, offset=offset)
+    jobs_list = await asyncio.to_thread(job_manager.list_jobs, status=status, limit=limit, offset=offset)
     return {
         "jobs": [
             {
@@ -1723,7 +1688,7 @@ async def get_job_config(job_id: str):
     Get the training configuration used for a specific job.
     Useful for reusing a previous job's config as a starting point for a new training run.
     """
-    job = job_manager.get_job(job_id)
+    job = await asyncio.to_thread(job_manager.get_job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -1739,11 +1704,11 @@ async def get_job_config(job_id: str):
 @app.get("/jobs/{job_id}/metrics", tags=["Jobs"], summary="Get a job's training metrics")
 async def get_job_metrics(job_id: str):
     """Get detailed metrics for a job"""
-    job = job_manager.get_job(job_id)
+    job = await asyncio.to_thread(job_manager.get_job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    metrics = job_manager.get_metrics(job_id)
+    metrics = await asyncio.to_thread(job_manager.get_metrics, job_id)
     return {
         "job_id": job_id,
         "metrics": metrics,
@@ -1757,7 +1722,7 @@ async def retry_job(job_id: str, priority: Optional[str] = "normal"):
     Retry a failed or stopped job with the same configuration.
     Creates a new job using the original job's config.
     """
-    job = job_manager.get_job(job_id)
+    job = await asyncio.to_thread(job_manager.get_job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -1795,7 +1760,7 @@ async def retry_job(job_id: str, priority: Optional[str] = "normal"):
 
     # Create new job
     new_job_id = _new_job_id()
-    job_manager.create_job(new_job_id, config.model_dump())
+    await asyncio.to_thread(job_manager.create_job, new_job_id, config.model_dump())
 
     try:
         position = job_queue.submit(
@@ -1807,7 +1772,9 @@ async def retry_job(job_id: str, priority: Optional[str] = "normal"):
     except Exception as e:
         logger.error(f"Failed to queue retry job {new_job_id}: {e}", exc_info=True)
         try:
-            job_manager.update_job(new_job_id, status="failed", error=f"Failed to queue job: {e}")
+            await asyncio.to_thread(
+                job_manager.update_job, new_job_id, status="failed", error=f"Failed to queue job: {e}"
+            )
         except Exception:
             logger.exception(f"Could not mark job {new_job_id} as failed after queue error")
         raise HTTPException(
@@ -1915,7 +1882,7 @@ async def upload_job(job_id: str, request: UploadJobRequest):
     Upload or re-upload a completed/stopped job's model to HuggingFace Hub.
     The job must have saved model artifacts (output_dir must exist).
     """
-    job = job_manager.get_job(job_id)
+    job = await asyncio.to_thread(job_manager.get_job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -2008,7 +1975,7 @@ async def upload_job(job_id: str, request: UploadJobRequest):
         event_loop = None
 
     # Clear any previous upload error before retrying
-    job_manager.update_job(job_id, upload_error="")
+    await asyncio.to_thread(job_manager.update_job, job_id, upload_error="")
 
     # Diffusion jobs need the is_diffusion flag so the helper skips the
     # LLM merge path and the model card renders for diffusers.
@@ -2110,7 +2077,7 @@ async def stop_job(job_id: str):
     - For queued jobs: Removes from queue immediately
     - For running jobs: Graceful stop after current step
     """
-    job = job_manager.get_job(job_id)
+    job = await asyncio.to_thread(job_manager.get_job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -2137,7 +2104,7 @@ async def stop_job(job_id: str):
             # and the worker was re-adopted by src/worker_reattach.py). The
             # worker polls the DB flag directly, and any re-attached monitor
             # escalates SIGTERM→SIGKILL, so setting the flag is enough.
-            success = job_manager.request_stop(job_id)
+            success = await asyncio.to_thread(job_manager.request_stop, job_id)
         if success:
             logger.info(f"Stop requested for running job {job_id}")
             return {
@@ -2158,7 +2125,7 @@ async def stop_job(job_id: str):
 @app.delete("/jobs/{job_id}", tags=["Jobs"], summary="Delete a job")
 async def delete_job(job_id: str):
     """Delete a specific job and its metrics"""
-    success = job_manager.delete_job(job_id)
+    success = await asyncio.to_thread(job_manager.delete_job, job_id)
     if not success:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -2181,7 +2148,7 @@ async def delete_job(job_id: str):
 @app.delete("/jobs", tags=["Jobs"], summary="Delete all jobs")
 async def clear_all_jobs():
     """Delete all jobs and metrics"""
-    count = job_manager.clear_all_jobs()
+    count = await asyncio.to_thread(job_manager.clear_all_jobs)
 
     # Same reasoning as the single-job delete: every record is gone, so no
     # queued job can still run.
@@ -2204,7 +2171,7 @@ async def websocket_endpoint(websocket: WebSocket, job_id: str):
     await websocket_manager.connect(websocket, job_id)
     try:
         # Send initial status
-        job = job_manager.get_job(job_id)
+        job = await asyncio.to_thread(job_manager.get_job, job_id)
         if job:
             await websocket.send_json({
                 "type": "status_update",
@@ -2236,7 +2203,7 @@ async def websocket_endpoint(websocket: WebSocket, job_id: str):
 async def get_stats():
     """Get database and system statistics"""
     return {
-        "database": job_manager.get_stats(),
+        "database": await asyncio.to_thread(job_manager.get_stats),
         "websockets": {
             "total_connections": websocket_manager.get_connection_count()
         },
@@ -3343,7 +3310,7 @@ async def get_job_samples(job_id: str):
       - ``steps``: every snapshot grouped by step, ordered oldest → newest,
         with the final batch (when present) appended as ``"final"``.
     """
-    job = job_manager.get_job(job_id)
+    job = await asyncio.to_thread(job_manager.get_job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"job {job_id} not found")
 
@@ -3533,18 +3500,9 @@ async def delete_uploaded_dataset(dataset_id: str):
     }
 
 
-@app.post("/cleanup/artifacts", tags=["Disk & Cleanup"], summary="Clean up artifacts from failed jobs")
-async def cleanup_failed_job_artifacts(max_age_hours: int = 72):
-    """
-    Clean up training artifacts from failed jobs.
-
-    Args:
-        max_age_hours: Delete artifacts from failed jobs older than this (default: 72 hours)
-
-    This removes:
-    - Results directories for failed/stopped jobs
-    - Incomplete model checkpoints
-    """
+def _cleanup_failed_job_artifacts_sync(max_age_hours: int) -> dict:
+    """Blocking implementation of /cleanup/artifacts — DB reads plus a
+    directory walk + rmtree per job, run off the event loop via to_thread."""
     import shutil
     from datetime import timedelta
 
@@ -3589,12 +3547,24 @@ async def cleanup_failed_job_artifacts(max_age_hours: int = 72):
     }
 
 
-@app.get("/cleanup/status", tags=["Disk & Cleanup"], summary="Get cleanable resource summary")
-async def get_cleanup_status():
+@app.post("/cleanup/artifacts", tags=["Disk & Cleanup"], summary="Clean up artifacts from failed jobs")
+async def cleanup_failed_job_artifacts(max_age_hours: int = 72):
     """
-    Get information about cleanable resources.
-    Shows expired uploads and failed job artifacts that can be cleaned.
+    Clean up training artifacts from failed jobs.
+
+    Args:
+        max_age_hours: Delete artifacts from failed jobs older than this (default: 72 hours)
+
+    This removes:
+    - Results directories for failed/stopped jobs
+    - Incomplete model checkpoints
     """
+    return await asyncio.to_thread(_cleanup_failed_job_artifacts_sync, max_age_hours)
+
+
+def _get_cleanup_status_sync() -> dict:
+    """Blocking implementation of /cleanup/status — DB reads plus a directory
+    walk per failed/stopped job, run off the event loop via to_thread."""
     from datetime import timedelta
 
     now = datetime.now()
@@ -3646,6 +3616,15 @@ async def get_cleanup_status():
             "total_mb": sum(a["size_mb"] for a in cleanable_artifacts)
         }
     }
+
+
+@app.get("/cleanup/status", tags=["Disk & Cleanup"], summary="Get cleanable resource summary")
+async def get_cleanup_status():
+    """
+    Get information about cleanable resources.
+    Shows expired uploads and failed job artifacts that can be cleaned.
+    """
+    return await asyncio.to_thread(_get_cleanup_status_sync)
 
 
 # ===== Config Management Endpoints =====
@@ -4851,7 +4830,7 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
             logger.debug(f"Could not read adapter_config.json for README enrichment: {exc}")
 
     job_id = f"upload-{_uuid.uuid4().hex[:8]}"
-    job_manager.create_job(job_id, {
+    await asyncio.to_thread(job_manager.create_job, job_id, {
         "type": "post_hoc_upload",
         "model_name": name,
         "repo_id": resolved_repo_id,
@@ -4941,7 +4920,7 @@ async def export_gguf_for_existing_model(name: str, request: ModelGgufExportRequ
     )
 
     job_id = f"gguf-{_uuid.uuid4().hex[:8]}"
-    job_manager.create_job(job_id, {
+    await asyncio.to_thread(job_manager.create_job, job_id, {
         "type": "post_hoc_gguf",
         "model_name": name,
         "quant_types": request.quant_types,
