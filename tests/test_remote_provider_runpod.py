@@ -44,7 +44,7 @@ class FakeSession:
         self.calls = []             # (method, path, json_payload)
 
     def request(self, method, url, timeout=None, **kwargs):
-        path = url.replace("https://rest.runpod.io/v1", "")
+        path = url.replace("https://rest.runpod.io/v1", "").replace("https://api.runpod.io", "")
         self.calls.append((method, path, kwargs.get("json")))
         return self.routes.get((method, path), FakeResponse(404, None))
 
@@ -128,15 +128,26 @@ class TestStatusAndTerminate:
 
 class TestOffers:
     def test_offer_parsing(self, provider, session):
-        session.routes[("GET", "/gputypes")] = FakeResponse(200, [
+        session.routes[("POST", "/graphql")] = FakeResponse(200, {"data": {"gpuTypes": [
             {"id": "NVIDIA H200", "displayName": "H200 SXM", "memoryInGb": 141,
-             "securePrice": 3.99, "communityPrice": 3.45, "maxGpuCount": 8},
+             "securePrice": 4.59, "communityPrice": 3.59, "maxGpuCount": 8,
+             "lowestPrice": {"stockStatus": "Medium", "uninterruptablePrice": 3.59}},
+            {"id": "NVIDIA H200 NVL", "memoryInGb": 143, "securePrice": 3.79,
+             "communityPrice": 0.5, "lowestPrice": {"stockStatus": None, "uninterruptablePrice": None}},
             {"displayName": "junk row without id"},
-        ])
+        ]}})
         offers = provider.list_gpu_offers()
-        assert len(offers) == 1
+        assert [o.gpu_type_id for o in offers] == ["NVIDIA H200", "NVIDIA H200 NVL"]
         assert offers[0].vram_gb == 141
-        assert offers[0].price_per_hr("community") == 3.45
+        assert offers[0].price_per_hr("community") == 3.59
+        assert offers[0].available is True
+        # No stock status: not rentable, whatever the placeholder price says.
+        assert offers[1].available is False
+
+    def test_graphql_errors_raise(self, provider, session):
+        session.routes[("POST", "/graphql")] = FakeResponse(200, {"errors": [{"message": "bad"}]})
+        with pytest.raises(ProviderError):
+            provider.list_gpu_offers()
 
 
 class TestFactory:
