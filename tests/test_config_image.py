@@ -32,6 +32,8 @@ from pydantic import BaseModel, Field
 from src.config_image import (
     PNG_TEXT_KEY,
     build_config_image_bytes,
+    decode_config_payload,
+    encode_config_payload,
     extract_config_envelope_from_png,
     _compress_envelope,
     _decompress_payload,
@@ -85,6 +87,44 @@ class TestCompressionRoundTrip(unittest.TestCase):
     def test_decompress_rejects_foreign_payload(self):
         self.assertIsNone(_decompress_payload("not-a-merlina-blob"))
         self.assertIsNone(_decompress_payload("merlina-config-v1:###notbase64###"))
+
+
+class TestPastedPayloadDecoding(unittest.TestCase):
+    """decode_config_payload backs the *From Code* button, so it has to
+    survive whatever a user manages to paste."""
+
+    def test_round_trips_the_published_code(self):
+        code = encode_config_payload(_SAMPLE_ENVELOPE)
+        self.assertTrue(code.startswith("merlina-config-v1:"))
+        self.assertEqual(decode_config_payload(code), _SAMPLE_ENVELOPE)
+
+    def test_tolerates_surrounding_whitespace_and_line_breaks(self):
+        code = encode_config_payload(_SAMPLE_ENVELOPE)
+        mangled = "  \n" + code[:40] + "\n" + code[40:] + "  \n"
+        self.assertEqual(decode_config_payload(mangled), _SAMPLE_ENVELOPE)
+
+    def test_accepts_raw_envelope_json(self):
+        blob = json.dumps(_SAMPLE_ENVELOPE, indent=2)
+        self.assertEqual(decode_config_payload(blob), _SAMPLE_ENVELOPE)
+
+    def test_accepts_fenced_json_pasted_from_a_readme(self):
+        blob = "```json\n" + json.dumps(_SAMPLE_ENVELOPE, indent=2) + "\n```"
+        self.assertEqual(decode_config_payload(blob), _SAMPLE_ENVELOPE)
+
+    def test_rejects_garbage(self):
+        self.assertIsNone(decode_config_payload(""))
+        self.assertIsNone(decode_config_payload("hello there"))
+        self.assertIsNone(decode_config_payload("[1, 2, 3]"))
+
+    def test_rejects_decompression_bomb(self):
+        """A pasted blob must not be able to inflate to gigabytes."""
+        import base64
+        import gzip
+
+        bomb = base64.urlsafe_b64encode(
+            gzip.compress(b"\0" * (8 * 1024 * 1024), compresslevel=9)
+        ).decode("ascii")
+        self.assertIsNone(decode_config_payload("merlina-config-v1:" + bomb))
 
 
 @unittest.skipUnless(_image_deps_available(), "Pillow + qrcode required")

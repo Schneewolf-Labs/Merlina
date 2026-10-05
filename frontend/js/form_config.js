@@ -96,6 +96,8 @@ function readCardSource(card) {
     if (t === 'huggingface') {
         src.repo_id = card.querySelector('.ds-repo')?.value || '';
         src.split = card.querySelector('.ds-split')?.value || 'train';
+        const configName = card.querySelector('.ds-config')?.value?.trim();
+        if (configName) src.config_name = configName;
     } else if (t === 'local_file') {
         src.file_path = card.querySelector('.ds-local-path')?.value || '';
         src.file_format = card.querySelector('.ds-local-format')?.value || '';
@@ -230,6 +232,7 @@ export function buildTrainingConfig({ gpuManager = null, includeSecrets = true }
         max_grad_norm: num('max-grad-norm', 0.3),
         warmup_ratio: num('warmup-ratio', 0.05),
         eval_steps: num('eval-steps', 0.2),
+        save_steps: numOrNull('save-steps'),
         shuffle_dataset: bool('shuffle-dataset', true),
         weight_decay: num('weight-decay', 0.01),
         lr_scheduler_type: str('lr-scheduler-type', 'cosine'),
@@ -271,6 +274,9 @@ export function buildTrainingConfig({ gpuManager = null, includeSecrets = true }
         push_to_hub: bool('push-hub', false),
         merge_lora_before_upload: bool('merge-lora-before-upload', true),
         hf_hub_private: bool('hf-hub-private', true),
+        // Org/user namespace the model is uploaded under. Empty = the
+        // token owner's personal account.
+        hf_namespace: str('hf-namespace', '') || null,
 
         // GGUF export — Cast Spell does not trigger GGUF (it's done from
         // the dedicated Export tab on a finished model). We still emit

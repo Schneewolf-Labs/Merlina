@@ -61,6 +61,11 @@ from dataset_handlers.factory import create_loader_from_config
 from src.job_manager import JobManager
 from src.model_card import generate_wandb_run_name
 from src.utils import build_grimoire_config, fix_vlm_state_dict_on_disk
+from src.checkpoint_policy import (
+    resolve_save_steps,
+    epoch_end_saves,
+    describe as describe_save_steps,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -125,14 +130,23 @@ def _do_hub_upload(config, final_output_dir: str, training_mode: str, job_id: st
     from huggingface_hub import HfApi
     from peft import PeftModel
     from src.model_card import generate_model_readme, upload_model_readme, upload_config_image
+    from src.hf_namespaces import resolve_hub_repo_id
 
     api = HfApi()
-    api.create_repo(
-        repo_id=config.output_name,
+    target_repo_id = resolve_hub_repo_id(
+        config.output_name, getattr(config, "hf_namespace", None)
+    )
+    repo_url = api.create_repo(
+        repo_id=target_repo_id,
         token=config.hf_token,
         private=config.hf_hub_private,
         exist_ok=True,
     )
+    # create_repo() resolves a bare name against the token's account, but
+    # upload_folder() does not — always upload to the fully-qualified id it
+    # hands back, or the upload 404s under an org namespace.
+    full_repo_id = getattr(repo_url, "repo_id", None) or target_repo_id
+    logger.info(f"Repository ready: {full_repo_id}")
 
     if config.use_lora and config.merge_lora_before_upload:
         try:
@@ -167,7 +181,7 @@ def _do_hub_upload(config, final_output_dir: str, training_mode: str, job_id: st
 
             api.upload_folder(
                 folder_path=merge_dir,
-                repo_id=config.output_name,
+                repo_id=full_repo_id,
                 token=config.hf_token,
                 commit_message=f"Upload merged model ({training_mode})",
             )
@@ -178,26 +192,26 @@ def _do_hub_upload(config, final_output_dir: str, training_mode: str, job_id: st
             logger.warning(f"CPU merge failed ({e}), uploading adapter only")
             api.upload_folder(
                 folder_path=final_output_dir,
-                repo_id=config.output_name,
+                repo_id=full_repo_id,
                 token=config.hf_token,
                 commit_message=f"Upload LoRA adapter ({training_mode})",
             )
     else:
         api.upload_folder(
             folder_path=final_output_dir,
-            repo_id=config.output_name,
+            repo_id=full_repo_id,
             token=config.hf_token,
             commit_message=f"Upload model ({training_mode})",
         )
 
     readme_content = generate_model_readme(config, training_mode)
-    upload_model_readme(config.output_name, readme_content, config.hf_token)
+    upload_model_readme(full_repo_id, readme_content, config.hf_token)
 
     # Optionally publish the shareable config image (QR + PNG metadata).
     # Best-effort and self-gated on config.share_config_image.
-    upload_config_image(config.output_name, config, config.hf_token)
+    upload_config_image(full_repo_id, config, config.hf_token)
 
-    logger.info(f"Model published at: https://huggingface.co/{config.output_name}")
+    logger.info(f"Model published at: https://huggingface.co/{full_repo_id}")
     if job_manager:
         final_status = "stopped" if was_stopped else "completed"
         job_manager.update_job(job_id, status=final_status, progress=1.0, output_dir=final_output_dir)
@@ -305,6 +319,25 @@ class FileProgressCallback(TrainerCallback):
                 self.job_manager.update_job(self.job_id, eval_loss=record["eval_loss"])
 
 
+class EvalMemoryTeardownCallback(TrainerCallback):
+    """Release the eval pass's CUDA cache back to the shared pool before
+    training resumes (worker-side twin of
+    src.training_runner.EvalMemoryTeardownCallback — same fix, this is the
+    trainer the subprocess path actually runs).
+
+    Eval leaves a multi-GB reserved-but-unallocated gap in the caching
+    allocator; on a unified-memory machine (DGX Spark) that gap is host RAM
+    the OS can't use, and it's what pushed free RAM under the memory
+    guard's soft floor right after eval. Only wired in when the guard is
+    active. Unlike FileProgressCallback this is added on *every* DDP rank —
+    each process owns its own allocator cache.
+    """
+
+    def on_evaluate(self, trainer, metrics):
+        from src.memory_guard import reclaim_cuda_cache
+        reclaim_cuda_cache(context="post-eval teardown")
+
+
 def run_worker(args):
     """Main training logic executed by each DDP process."""
     # Install SIGTERM handler
@@ -336,13 +369,19 @@ def run_worker(args):
     except Exception as e:
         logger.error(f"Failed to load training config: {e}", exc_info=True)
         if is_main:
-            with open(args.progress_file, "a") as f:
-                f.write(json.dumps({"type": "error", "error": f"Config load failed: {e}"}) + "\n")
+            # Each report is guarded independently: the progress file may be
+            # gone (e.g. parent died and cleaned up) and the DB may be locked
+            # — one failing must not stop the other from recording the error.
+            try:
+                with open(args.progress_file, "a") as f:
+                    f.write(json.dumps({"type": "error", "error": f"Config load failed: {e}"}) + "\n")
+            except Exception:
+                logger.exception("Could not write config-load error to progress file")
             try:
                 jm = JobManager(db_path=args.db_path)
                 jm.update_job(args.job_id, status="failed", error=str(e))
             except Exception:
-                pass
+                logger.exception("Could not record config-load failure in job DB")
         return
 
     logger.info(f"Worker started: rank={global_rank}, local_rank={local_rank}")
@@ -374,7 +413,15 @@ def run_worker(args):
     model = None
     trainer = None
 
+    # Unified-memory protection (DGX Spark / Grace-Blackwell): cap the CUDA
+    # allocator and watch free system RAM so a spike fails this rank's job
+    # instead of taking the whole machine down. No-op on discrete GPUs.
+    from src.memory_guard import TrainingMemoryGuard
+    memory_guard = TrainingMemoryGuard(args.job_id)
+
     try:
+        memory_guard.install()
+
         # ---- Model loading ----
         if is_main and job_manager:
             job_manager.update_job(args.job_id, status="loading_model", progress=0.1)
@@ -477,11 +524,17 @@ def run_worker(args):
             tokenizer=tokenizer if config.dataset.format.format_type == "tokenizer" else None,
         )
 
+        # eval_steps=0 turns evaluation off completely. Hold nothing back in that case —
+        # an eval split that is never scored is just training data thrown away.
+        evals_disabled = not config.eval_steps
+        if evals_disabled:
+            logger.info("eval_steps=0 — evaluation disabled; training on the full dataset")
+
         pipeline = DatasetPipeline(
             loader=loader,
             formatter=formatter,
             column_mapping=config.dataset.column_mapping,
-            test_size=config.dataset.test_size,
+            test_size=0.0 if evals_disabled else config.dataset.test_size,
             max_samples=config.dataset.max_samples,
             seed=config.seed,
             shuffle=config.shuffle_dataset,
@@ -598,16 +651,35 @@ def run_worker(args):
         wandb_project = None
         log_with = None
         if config.use_wandb and is_main and wandb is not None:
-            if config.wandb_key:
-                wandb.login(key=config.wandb_key)
-            wandb_run_name = config.wandb_run_name or generate_wandb_run_name(config)
-            wandb_project = config.wandb_project or "merlina-training"
-            log_with = "wandb"
+            # Preflight only *warns* when no W&B key is present, promising that "training will
+            # proceed but metrics won't be logged". Enabling the tracker anyway breaks that
+            # promise: accelerate initialises wandb, which raises
+            # `UsageError: api_key not configured (no-tty)` and kills the run after the model and
+            # dataset have already been loaded. Degrade to no logging instead, so the warning is
+            # true and a missing key costs metrics rather than the whole job.
+            try:
+                if config.wandb_key:
+                    wandb.login(key=config.wandb_key)
+                elif not getattr(wandb.api, "api_key", None):
+                    # Covers ~/.netrc and a prior `wandb login`, not just the env var.
+                    raise RuntimeError("no W&B API key available")
+                wandb_run_name = config.wandb_run_name or generate_wandb_run_name(config)
+                wandb_project = config.wandb_project or "merlina-training"
+                log_with = "wandb"
+            except Exception as e:
+                logger.warning(
+                    f"use_wandb is set but W&B could not be initialised ({e}); "
+                    "continuing without W&B logging"
+                )
+                wandb_run_name = None
+                wandb_project = None
+                log_with = None
 
         output_dir = f"./results/{args.job_id}"
 
         # Compute eval_steps
         eval_steps = None
+        total_steps = None
         if config.eval_steps:
             if config.eval_steps < 1:
                 import math
@@ -618,6 +690,10 @@ def run_worker(args):
                 eval_steps = max(1, int(total_steps * config.eval_steps))
             else:
                 eval_steps = int(config.eval_steps)
+
+        _save_steps = resolve_save_steps(
+            getattr(config, "save_steps", None), eval_steps, total_steps)
+        logger.info(describe_save_steps(_save_steps))
 
         grimoire_config = build_grimoire_config(
             GrimoireTrainingConfig,
@@ -641,7 +717,8 @@ def run_worker(args):
             logging_steps=config.logging_steps,
             eval_steps=eval_steps,
             eval_on_start=config.eval_on_start,
-            save_steps=eval_steps,
+            save_steps=_save_steps,
+            save_on_epoch_end=epoch_end_saves(getattr(config, "save_steps", None)),
             save_total_limit=2,
             seed=config.seed,
             run_name=wandb_run_name if config.use_wandb else config.output_name,
@@ -663,6 +740,8 @@ def run_worker(args):
             callbacks.append(
                 FileProgressCallback(args.job_id, args.progress_file, job_manager)
             )
+        if memory_guard.active:
+            callbacks.append(EvalMemoryTeardownCallback())
 
         trainer = GrimoireTrainer(
             model=model,
@@ -670,10 +749,14 @@ def run_worker(args):
             config=grimoire_config,
             loss_fn=loss_fn,
             train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
+            # Explicitly None when evals are off, so a trainer that would otherwise evaluate
+            # at epoch boundaries has nothing to evaluate on.
+            eval_dataset=None if evals_disabled else eval_dataset,
             peft_config=peft_config,
             callbacks=callbacks,
         )
+
+        memory_guard.set_trainer(trainer)
 
         # Capture W&B URL
         if is_main and config.use_wandb and wandb is not None and wandb.run is not None:
@@ -708,21 +791,28 @@ def run_worker(args):
             final_max_steps = trainer.max_steps
 
             # Cleanup before potential upload
+            memory_guard.set_trainer(None)  # drop the guard's reference so del works
             del trainer, model
             trainer = None
             model = None
             gc.collect()
             torch.cuda.empty_cache()
 
-            # Write completion to progress file
-            with open(args.progress_file, "a") as f:
-                f.write(json.dumps({
-                    "type": "completed",
-                    "was_stopped": was_stopped,
-                    "output_dir": final_output_dir,
-                    "final_step": final_step,
-                    "final_max_steps": final_max_steps,
-                }) + "\n")
+            # Write completion to progress file. Best-effort: the model is
+            # already saved, so a missing/unwritable progress file (e.g. the
+            # parent died and its temp dir is gone) must not fail the job —
+            # the DB status updates below are the source of truth.
+            try:
+                with open(args.progress_file, "a") as f:
+                    f.write(json.dumps({
+                        "type": "completed",
+                        "was_stopped": was_stopped,
+                        "output_dir": final_output_dir,
+                        "final_step": final_step,
+                        "final_max_steps": final_max_steps,
+                    }) + "\n")
+            except Exception:
+                logger.exception("Could not write completion to progress file")
 
             # Handle Hub upload (inline — no websocket needed in subprocess)
             if config.push_to_hub and config.hf_token:
@@ -755,18 +845,51 @@ def run_worker(args):
     except Exception as e:
         logger.error(f"Training failed: {e}", exc_info=True)
         if is_main:
-            if job_manager:
-                job_manager.update_job(args.job_id, status="failed", error=str(e))
-            # Write error to progress file
-            with open(args.progress_file, "a") as f:
-                f.write(json.dumps({"type": "error", "error": str(e)}) + "\n")
-            if config.use_wandb and wandb is not None and wandb.run is not None:
-                try:
+            # Guard every reporting step independently. A secondary failure
+            # here (locked DB, deleted progress dir, wandb teardown error)
+            # used to escape the handler, masking the original exception and
+            # leaving the job stuck in a non-terminal status.
+            try:
+                if job_manager:
+                    # Record where the artifacts live even though the run failed. A crash
+                    # part-way through usually leaves an intact periodic checkpoint, and
+                    # without output_dir on the record nothing can find it — the GPU hours
+                    # sit stranded on disk while the API reports no artifacts.
+                    failed_output_dir = f"./results/{args.job_id}"
+                    try:
+                        from .checkpoint_rescue import find_resumable_adapter
+                        recoverable = find_resumable_adapter(failed_output_dir) is not None
+                    except Exception:
+                        recoverable = False
+                    if recoverable:
+                        logger.info(
+                            "Recoverable checkpoint found under %s — recording output_dir so "
+                            "the adapter can still be uploaded.", failed_output_dir,
+                        )
+                        job_manager.update_job(
+                            args.job_id, status="failed", error=str(e),
+                            output_dir=failed_output_dir,
+                        )
+                    else:
+                        job_manager.update_job(args.job_id, status="failed", error=str(e))
+            except Exception:
+                logger.exception("Could not record training failure in job DB")
+            try:
+                with open(args.progress_file, "a") as f:
+                    f.write(json.dumps({"type": "error", "error": str(e)}) + "\n")
+            except Exception:
+                logger.exception("Could not write training failure to progress file")
+            try:
+                if config.use_wandb and wandb is not None and wandb.run is not None:
                     wandb.finish(exit_code=1)
-                except Exception:
-                    pass
+            except Exception:
+                logger.debug("wandb.finish failed during error handling", exc_info=True)
 
     finally:
+        try:
+            memory_guard.shutdown()
+        except Exception:
+            logger.exception("Memory guard shutdown failed")
         _cleanup_training_resources(model, trainer)
 
 

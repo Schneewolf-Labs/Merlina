@@ -280,6 +280,38 @@ class CustomFormatter(DatasetFormatter):
         }
 
 
+class RawFormatter(DatasetFormatter):
+    """
+    Pass dataset columns through verbatim with no chat template applied.
+
+    Use this when the dataset text is already fully formatted (special tokens
+    baked in), or for plain-text/completion-style training where no chat
+    structure is wanted. The `system` and `reasoning` columns are ignored —
+    with no template there is nowhere to place them.
+    """
+
+    def format(self, row: dict) -> dict:
+        """
+        Return prompt/chosen/rejected exactly as they appear in the dataset.
+
+        Expected input columns: prompt, chosen, rejected (system/reasoning ignored)
+        Output columns: prompt, chosen, rejected
+        """
+        return {
+            "prompt": _safe_str(row.get('prompt')),
+            "chosen": _safe_str(row.get('chosen')),
+            "rejected": _safe_str(row.get('rejected'))
+        }
+
+    def get_format_info(self) -> dict:
+        """Get information about the format type"""
+        return {
+            "format_type": "raw",
+            "description": "No formatting - raw column text passed through verbatim (no chat template)",
+            "example_prompt": "Hello, how are you?"
+        }
+
+
 class TokenizerFormatter(DatasetFormatter):
     """
     Format dataset using the tokenizer's chat template from tokenizer_config.json.
@@ -537,7 +569,8 @@ def get_formatter(
     Factory function to get the appropriate formatter.
 
     Args:
-        format_type: One of 'chatml', 'llama3', 'mistral', 'qwen3', 'tokenizer', 'custom'
+        format_type: One of 'chatml', 'llama3', 'mistral', 'qwen3', 'tokenizer', 'custom', 'raw'
+                     ('raw' — alias 'none' — passes columns through with no chat template)
         custom_templates: Required if format_type is 'custom'
                          Dict with keys: prompt_template, chosen_template, rejected_template
         tokenizer: Required if format_type is 'tokenizer'
@@ -561,6 +594,9 @@ def get_formatter(
 
     if format_type == 'chatml':
         return ChatMLFormatter()
+
+    elif format_type in ('raw', 'none'):
+        return RawFormatter()
 
     elif format_type == 'llama3':
         return Llama3Formatter()
@@ -597,5 +633,5 @@ def get_formatter(
     else:
         raise ValueError(
             f"Invalid format_type: {format_type}. "
-            f"Must be one of: chatml, llama3, mistral, qwen3, tokenizer, custom"
+            f"Must be one of: chatml, llama3, mistral, qwen3, tokenizer, custom, raw"
         )

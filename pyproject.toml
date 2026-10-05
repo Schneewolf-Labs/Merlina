@@ -79,8 +79,14 @@ diffusion = [
     "atelier-diffusion>=0.1.1",
     "diffusers>=0.34.0",
 ]
+# MCP server (mcp_server.py) — exposes the Merlina REST API as Model Context
+# Protocol tools. Thin HTTP client; does not pull in torch.
+mcp = [
+    "mcp[cli]>=1.2.0",
+    "httpx>=0.24.0",
+]
 all = [
-    "merlina[vlm,diffusion]",
+    "merlina[vlm,diffusion,mcp]",
 ]
 dev = [
     "pytest>=7.4.0",
@@ -94,6 +100,7 @@ dev = [
 
 [project.scripts]
 merlina = "merlina_cli:main"
+merlina-mcp = "mcp_server:main"
 
 [project.urls]
 Homepage = "https://github.com/Schneewolf-Labs/Merlina"
@@ -118,6 +125,7 @@ packages = ["src", "dataset_handlers"]
 [tool.hatch.build.targets.wheel.force-include]
 "merlina.py" = "merlina.py"
 "merlina_cli.py" = "merlina_cli.py"
+"mcp_server.py" = "mcp_server.py"
 "config.py" = "config.py"
 "version.py" = "version.py"
 "frontend" = "frontend"
@@ -126,6 +134,7 @@ packages = ["src", "dataset_handlers"]
 include = [
     "merlina.py",
     "merlina_cli.py",
+    "mcp_server.py",
     "config.py",
     "version.py",
     "bump_version.py",

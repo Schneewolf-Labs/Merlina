@@ -31,6 +31,7 @@ def create_loader(
     hf_token: Optional[str] = None,
     streaming: bool = False,
     streaming_batch_size: int = 10000,
+    config_name: Optional[str] = None,
 ) -> DatasetLoader:
     """
     Create a dataset loader based on source type.
@@ -46,6 +47,7 @@ def create_loader(
         hf_token: HuggingFace API token for private datasets
         streaming: Use streaming mode for HuggingFace datasets (for large datasets)
         streaming_batch_size: Batch size for streaming materialization (default: 10000)
+        config_name: HuggingFace dataset configuration / subset name (optional)
 
     Returns:
         Configured DatasetLoader instance
@@ -62,11 +64,13 @@ def create_loader(
                 split=split,
                 token=hf_token,
                 batch_size=streaming_batch_size,
+                config_name=config_name,
             )
         return HuggingFaceLoader(
             repo_id=repo_id,
             split=split,
-            token=hf_token
+            token=hf_token,
+            config_name=config_name,
         )
 
     elif source_type == "local_file":
@@ -142,6 +146,7 @@ def create_loader_from_config(
             'dataset_id': getattr(source_config, 'dataset_id', None),
             'streaming': getattr(source_config, 'streaming', False),
             'streaming_batch_size': getattr(source_config, 'streaming_batch_size', 10000),
+            'config_name': getattr(source_config, 'config_name', None),
         }
 
     return create_loader(
@@ -155,6 +160,7 @@ def create_loader_from_config(
         hf_token=hf_token,
         streaming=config_dict.get('streaming', False),
         streaming_batch_size=config_dict.get('streaming_batch_size', 10000),
+        config_name=config_dict.get('config_name'),
     )
 
 
@@ -219,5 +225,8 @@ def create_pipeline_from_config(
         max_samples=max_samples,
         seed=seed,
         shuffle=shuffle,
-        training_mode=training_mode
+        training_mode=training_mode,
+        # Forwarded regardless of format_type: chatml is the default, and a tool-calling dataset
+        # still needs the model's template to render calls faithfully.
+        tokenizer=tokenizer,
     )

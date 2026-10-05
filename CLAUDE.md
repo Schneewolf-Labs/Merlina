@@ -44,7 +44,8 @@ When working on Merlina, preserve this spirit. Keep the code clean and well-docu
 ```bash
 python merlina.py
 # Access UI at http://localhost:8000
-# API docs at http://localhost:8000/api/docs
+# API docs (Swagger UI) at http://localhost:8000/docs
+# OpenAPI spec at http://localhost:8000/openapi.json
 ```
 
 ### Testing
@@ -149,8 +150,9 @@ The dataset system uses a modular strategy pattern with three main abstractions:
 
 2. **DatasetFormatter** (base.py, formatters.py)
    - Abstract base class for formatting strategies
-   - Implementations: `ChatMLFormatter`, `Llama3Formatter`, `MistralFormatter`, `CustomFormatter`, `TokenizerFormatter`
+   - Implementations: `ChatMLFormatter`, `Llama3Formatter`, `MistralFormatter`, `CustomFormatter`, `TokenizerFormatter`, `RawFormatter`
    - `TokenizerFormatter` is special - it uses the model's native chat template from tokenizer_config.json
+   - `RawFormatter` (`format_type: "raw"`, alias `"none"`) applies no chat template - columns pass through verbatim (for pre-formatted or plain-text datasets)
    - Factory function `get_formatter()` creates appropriate formatter instances
 
 3. **DatasetPipeline** (base.py)
@@ -413,6 +415,29 @@ Merlina supports multiple training modes, selectable via the `training_mode` con
 
 ## Important Implementation Notes
 
+### Tool-calling datasets
+
+Datasets with a `tools` column and assistant turns carrying `tool_calls` (content is `null`)
+require the target model's tokenizer, and `format_type: "tokenizer"` with `model_name` set.
+
+**Never hardcode the tool-call encoding.** It differs between model families, and the difference is
+invisible until inference:
+
+- Hermes / Qwen2: `<tool_call>{"name": ..., "arguments": ...}</tool_call>`
+- Qwen3.5: `<tool_call><function=name><parameter=key>value</parameter></function></tool_call>`
+
+Train one and prompt the other and the model's calls never parse, while the loss curve looks
+completely healthy. `dataset_handlers/tool_calls.py` renders every piece through the tokenizer's
+own template and asserts the flattened strings re-template to the native rendering byte for byte;
+it raises rather than guessing when no tokenizer is available.
+
+Preview auto-loads the tokenizer when `model_name` is set, caching it the same way
+`POST /model/preload` does. Preloading first makes the first preview instant.
+
+Sequence length is worth checking before training on this kind of data: the tool call sits at the
+*end* of each example, so a `max_length` below the p100 token count silently truncates the label
+and trains on nothing. The default 2048 truncated 100% of one real tool-calling dataset.
+
 ### Tokenizer Format
 
 When using `format_type: "tokenizer"`, the system automatically uses the model's native chat template from `tokenizer_config.json`. This is the recommended approach as it ensures format compatibility with the base model.
@@ -433,6 +458,45 @@ torch.cuda.empty_cache()
 ```
 
 This is critical for running multiple sequential training jobs.
+
+### Unified-Memory Protection (DGX Spark / Grace-Blackwell)
+
+On unified-memory machines (NVIDIA GB10 "DGX Spark", GH200/GB200, Jetson) the
+GPU and system RAM share one physical pool. A training memory spike there does
+**not** raise a clean CUDA OOM — the allocator grows into RAM the OS needs and
+the whole machine locks up or gets OOM-killed. `src/memory_guard.py` defends
+against this with three layers, all inert on discrete-GPU systems:
+
+1. **Allocator cap** — `torch.cuda.set_per_process_memory_fraction()` keeps a
+   reserve (`MEMORY_GUARD_RESERVE_GB`, default 12 GB, capped at 25% of the
+   pool) off-limits, so spikes fail as ordinary catchable OOMs.
+2. **Watchdog** — a per-job thread samples free system RAM. Below the soft
+   floor (`MEMORY_GUARD_SOFT_FREE_GB`, 8 GB) it first **reclaims** the CUDA
+   allocator's reserved-but-unallocated cache (`reclaim_cuda_cache()` —
+   post-eval slack is the classic multi-GB offender) and only calls
+   `trainer.request_stop()` (graceful, checkpoint saved) if free RAM is
+   still under the floor, or if pressure returns within
+   `MEMORY_GUARD_RECLAIM_COOLDOWN_SECONDS` (60 s) of the last reclaim.
+   Below the hard floor (`MEMORY_GUARD_HARD_FREE_GB`, 3 GB) it raises
+   `MemoryPressureAbort` in the training thread with no reclaim attempt.
+   Floors auto-scale down on small boards. As a proactive complement, all
+   three trainer paths (`training_runner`, `train_worker`,
+   `training_runner_vlm`) add an `EvalMemoryTeardownCallback` when the
+   guard is active, which empties the allocator cache right after each
+   eval pass — so the slack never reads as memory pressure at all.
+3. **Forensic log** — every sample is appended and fsync'd to
+   `data/memory_guard.log`, so a post-reboot investigation has the memory
+   timeline the crashed kernel can't give you. Check this file (and `dmesg`)
+   first when diagnosing a Spark that went down mid-training.
+
+Detection is automatic (GPU name match, or GPU total memory ≈ system RAM);
+override with `UNIFIED_MEMORY=true/false` in `.env`. Integration points: the
+runners create a `TrainingMemoryGuard` per job (`install()` before model load,
+`set_trainer()` after trainer construction, `set_trainer(None)` **before**
+`del trainer` — the guard holds a strong reference — and `shutdown()` in the
+`finally` block). Pre-flight `_check_vram` budgets against actually-free
+shared-pool memory minus the reserve on these systems. Tests:
+`tests/test_memory_guard.py` (no GPU required).
 
 ### 4-bit Quantization
 
@@ -511,8 +575,10 @@ no form UI yet — `form_config.js` emits `remote: null`).
   SizingDecision, StagePlan, RemotePlan). Zero ML/HTTP deps.
 - `sizing.py` — MoE-aware sizing: reads the model's real `config.json`
   (DeepSeek-V3-style MoE fields → Kimi-K2 sizes correctly at ~1T total /
-  ~32B active), estimates VRAM/disk, picks the cheapest feasible GPU
-  type/count. Single-GPU fit wins; otherwise model-parallel across N GPUs
+  ~32B active), adapts it to a `ModelProfile` and estimates VRAM through
+  the shared `src/vram_estimator.py` (same estimator as local pre-flight —
+  don't fork a second formula here), sizes disk, picks the cheapest
+  feasible GPU type/count. Single-GPU fit wins; otherwise model-parallel across N GPUs
   (maps to `multi_gpu_strategy="single"` → `device_map=auto`).
 - `plan.py` — builds the stage plan: `train` (remote GPU) → `merge`
   (local / separate instance / skip). `merge_strategy="auto"` skips the
@@ -549,6 +615,34 @@ paths don't travel), text-LLM modes only, on-demand instances only (no
 spot/resume). Tests: `tests/test_remote_*.py` (all run without network or
 GPUs via fake providers/stores/workers). User guide:
 `docs/user/remote-training.md`.
+
+### HuggingFace Namespace (Org) Selection
+
+`output_name` is a bare model name — it also names the local directory under
+`./models/` — so an upload has to decide *whose* namespace the repo belongs to.
+`hf_namespace` (on `TrainingConfig`, `UploadJobRequest`, and
+`ModelUploadRequest`) holds the org or account to publish under; empty means the
+token owner's personal account. `POST /hf/namespaces` lists what a token can
+publish to (account + orgs, with `can_write` flagging read-only memberships) so
+the UI can offer a picker instead of asking people to type an org name.
+
+**The rule every upload path follows** (`src/hf_namespaces.py`):
+
+1. `resolve_hub_repo_id(output_name, hf_namespace)` — an `output_name` that
+   already contains a `/` wins; otherwise the namespace is prefixed; otherwise
+   the bare name is passed through.
+2. Call `create_repo()` with that id, then **use the `repo_id` it returns for
+   every subsequent call**. `create_repo()` resolves a bare name against the
+   token's account, but `upload_folder()` resolves nothing — passing the bare
+   name to the upload is what produced
+   `RepositoryNotFoundError: 404 ... /api/models/<name>/preupload/main`.
+
+Both upload paths (`src/training_runner.py:_run_background_upload` and
+`src/train_worker.py:_do_hub_upload`) do this, and the resolved id is what the
+README upload, the config image, and the `upload_state.json` record all use.
+Pre-flight (`_check_hf_namespace`) warns — never blocks — when the chosen
+namespace isn't one the token belongs to, or when the role there looks
+read-only.
 
 ## Artemis VLM (Project Artemis — multimodal extension)
 
@@ -805,6 +899,7 @@ No frontend configuration needed!
 
 **Validation:**
 - `POST /validate` - Validate configuration before training
+- `POST /estimate/vram` - Architecture-aware VRAM estimate with per-component breakdown (see `src/vram_estimator.py`; reads the model's real config.json, no GPU required)
 
 **Job Management:**
 - `GET /jobs/history?status=&limit=&offset=` - Get paginated job history

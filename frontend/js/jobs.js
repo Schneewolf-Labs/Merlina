@@ -1,6 +1,6 @@
 // Jobs Module - Job management and monitoring
 
-import { MerlinaAPI, WebSocketManager } from './api.js';
+import { MerlinaAPI, WebSocketManager, ErrorType } from './api.js';
 import { Toast, Modal, ProgressBar, JobCardRenderer, MetricsDisplay, LossChart } from './ui.js';
 
 /**
@@ -116,29 +116,78 @@ class JobManager {
      * Submit new training job
      */
     async submitJob(config) {
+        // Snapshot the server's job ids first: if the /train response is lost
+        // (timeout, dropped connection, empty body) the job may still have
+        // been created server-side, and we can find it by diffing.
+        let knownJobIds = null;
+        try {
+            knownJobIds = new Set(Object.keys(await MerlinaAPI.getJobs()));
+        } catch {
+            // Server unreachable for the snapshot — reconciliation disabled.
+        }
+
         try {
             const data = await MerlinaAPI.submitTraining(config);
 
             this.toast.success(`Training spell cast! Job ID: ${data.job_id}`);
 
-            // Track job
-            this.activeJobs[data.job_id] = {
-                name: config.output_name,
-                status: 'started',
-                config: config
-            };
-
-            // Reload jobs list
-            await this.loadJobs();
-
-            // Open monitoring modal
-            this.showJobDetails(data.job_id);
-
-            return data.job_id;
+            return this._trackSubmittedJob(data.job_id, config);
         } catch (error) {
+            const recoveredJobId = await this._findJobCreatedDespiteError(error, knownJobIds);
+            if (recoveredJobId) {
+                console.warn(`/train response was lost (${error.message}), but job ${recoveredJobId} was created — recovering`);
+                this.toast.success(`Training spell cast! Job ID: ${recoveredJobId} (confirmed after a dropped response)`);
+                return this._trackSubmittedJob(recoveredJobId, config);
+            }
+
             console.error('Failed to submit job:', error);
             this.toast.error(`Failed to cast spell: ${error.message}`);
             throw error;
+        }
+    }
+
+    /**
+     * Track a freshly submitted job, refresh the list, and open monitoring.
+     */
+    async _trackSubmittedJob(jobId, config) {
+        this.activeJobs[jobId] = {
+            name: config.output_name,
+            status: 'started',
+            config: config
+        };
+
+        // Reload jobs list
+        await this.loadJobs();
+
+        // Open monitoring modal
+        this.showJobDetails(jobId);
+
+        return jobId;
+    }
+
+    /**
+     * After a failed /train request, check whether the server actually
+     * created the job anyway (response lost in transit). Only runs for
+     * errors where the request may have reached the server — a definitive
+     * HTTP rejection (validation, auth) means no job was created.
+     *
+     * Returns the recovered job_id, or null.
+     */
+    async _findJobCreatedDespiteError(error, knownJobIds) {
+        const responseLost =
+            error?.type === ErrorType.TIMEOUT ||
+            error?.type === ErrorType.NETWORK ||
+            error?.details?.emptyResponse === true;
+        if (!responseLost || knownJobIds === null) return null;
+
+        try {
+            const jobs = await MerlinaAPI.getJobs();
+            const newIds = Object.keys(jobs).filter(id => !knownJobIds.has(id));
+            // Only claim the job when exactly one new job appeared — with
+            // several new jobs we can't tell which one is ours.
+            return newIds.length === 1 ? newIds[0] : null;
+        } catch {
+            return null;
         }
     }
 
@@ -625,6 +674,19 @@ class JobManager {
         if (mergeCheckbox) mergeCheckbox.checked = jobConfig?.merge_lora_before_upload ?? true;
         if (privateCheckbox) privateCheckbox.checked = jobConfig?.hf_hub_private ?? true;
 
+        // Namespace picker: default to whatever the job was configured with,
+        // and let the user re-check which orgs the token can publish to.
+        import('./hf_namespaces.js').then(({ setupNamespacePicker, setNamespaceValue, resetNamespaceHint }) => {
+            resetNamespaceHint('upload-hf-namespace-hint');
+            setNamespaceValue('upload-hf-namespace', jobConfig?.hf_namespace || '');
+            setupNamespacePicker({
+                buttonId: 'upload-refresh-namespaces',
+                selectId: 'upload-hf-namespace',
+                tokenId: 'upload-hf-token',
+                hintId: 'upload-hf-namespace-hint'
+            });
+        }).catch(err => console.warn('Namespace picker unavailable:', err));
+
         document.getElementById('upload-hub-modal').style.display = 'flex';
     }
 
@@ -639,6 +701,7 @@ class JobManager {
         // the backend resolves it and returns 400 if neither source has one.
 
         const outputName = document.getElementById('upload-repo-name')?.value?.trim() || null;
+        const namespace = document.getElementById('upload-hf-namespace')?.value?.trim() || null;
         const mergeLora = document.getElementById('upload-merge-lora')?.checked ?? true;
         const isPrivate = document.getElementById('upload-private')?.checked ?? true;
 
@@ -649,6 +712,7 @@ class JobManager {
             const result = await MerlinaAPI.uploadJob(this.currentJobId, {
                 hf_token: hfToken,
                 output_name: outputName,
+                hf_namespace: namespace,
                 merge_lora_before_upload: mergeLora,
                 hf_hub_private: isPrivate
             });

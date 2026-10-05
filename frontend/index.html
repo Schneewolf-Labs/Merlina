@@ -252,6 +252,7 @@
                             <option value="mistral">Mistral Instruct</option>
                             <option value="qwen3">Qwen 3 (with thinking support)</option>
                             <option value="custom">Custom Template</option>
+                            <option value="raw">Raw (No Formatting) - Columns used as-is, no chat template</option>
                         </select>
                         <small style="color: #888; font-size: 0.85em;">How to format conversations for the model</small>
                     </div>
@@ -452,6 +453,9 @@
                         <button type="button" id="load-from-image-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
                             🔳 From Image
                         </button>
+                        <button type="button" id="load-from-code-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
+                            🪄 From Code
+                        </button>
                         <button type="button" id="manage-configs-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
                             🗂️ Manage
                         </button>
@@ -567,7 +571,7 @@
                                         padding: 8px 14px; font-size: 0.9em; white-space: nowrap;
                                     ">👁 Preview &amp; Edit</button>
                                 </div>
-                                <small style="color: #888; font-size: 0.85em;">Local JSONL with {prompt, image} (or {prompt, chosen, rejected}) rows. Auto-set when you save a drag-drop dataset above. Click Preview to inspect + inline-edit captions before training.</small>
+                                <small style="color: #888; font-size: 0.85em;">JSONL with {prompt, image} (or {prompt, chosen, rejected}) rows. ⚠️ This is a path on the machine running Merlina, not your computer — if the server is remote, use the drag-drop upload above (which sets this automatically) or an HF dataset name below. Click Preview to inspect + inline-edit captions before training.</small>
                             </div>
 
                             <!-- JSONL preview + inline editor (populated by Preview button) -->
@@ -835,6 +839,11 @@
                                     <input type="number" id="eval-steps" value="0.2" min="0.1" max="1" step="0.05" class="magic-input">
                                     <small style="color: #888; font-size: 0.85em;">How often to evaluate (0-1)</small>
                                 </div>
+                                <div class="form-group">
+                                    <label>Save Steps</label>
+                                    <input type="number" id="save-steps" value="" min="0" step="0.05" placeholder="follows eval steps" class="magic-input">
+                                    <small style="color: #888; font-size: 0.85em;">Checkpoint cadence. Blank = follow eval steps; 0 = final model only (use on unified-memory boards); &lt;1 = ratio; &ge;1 = steps</small>
+                                </div>
                             </div>
                             <div class="form-row">
                                 <div class="form-group">
@@ -1060,6 +1069,18 @@
                                     <label>HuggingFace Token</label>
                                     <input type="password" id="hf-token" placeholder="Your HuggingFace token" class="magic-input">
                                     <small style="color: #888; font-size: 0.85em;">Required to push models. Get your token from <a href="https://huggingface.co/settings/tokens" target="_blank" style="color: #f97316;">huggingface.co/settings/tokens</a></small>
+                                </div>
+
+                                <!-- Namespace (account or organization) -->
+                                <div class="form-group">
+                                    <label for="hf-namespace">Upload To (Account or Organization)</label>
+                                    <div style="display: flex; gap: 8px; align-items: center;">
+                                        <select id="hf-namespace" class="magic-input" style="flex: 1;">
+                                            <option value="">Personal account (default)</option>
+                                        </select>
+                                        <button type="button" id="refresh-hf-namespaces" class="action-button" style="white-space: nowrap; padding: 8px 14px;">🔄 Check Orgs</button>
+                                    </div>
+                                    <small id="hf-namespace-hint" style="color: #888; font-size: 0.85em;">Click "Check Orgs" to list the organizations your token can publish to.</small>
                                 </div>
 
                                 <!-- Privacy Toggle -->
@@ -1471,9 +1492,20 @@
                         <div id="export-hub-status-banner" style="margin-bottom: 12px; display: none;"></div>
 
                         <div class="form-group">
+                            <label for="export-hub-namespace">Upload To (Account or Organization)</label>
+                            <div style="display: flex; gap: 8px; align-items: center;">
+                                <select id="export-hub-namespace" class="magic-input" style="flex: 1;">
+                                    <option value="">Personal account (default)</option>
+                                </select>
+                                <button type="button" id="export-hub-refresh-namespaces" class="action-button" style="white-space: nowrap; padding: 8px 14px;">🔄 Check Orgs</button>
+                            </div>
+                            <small id="export-hub-namespace-hint" style="color: #888; font-size: 0.85em;">Click "Check Orgs" to list the organizations your token can publish to.</small>
+                        </div>
+
+                        <div class="form-group">
                             <label for="export-hub-repo-id">Repository ID</label>
-                            <input type="text" id="export-hub-repo-id" class="magic-input" placeholder="user-or-org/model-name">
-                            <small style="color: #888; font-size: 0.85em;">Defaults to the model folder name. Add an org prefix (e.g. <code>myteam/</code>) to publish under an organization.</small>
+                            <input type="text" id="export-hub-repo-id" class="magic-input" placeholder="model-name">
+                            <small style="color: #888; font-size: 0.85em;">Defaults to the model folder name. Picking an organization above publishes it as <code>org/model-name</code>; an explicit <code>org/name</code> here wins.</small>
                         </div>
 
                         <label class="magic-checkbox" style="margin-top: 6px;">
@@ -1882,6 +1914,16 @@
                     <small style="color: #888; font-size: 0.85em;">Optional if <code>HF_TOKEN</code> is set in the server's <code>.env</code>.</small>
                 </div>
                 <div class="form-group">
+                    <label for="upload-hf-namespace">Upload To (Account or Organization)</label>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <select id="upload-hf-namespace" class="magic-input" style="flex: 1;">
+                            <option value="">Personal account (default)</option>
+                        </select>
+                        <button type="button" id="upload-refresh-namespaces" class="action-button" style="white-space: nowrap; padding: 8px 14px;">🔄 Check Orgs</button>
+                    </div>
+                    <small id="upload-hf-namespace-hint" style="color: #888; font-size: 0.85em;">Click "Check Orgs" to list the organizations your token can publish to.</small>
+                </div>
+                <div class="form-group">
                     <label for="upload-repo-name">Repository Name (optional override)</label>
                     <input type="text" id="upload-repo-name" placeholder="Leave empty to use original output name" class="magic-input">
                 </div>
@@ -1940,6 +1982,27 @@
                 <div id="config-list" style="margin: 20px 0;">
                     <p style="text-align: center; color: #888;">Loading configurations...</p>
                 </div>
+            </div>
+        </div>
+
+        <!-- Load from Code Modal — paste the merlina-config-v1: block from a model card -->
+        <div id="load-from-code-modal" class="modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="load-from-code-modal-title">
+            <div class="modal-content" style="max-width: 700px;">
+                <button class="close" onclick="document.getElementById('load-from-code-modal').style.display='none'" aria-label="Close modal" type="button">&times;</button>
+                <h2 id="load-from-code-modal-title">Load Configuration from Code</h2>
+                <p style="color: #888; margin-bottom: 15px;">
+                    Paste the <code>merlina-config-v1:…</code> code from a Merlina model card
+                    (the "Reproduce this training run" section). Raw config JSON works too.
+                </p>
+                <div class="form-group">
+                    <label for="load-config-code-input">Config code</label>
+                    <textarea id="load-config-code-input" rows="5" spellcheck="false"
+                              placeholder="merlina-config-v1:H4sIA…"
+                              style="width: 100%; font-family: monospace; font-size: 0.85em;"></textarea>
+                </div>
+                <button type="button" id="load-config-code-submit" class="action-button" style="width: 100%;">
+                    ✨ Load Configuration
+                </button>
             </div>
         </div>
 

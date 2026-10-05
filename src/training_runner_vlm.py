@@ -43,6 +43,7 @@ from artemis_vlm import (
 )
 from src.training_runner import (
     WebSocketCallback,
+    EvalMemoryTeardownCallback,
     send_websocket_update,
     _cleanup_training_resources,
 )
@@ -51,6 +52,11 @@ from src.websocket_manager import websocket_manager
 from src.utils import build_grimoire_config, get_num_gpus
 from src.model_card import generate_wandb_run_name
 from grimoire import TrainingConfig
+from src.checkpoint_policy import (
+    resolve_save_steps,
+    epoch_end_saves,
+    describe as describe_save_steps,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -339,8 +345,14 @@ def run_vlm_training_sync(
     model = None
     trainer = None
 
+    # Unified-memory protection (DGX Spark / Grace-Blackwell) — see the
+    # text runner for the rationale. No-op on discrete-GPU systems.
+    from src.memory_guard import TrainingMemoryGuard
+    memory_guard = TrainingMemoryGuard(job_id)
+
     try:
         job_manager.update_job(job_id, status="initializing", progress=0.0)
+        memory_guard.install()
         send_websocket_update(
             websocket_manager.send_status_update(
                 job_id=job_id, status="initializing", progress=0.0,
@@ -432,6 +444,7 @@ def run_vlm_training_sync(
         # ---- eval_steps: <1 means ratio, >=1 absolute (same as text path) ----
         output_dir = f"./results/{job_id}"
         eval_steps = None
+        total_steps = None
         if config.eval_steps:
             if config.eval_steps < 1:
                 import math
@@ -442,6 +455,10 @@ def run_vlm_training_sync(
                 eval_steps = max(1, int(total_steps * config.eval_steps))
             else:
                 eval_steps = int(config.eval_steps)
+
+        _save_steps = resolve_save_steps(
+            getattr(config, "save_steps", None), eval_steps, total_steps)
+        logger.info(describe_save_steps(_save_steps))
 
         # ---- Grimoire config ----
         grimoire_config = build_grimoire_config(
@@ -462,7 +479,8 @@ def run_vlm_training_sync(
             eval_steps=eval_steps,
             eval_on_start=config.eval_on_start,
             eval_batch_size=getattr(config, "eval_batch_size", None),
-            save_steps=eval_steps,
+            save_steps=_save_steps,
+            save_on_epoch_end=epoch_end_saves(getattr(config, "save_steps", None)),
             save_total_limit=2,
             seed=config.seed,
             run_name=wandb_run_name if config.use_wandb else config.output_name,
@@ -474,6 +492,10 @@ def run_vlm_training_sync(
         )
 
         # ---- Trainer ----
+        callbacks = [WebSocketCallback(job_id, job_manager, event_loop)]
+        if memory_guard.active:
+            callbacks.append(EvalMemoryTeardownCallback())
+
         trainer = GrimoireTrainer(
             model=model,
             tokenizer=tokenizer,
@@ -483,8 +505,10 @@ def run_vlm_training_sync(
             eval_dataset=eval_dataset,
             data_collator=collator,           # the prerequisite from grimoire 1.1.x
             peft_config=None,                 # Stage-1/2 are full-FT (no LoRA)
-            callbacks=[WebSocketCallback(job_id, job_manager, event_loop)],
+            callbacks=callbacks,
         )
+
+        memory_guard.set_trainer(trainer)
 
         # Capture W&B URL after accelerator/grimoire init
         if config.use_wandb and wandb.run is not None:
@@ -526,6 +550,7 @@ def run_vlm_training_sync(
 
         # Free VRAM before any post-training upload pipeline picks up
         logger.info("🧹 Cleaning up Artemis training resources...")
+        memory_guard.set_trainer(None)  # drop the guard's reference so del works
         del trainer, model
         model = None
         trainer = None
@@ -575,4 +600,5 @@ def run_vlm_training_sync(
         )
         raise
     finally:
+        memory_guard.shutdown()
         _cleanup_training_resources(model, trainer)

@@ -44,7 +44,7 @@ function makeElement({ id, value = '', checked = false, type = 'text', tag = 'IN
 }
 
 function makeCard(card) {
-    // card: { sourceType, repoId, split, filePath, fileFormat, datasetId, mapping }
+    // card: { sourceType, repoId, split, configName, filePath, fileFormat, datasetId, mapping }
     const select = (sel) => {
         switch (sel) {
             case '.ds-source-type':
@@ -53,6 +53,8 @@ function makeCard(card) {
                 return { value: card.repoId ?? '' };
             case '.ds-split':
                 return { value: card.split ?? 'train' };
+            case '.ds-config':
+                return { value: card.configName ?? '' };
             case '.ds-local-path':
                 return { value: card.filePath ?? '' };
             case '.ds-local-format':
@@ -182,6 +184,7 @@ function fullFormState({ extras = {}, cards, radios } = {}) {
             'push-hub': false,
             'merge-lora-before-upload': true,
             'hf-hub-private': true,
+            'hf-namespace': '',
             'share-config': true,
             'wandb-project': '',
             'wandb-run-name': '',
@@ -345,6 +348,22 @@ describe('buildTrainingConfig — secret handling', () => {
     });
 });
 
+// ─── HuggingFace namespace (org selection) ──────────────────────────────────
+
+describe('buildTrainingConfig — HuggingFace namespace', () => {
+    it('carries the selected org into the config', () => {
+        setState(fullFormState({ extras: { 'hf-namespace': 'Schneewolf-Labs' } }));
+        const config = buildTrainingConfig({ includeSecrets: true });
+        assert.equal(config.hf_namespace, 'Schneewolf-Labs');
+    });
+
+    it('emits null when the personal account is selected', () => {
+        setState(fullFormState({ extras: { 'hf-namespace': '' } }));
+        const config = buildTrainingConfig({ includeSecrets: true });
+        assert.equal(config.hf_namespace, null);
+    });
+});
+
 // ─── Dataset block coverage ─────────────────────────────────────────────────
 
 describe('buildDatasetConfig — full dataset coverage', () => {
@@ -398,6 +417,23 @@ describe('buildDatasetConfig — full dataset coverage', () => {
         assert.equal(ds.additional_sources[1].file_path, '/data/extra.json');
     });
 
+    it('includes config_name (HF subset) when set, omits it when blank', () => {
+        // set on the primary source
+        setState(fullFormState({
+            cards: [{ sourceType: 'huggingface', repoId: 'org/ds', split: 'train',
+                      configName: 'high_quality' }],
+        }));
+        let ds = buildDatasetConfig();
+        assert.equal(ds.source.config_name, 'high_quality');
+
+        // blank -> key omitted entirely (default config)
+        setState(fullFormState({
+            cards: [{ sourceType: 'huggingface', repoId: 'org/ds', split: 'train' }],
+        }));
+        ds = buildDatasetConfig();
+        assert.equal('config_name' in ds.source, false);
+    });
+
     it('attaches per-card column_mapping when provided', () => {
         setState(fullFormState({
             cards: [{
@@ -441,6 +477,17 @@ describe('buildDatasetConfig — full dataset coverage', () => {
             chosen_template: 'C:{chosen}',
             rejected_template: 'R:{rejected}',
         });
+    });
+
+    it('sends bare format block when format_type=raw', () => {
+        setState(fullFormState({
+            extras: { 'dataset-format-type': 'raw' },
+        }));
+        const ds = buildDatasetConfig();
+        assert.equal(ds.format.format_type, 'raw');
+        assert.equal(ds.format.custom_templates, undefined);
+        assert.equal(ds.format.enable_thinking, undefined);
+        assert.equal(ds.format.auto_detect_thinking, undefined);
     });
 });
 

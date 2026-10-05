@@ -290,6 +290,52 @@ test.describe('LoRA settings', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
+// HuggingFace namespace (org) selection
+// ═════════════════════════════════════════════════════════════════════════════
+
+test.describe('HuggingFace namespace picker', () => {
+    test('namespace picker appears with the Hub config', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
+
+        // Hidden until "Push to HuggingFace Hub" is enabled.
+        await expect(page.locator('#hf-namespace')).toBeHidden();
+
+        await page.locator('#push-hub').check();
+        await expect(page.locator('#hf-hub-config')).toBeVisible();
+        await expect(page.locator('#hf-namespace')).toBeVisible();
+        await expect(page.locator('#refresh-hf-namespaces')).toBeVisible();
+    });
+
+    test('defaults to the personal account (empty namespace)', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
+        await page.locator('#push-hub').check();
+        await expect(page.locator('#hf-namespace')).toHaveValue('');
+    });
+
+    test('Check Orgs reports failures in the hint instead of throwing', async ({ page }) => {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
+        await page.locator('#push-hub').check();
+        await page.locator('#refresh-hf-namespaces').click();
+        // The test server has no usable Hub token, so the picker must
+        // degrade to an inline message rather than a broken dropdown.
+        await expect(page.locator('#hf-namespace-hint')).not.toHaveText(
+            /Click "Check Orgs"/, { timeout: 10000 });
+        await expect(page.locator('#hf-namespace')).toBeVisible();
+    });
+
+    test('upload modal and export panel expose their own pickers', async ({ page }) => {
+        await page.goto('/');
+        await expect(page.locator('#upload-hf-namespace')).toHaveCount(1);
+        await expect(page.locator('#upload-refresh-namespaces')).toHaveCount(1);
+        await expect(page.locator('#export-hub-namespace')).toHaveCount(1);
+        await expect(page.locator('#export-hub-refresh-namespaces')).toHaveCount(1);
+    });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
 // API connectivity
 // ═════════════════════════════════════════════════════════════════════════════
 
@@ -404,6 +450,15 @@ test.describe('API endpoints', () => {
         const data = await response.json();
         expect(data.count).toBe(0);
         expect(data.applied).toBe(false);
+    });
+
+    test('hf namespaces endpoint reports token problems cleanly', async ({ request }) => {
+        // No usable Hub token in the test server — the endpoint must answer
+        // with a 4xx/5xx explanation, never a stack trace or a 404.
+        const response = await request.post('/hf/namespaces', { data: { hf_token: '' } });
+        expect(response.status()).toBeGreaterThanOrEqual(400);
+        const data = await response.json();
+        expect(data).toHaveProperty('detail');
     });
 
     test('wandb clear dry-run reports without deleting', async ({ request }) => {
@@ -555,6 +610,7 @@ test.describe('Dataset format', () => {
         expect(options.some(o => /tokenizer/i.test(o))).toBeTruthy();
         expect(options.some(o => /chatml/i.test(o))).toBeTruthy();
         expect(options.some(o => /llama/i.test(o))).toBeTruthy();
+        expect(options.some(o => /raw/i.test(o))).toBeTruthy();
     });
 
     test('custom format config appears when Custom selected', async ({ page }) => {
@@ -623,5 +679,92 @@ test.describe('Local model picker', () => {
         await page.goto('/');
         await expect(page.locator('#local-model-select option[value="org/cached-model"]')).toHaveCount(1);
         await expect(page.locator('#offline-mode-badge')).toBeHidden();
+    });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Load config from a pasted `merlina-config-v1:` code (model-card sharing)
+// ═════════════════════════════════════════════════════════════════════════════
+
+test.describe('Load config from code', () => {
+    const envelope = {
+        _metadata: {
+            name: 'pasted-model',
+            description: 'Training configuration shared from a Merlina-trained model.',
+            tags: [],
+            schema: 'merlina/training-config',
+            schema_version: 1,
+            merlina_version: '9.9.9',
+        },
+        base_model: 'org/pasted-base',
+        output_name: 'pasted-model',
+        training_mode: 'sft',
+        learning_rate: 0.00003,
+        num_epochs: 3,
+    };
+
+    // Same wire format src/config_image.py writes: gzip + urlsafe base64.
+    async function encodeConfig(obj) {
+        const { gzipSync } = await import('node:zlib');
+        const packed = gzipSync(Buffer.from(JSON.stringify(obj)), { level: 9 });
+        return 'merlina-config-v1:' + packed.toString('base64url');
+    }
+
+    test('decode-text endpoint accepts a gzipped config code', async ({ request }) => {
+        const response = await request.post('/configs/decode-text', {
+            data: { payload: await encodeConfig(envelope) },
+        });
+        expect(response.ok()).toBeTruthy();
+        const data = await response.json();
+        expect(data.name).toBe('pasted-model');
+        expect(data.config.base_model).toBe('org/pasted-base');
+    });
+
+    test('decode-text endpoint accepts raw envelope JSON', async ({ request }) => {
+        const response = await request.post('/configs/decode-text', {
+            data: { payload: JSON.stringify(envelope) },
+        });
+        expect(response.ok()).toBeTruthy();
+        expect((await response.json()).config.output_name).toBe('pasted-model');
+    });
+
+    test('decode-text endpoint rejects garbage with 422', async ({ request }) => {
+        const response = await request.post('/configs/decode-text', {
+            data: { payload: 'definitely not a config' },
+        });
+        expect(response.status()).toBe(422);
+    });
+
+    // The config-management buttons live in step 3, which is hidden until
+    // you navigate to it.
+    async function openConfigSection(page) {
+        await page.goto('/');
+        await page.locator('.section-nav-btn[data-section="config-section"]').click();
+    }
+
+    test('From Code button opens the paste modal', async ({ page }) => {
+        await openConfigSection(page);
+        await expect(page.locator('#load-from-code-btn')).toBeVisible();
+        await page.locator('#load-from-code-btn').click();
+        await expect(page.locator('#load-from-code-modal')).toBeVisible();
+        await expect(page.locator('#load-config-code-input')).toBeVisible();
+    });
+
+    test('pasting a code populates the form', async ({ page }) => {
+        await openConfigSection(page);
+        await page.locator('#load-from-code-btn').click();
+        await page.locator('#load-config-code-input').fill(await encodeConfig(envelope));
+        await page.locator('#load-config-code-submit').click();
+
+        await expect(page.locator('#base-model')).toHaveValue('org/pasted-base');
+        await expect(page.locator('#output-name')).toHaveValue('pasted-model');
+        await expect(page.locator('#load-from-code-modal')).toBeHidden();
+    });
+
+    test('submitting an empty box does not close the modal', async ({ page }) => {
+        await openConfigSection(page);
+        await page.locator('#load-from-code-btn').click();
+        await page.locator('#load-config-code-submit').click();
+        await expect(page.locator('#load-from-code-modal')).toBeVisible();
     });
 });

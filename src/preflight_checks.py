@@ -15,17 +15,11 @@ import psutil
 
 from .utils import get_num_gpus, calculate_effective_batch_size
 from .constants import (
-    VRAM_ESTIMATES_4BIT,
-    FULL_PRECISION_VRAM_MULTIPLIER,
-    DISK_SPACE_ESTIMATES,
-    DEFAULT_DISK_SPACE_ESTIMATE,
-    GATED_MODEL_PREFIXES,
     MAX_RECOMMENDED_LORA_RANK,
     MIN_EFFECTIVE_BATCH_SIZE,
     MAX_EFFECTIVE_BATCH_SIZE,
     MAX_RECOMMENDED_LEARNING_RATE,
     FLASH_ATTENTION_MIN_COMPUTE_CAP,
-    get_vram_estimate,
     get_disk_space_estimate,
     is_gated_model,
 )
@@ -33,92 +27,15 @@ from .constants import (
 logger = logging.getLogger(__name__)
 
 
-def estimate_training_vram(
-    model_size_billions: float,
-    batch_size: int,
-    max_length: int,
-    use_4bit: bool = True,
-    use_lora: bool = True,
-    gradient_checkpointing: bool = False
-) -> float:
-    """
-    Estimate VRAM requirements for training based on configuration.
-
-    This is an approximation based on common patterns. Actual usage varies
-    based on model architecture, optimizer states, and other factors.
-
-    Args:
-        model_size_billions: Model size in billions of parameters (e.g., 7 for 7B)
-        batch_size: Per-device batch size
-        max_length: Maximum sequence length
-        use_4bit: Whether 4-bit quantization is enabled
-        use_lora: Whether LoRA is enabled (reduces trainable params)
-        gradient_checkpointing: Whether gradient checkpointing is enabled
-
-    Returns:
-        Estimated VRAM in GB
-    """
-    # Base model memory
-    if use_4bit:
-        # 4-bit: ~0.5 bytes per parameter + overhead
-        model_mem = model_size_billions * 0.6
-    else:
-        # FP16: ~2 bytes per parameter
-        model_mem = model_size_billions * 2.0
-
-    # Optimizer states (AdamW: 2 states per trainable param)
-    if use_lora:
-        # LoRA typically trains ~0.1-1% of parameters
-        trainable_ratio = 0.01
-    else:
-        trainable_ratio = 1.0
-
-    # Optimizer states in FP32 (8 bytes per trainable param for AdamW)
-    optimizer_mem = model_size_billions * trainable_ratio * 8
-
-    # Activation memory (rough estimate)
-    # Scales with batch_size * max_length * hidden_size
-    # Using approximation: hidden_size ≈ model_size_billions * 512
-    hidden_size_approx = model_size_billions * 512
-    activation_mem = (batch_size * max_length * hidden_size_approx * 2) / (1024**3)
-
-    if gradient_checkpointing:
-        activation_mem *= 0.3  # Checkpointing reduces activation memory significantly
-
-    # Total estimate with some buffer
-    total = model_mem + optimizer_mem + activation_mem
-    buffer = total * 0.15  # 15% buffer for fragmentation and overhead
-
-    return total + buffer
-
-
 def get_model_size_from_name(model_name: str) -> Optional[float]:
     """
     Extract model size in billions from model name.
 
-    Args:
-        model_name: Model name or path
-
-    Returns:
-        Model size in billions, or None if not detected
+    Kept as a thin re-export — the implementation (and the much better
+    config-based sizing) lives in src/vram_estimator.py.
     """
-    import re
-
-    model_lower = model_name.lower()
-
-    # Common patterns: "7b", "7B", "7-b", "7_b", "7billion"
-    patterns = [
-        r'(\d+(?:\.\d+)?)\s*b(?:illion)?(?:\b|$)',  # 7b, 7B, 7billion
-        r'(\d+(?:\.\d+)?)-b(?:\b|$)',  # 7-b
-        r'(\d+(?:\.\d+)?)_b(?:\b|$)',  # 7_b
-    ]
-
-    for pattern in patterns:
-        match = re.search(pattern, model_lower)
-        if match:
-            return float(match.group(1))
-
-    return None
+    from .vram_estimator import get_model_size_from_name as _impl
+    return _impl(model_name)
 
 
 def is_local_model_path(model_path: str) -> bool:
@@ -210,11 +127,6 @@ class PreflightValidator:
         # exists, adapter loads, LoRA targets resolve) inside the runner.
         is_diffusion = self._is_diffusion(config)
 
-        # Remote jobs run on rented instances, so local GPU/VRAM/disk are
-        # irrelevant — sizing happens against the model's real config in
-        # src/remote/sizing.py instead. Model access, dataset, and training
-        # hyperparameter checks still apply (they validate the config, not
-        # the machine).
         is_remote = self._is_remote(config)
 
         if is_remote:
@@ -226,12 +138,11 @@ class PreflightValidator:
                 ("Tokens", lambda: self._check_tokens(config)),
             ]
         else:
-            # Run all checks. GPU + Disk + Deps + Tokens are model-family
-            # agnostic and always run.
-            checks = [
+            checks: list = [
                 ("GPU", self._check_gpu),
                 ("Disk Space", lambda: self._check_disk_space(config)),
                 ("Tokens", lambda: self._check_tokens(config)),
+                ("Kernels", lambda: {"linear_attention": self._check_linear_attention_kernels(config)}),
                 ("Dependencies", self._check_dependencies),
             ]
             if not is_diffusion:
@@ -331,7 +242,10 @@ class PreflightValidator:
             jsonl = os.path.expanduser(config.dataset_jsonl_path)
             if not os.path.exists(jsonl):
                 self.errors.append(
-                    f"dataset_jsonl_path does not exist: {jsonl}"
+                    f"dataset_jsonl_path does not exist: {jsonl} "
+                    "(paths are resolved on the machine running Merlina, not the "
+                    "API client — remote clients should upload via POST "
+                    "/dataset/upload-images or use dataset_name instead)"
                 )
             else:
                 details["dataset_jsonl_path"] = jsonl
@@ -376,55 +290,100 @@ class PreflightValidator:
 
         logger.info(f"Found {gpu_count} GPU(s): {[g['name'] for g in gpu_info]}")
 
+        # Unified-memory detection (DGX Spark / Grace-Blackwell, GH200, Jetson)
+        from src.memory_guard import detect_unified_memory
+        unified = detect_unified_memory()
+        if unified.is_unified:
+            self.warnings.append(
+                f"Unified-memory system detected ({unified.reason}): GPU and system RAM "
+                "share one pool, so a training memory spike can freeze the whole machine "
+                "instead of raising a clean CUDA OOM. Merlina's memory guard will cap the "
+                "CUDA allocator and stop training if free system RAM runs low "
+                "(see MEMORY_GUARD_* settings in .env)."
+            )
+
         return {
             "available": True,
             "count": gpu_count,
-            "devices": gpu_info
+            "devices": gpu_info,
+            "unified_memory": unified.to_dict()
         }
 
     def _check_vram(self, config: Any) -> Dict[str, Any]:
-        """Check if available VRAM is sufficient with detailed estimation"""
+        """Check if available VRAM is sufficient with detailed estimation.
+
+        Uses the architecture-aware estimator in src/vram_estimator.py: the
+        model's real config.json (local dir or HF Hub cache) supplies hidden
+        size, layer count, and — critically — vocab size, so the estimate
+        reflects what actually OOMs (logits memory, activations, reference
+        models) instead of a name-regex guess.
+        """
         if not torch.cuda.is_available():
             return {"skipped": "No GPU available"}
 
-        # Get model size from name
-        model_size = get_model_size_from_name(config.base_model)
+        from .vram_estimator import estimate_vram, get_model_profile, suggest_reductions
 
-        if model_size is None:
+        hf_token = getattr(config, "hf_token", None) or os.getenv("HF_TOKEN")
+        profile = get_model_profile(config.base_model, hf_token=hf_token)
+
+        if profile is None:
             self.warnings.append(
-                f"Could not detect model size from '{config.base_model}'. "
-                "Please ensure you have sufficient GPU memory."
+                f"Could not determine the size of '{config.base_model}' (no "
+                "readable config.json and no size in the name). Please ensure "
+                "you have sufficient GPU memory."
             )
+            # Without a model profile the crude batch×sequence guard is the
+            # only protection left, so apply it here.
+            batch_seq_product = config.batch_size * config.max_length
+            if batch_seq_product > 8192:
+                self.warnings.append(
+                    f"Large batch×sequence product ({config.batch_size}×{config.max_length}"
+                    f"={batch_seq_product}). This may cause OOM. Consider reducing "
+                    f"batch_size to 1 or max_length to {4096 // config.batch_size}."
+                )
             return {"estimate_unavailable": True, "model_size_detected": False}
 
         # Check available VRAM
         gpu = torch.cuda.get_device_properties(0)
         available_vram = gpu.total_memory / (1024**3)
 
-        # Use enhanced VRAM estimation
-        estimated_vram = estimate_training_vram(
-            model_size_billions=model_size,
+        # On unified-memory systems (DGX Spark / Grace-Blackwell) the GPU
+        # reports the whole shared pool as device memory, but part of it is
+        # already used by the OS and other processes, and the memory guard
+        # reserves a slice for the host. Budget against what's actually
+        # free, not the raw pool size — an over-optimistic estimate here is
+        # what lets a job launch that later crashes the entire machine.
+        from src.memory_guard import detect_unified_memory, effective_reserve_gb
+        unified = detect_unified_memory()
+        if unified.is_unified:
+            try:
+                from config import get_settings
+                reserve_setting = float(get_settings().memory_guard_reserve_gb)
+            except Exception:
+                from src.memory_guard import DEFAULT_RESERVE_GB
+                reserve_setting = DEFAULT_RESERVE_GB
+            reserve = effective_reserve_gb(available_vram, reserve_setting)
+            system_available = psutil.virtual_memory().available / (1024**3)
+            available_vram = max(0.0, min(available_vram - reserve, system_available - reserve))
+
+        # Architecture-aware estimation with per-component breakdown
+        estimate = estimate_vram(
+            profile,
             batch_size=config.batch_size,
             max_length=config.max_length,
+            training_mode=getattr(config, "training_mode", "orpo"),
             use_4bit=config.use_4bit,
             use_lora=config.use_lora,
-            gradient_checkpointing=getattr(config, 'gradient_checkpointing', False)
+            lora_r=getattr(config, "lora_r", 64),
+            target_modules=getattr(config, "target_modules", None),
+            modules_to_save=getattr(config, "modules_to_save", None),
+            gradient_checkpointing=getattr(config, "gradient_checkpointing", False),
+            optimizer_type=getattr(config, "optimizer_type", "paged_adamw_8bit"),
+            attn_implementation=getattr(config, "attn_implementation", "auto"),
+            use_liger=getattr(config, "use_liger", False),
         )
-
-        # Check batch_size × max_length combination
-        batch_seq_product = config.batch_size * config.max_length
-        if batch_seq_product > 8192:  # Warning threshold
-            self.warnings.append(
-                f"Large batch×sequence product ({config.batch_size}×{config.max_length}={batch_seq_product}). "
-                f"This may cause OOM. Consider reducing batch_size to 1 or max_length to {4096 // config.batch_size}."
-            )
-
-        if batch_seq_product > 16384:  # Error threshold for smaller GPUs
-            if available_vram < 24:  # Less than 24GB
-                self.errors.append(
-                    f"Batch×sequence product ({batch_seq_product}) is very large for {available_vram:.0f}GB GPU. "
-                    f"Reduce batch_size (currently {config.batch_size}) or max_length (currently {config.max_length})."
-                )
+        estimated_vram = estimate.total_gb
+        model_size = round((profile.num_params or 0) / 1e9, 1)
 
         # Warn about full precision memory usage
         if not config.use_4bit:
@@ -433,37 +392,87 @@ class PreflightValidator:
                 "Consider enabling 4-bit quantization to reduce memory usage."
             )
 
-        # Check if sufficient
+        # Check if sufficient. Suggestions are ranked by which component
+        # actually dominates the estimate (activations vs logits vs states).
         if available_vram < estimated_vram:
-            suggestions = []
-            if not config.use_4bit:
-                suggestions.append("enable 4-bit quantization")
-            if config.batch_size > 1:
-                suggestions.append(f"reduce batch_size (currently {config.batch_size})")
-            if config.max_length > 1024:
-                suggestions.append(f"reduce max_length (currently {config.max_length})")
-            if not getattr(config, 'gradient_checkpointing', False):
-                suggestions.append("enable gradient_checkpointing")
-
-            suggestion_text = ", ".join(suggestions) if suggestions else "use a smaller model"
-
+            suggestion_text = ", ".join(suggest_reductions(estimate, config))
             self.errors.append(
-                f"Insufficient VRAM: Training ~{model_size}B model requires ~{estimated_vram:.1f}GB, "
+                f"Insufficient VRAM: Training ~{model_size}B model requires ~{estimated_vram:.1f}GB "
+                f"(largest consumer: {estimate.dominant_component()} at "
+                f"~{estimate.breakdown.get(estimate.dominant_component(), 0):.1f}GB), "
                 f"but only {available_vram:.1f}GB available. Try: {suggestion_text}."
             )
         elif available_vram < estimated_vram * 1.2:
+            suggestion_text = ", ".join(suggest_reductions(estimate, config)[:2])
             self.warnings.append(
                 f"VRAM is tight: ~{estimated_vram:.1f}GB estimated, {available_vram:.1f}GB available. "
-                "Training may fail. Consider enabling gradient_checkpointing or reducing batch size."
+                f"Training may fail. Consider: {suggestion_text}."
+            )
+
+        if estimate.confidence == "low":
+            self.warnings.append(
+                f"VRAM estimate is low-confidence: could not read config.json for "
+                f"'{config.base_model}', so the architecture was guessed from the name."
             )
 
         return {
             "available_gb": round(available_vram, 2),
             "estimated_required_gb": round(estimated_vram, 2),
             "model_size_billions": model_size,
-            "batch_seq_product": batch_seq_product,
-            "sufficient": available_vram >= estimated_vram
+            "breakdown_gb": {k: round(v, 2) for k, v in estimate.breakdown.items()},
+            "confidence": estimate.confidence,
+            "notes": estimate.notes,
+            "model_profile": profile.to_dict(),
+            "sufficient": available_vram >= estimated_vram,
+            "unified_memory": unified.is_unified
         }
+
+    def _check_linear_attention_kernels(self, config: Any) -> None:
+        """Warn when a hybrid linear-attention model will train on the reference path.
+
+        Qwen3.5/3.6/3.8 and friends interleave linear-attention layers with full-attention ones.
+        Those layers have a fused training path that is off unless both optional kernels are
+        installed, and nothing in the loss curve reveals which path ran — a run that takes seven
+        times longer than it needs to looks entirely normal.
+
+        Measured on ReAligned-Qwen3.5-4B, 4096 tokens, batch 1, gradient checkpointing on,
+        steady-state step after warm-up:
+
+            torch fallback         13.67 s/step
+            fla + causal_conv1d     1.84 s/step     7.4x
+
+        Equivalence checked on identical input: cosine 0.99996 in float64, differences at bf16
+        round-off.
+        """
+        from .vram_estimator import get_model_profile
+
+        hf_token = getattr(config, "hf_token", None) or os.getenv("HF_TOKEN")
+        try:
+            profile = get_model_profile(config.base_model, hf_token=hf_token)
+        except Exception:
+            return
+        if not profile or profile.linear_attention_layers <= 0:
+            return
+
+        missing = []
+        for module, hint in (
+            ("fla", "pip install flash-linear-attention"),
+            ("causal_conv1d", "pip install --no-build-isolation causal-conv1d"),
+        ):
+            try:
+                __import__(module)
+            except ImportError:
+                missing.append((module, hint))
+        if not missing:
+            return
+
+        names = ", ".join(m for m, _ in missing)
+        hints = "; ".join(h for _, h in missing)
+        self.warnings.append(
+            f"{config.base_model} has {profile.linear_attention_layers} linear-attention layers, "
+            f"but {names} is not installed, so training falls back to the reference "
+            f"implementation (~7x slower per step, measured). Install with: {hints}"
+        )
 
     def _check_disk_space(self, config: Any) -> Dict[str, Any]:
         """Check available disk space for model checkpoints."""
@@ -585,13 +594,78 @@ class PreflightValidator:
                 "has_token": bool(config.hf_token or os.getenv("HF_TOKEN"))
             }
 
+    def _check_hf_dataset_resolves(self, repo_id: str, hf_token: Optional[str], label: str) -> None:
+        """Verify an HF Hub dataset id actually resolves before GPU time is spent.
+
+        Unresolvable repos are hard errors (this is exactly the case where a
+        job would otherwise fail — or worse, silently fall back — at load
+        time). Network / hub outages only warn, so offline setups serving
+        from the local HF cache aren't blocked.
+        """
+        try:
+            from huggingface_hub import HfApi
+            from huggingface_hub.utils import GatedRepoError, RepositoryNotFoundError
+        except ImportError:
+            self.warnings.append(
+                f"huggingface_hub not importable — could not verify that {label} "
+                f"'{repo_id}' exists on the Hub."
+            )
+            return
+
+        try:
+            HfApi().dataset_info(repo_id, token=hf_token or None, timeout=10.0)
+        except GatedRepoError:
+            self.errors.append(
+                f"{label} '{repo_id}' is gated and the provided hf_token does not "
+                "grant access. Accept the dataset's terms on huggingface.co and/or "
+                "provide a valid hf_token."
+            )
+        except RepositoryNotFoundError:
+            self.errors.append(
+                f"{label} '{repo_id}' does not resolve on the HuggingFace Hub. "
+                "Check the id for typos, or provide hf_token if it is a private "
+                "dataset."
+            )
+        except Exception as e:
+            self.warnings.append(
+                f"Could not verify {label} '{repo_id}' on the Hub "
+                f"({type(e).__name__}: {e}). If the dataset is not already in the "
+                "local HF cache, the job will fail at load time."
+            )
+
     def _check_dataset_config(self, config: Any) -> Dict[str, Any]:
         """Validate dataset configuration"""
         dataset_source = config.dataset.source
+        hf_token = getattr(config, "hf_token", None)
+
+        # Diffusion-only dataset fields on a text-mode job would be silently
+        # ignored by every text runner — the job would train on
+        # dataset.source (or nothing) instead of the corpus the user named.
+        # TrainingConfig validation resolves/rejects these for API submits;
+        # this catches configs that reached the validator some other way.
+        cfg_dataset_name = getattr(config, "dataset_name", None)
+        if cfg_dataset_name and cfg_dataset_name != dataset_source.repo_id:
+            self.errors.append(
+                f"dataset_name ('{cfg_dataset_name}') is set but this text-mode job "
+                f"would train on dataset.source ('{dataset_source.repo_id}'). "
+                "Set dataset.source.repo_id to the intended dataset."
+            )
+        if getattr(config, "dataset_jsonl_path", None):
+            self.errors.append(
+                "dataset_jsonl_path is a diffusion-only field and is ignored by "
+                "text training modes — use dataset.source instead."
+            )
 
         if dataset_source.source_type == "huggingface":
             if not dataset_source.repo_id:
-                self.errors.append("HuggingFace dataset requires repo_id")
+                self.errors.append(
+                    "No dataset configured: HuggingFace dataset requires "
+                    "dataset.source.repo_id (there is no default dataset)."
+                )
+            else:
+                self._check_hf_dataset_resolves(
+                    dataset_source.repo_id, hf_token, "Dataset"
+                )
 
         elif dataset_source.source_type == "local_file":
             if not dataset_source.file_path:
@@ -605,6 +679,26 @@ class PreflightValidator:
 
         else:
             self.errors.append(f"Invalid dataset source_type: {dataset_source.source_type}")
+
+        # Additional / eval sources: same resolution guarantee as the primary.
+        extra_sources = list(getattr(config.dataset, "additional_sources", None) or [])
+        eval_source = getattr(config.dataset, "eval_source", None)
+        if eval_source is not None:
+            extra_sources.append(eval_source)
+        for extra in extra_sources:
+            source_type = getattr(extra, "source_type", None)
+            if source_type == "huggingface":
+                repo_id = getattr(extra, "repo_id", None)
+                if not repo_id:
+                    self.errors.append("Additional HuggingFace dataset source requires repo_id")
+                else:
+                    self._check_hf_dataset_resolves(repo_id, hf_token, "Additional dataset")
+            elif source_type == "local_file":
+                file_path = getattr(extra, "file_path", None)
+                if not file_path:
+                    self.errors.append("Additional local file dataset source requires file_path")
+                elif not Path(file_path).exists():
+                    self.errors.append(f"Additional dataset file not found: {file_path}")
 
         # Check format
         dataset_format = config.dataset.format
@@ -692,9 +786,15 @@ class PreflightValidator:
             import re
             # Check for invalid characters
             if not re.match(r'^[a-zA-Z0-9._-]+$', output_name):
+                hint = (
+                    " To upload under an organization, leave the org out of the "
+                    "name and set the HuggingFace namespace instead."
+                    if "/" in output_name else ""
+                )
                 self.errors.append(
                     f"Output name '{output_name}' contains invalid characters. "
                     "Use only letters, numbers, underscores, hyphens, and periods."
+                    + hint
                 )
 
             # Check length
@@ -751,7 +851,63 @@ class PreflightValidator:
                 )
             checks["huggingface"] = bool(hf_token)
 
+            namespace_check = self._check_hf_namespace(config, hf_token)
+            if namespace_check is not None:
+                checks["huggingface_namespace"] = namespace_check
+
         return checks
+
+    def _check_hf_namespace(self, config: Any, hf_token: Optional[str]) -> Optional[Dict[str, Any]]:
+        """Verify the requested upload namespace is one the token can push to.
+
+        Best-effort and warning-only: a network hiccup here must not block a
+        training run. Returns None when there's nothing to check.
+        """
+        namespace = getattr(config, "hf_namespace", None)
+        if not namespace or not hf_token:
+            return None
+
+        from src.hf_namespaces import list_namespaces, normalize_namespace, resolve_hub_repo_id
+
+        namespace = normalize_namespace(namespace)
+        result: Dict[str, Any] = {
+            "namespace": namespace,
+            "repo_id": resolve_hub_repo_id(config.output_name, namespace),
+        }
+
+        try:
+            available = list_namespaces(hf_token)
+        except Exception as exc:
+            logger.debug(f"Could not verify HuggingFace namespace: {exc}")
+            result["verified"] = False
+            return result
+
+        names = {entry["name"] for entry in available.get("namespaces", [])}
+        writable = {
+            entry["name"] for entry in available.get("namespaces", [])
+            if entry.get("can_write", True)
+        }
+        result["verified"] = True
+
+        if namespace not in names:
+            self.warnings.append(
+                f"HuggingFace namespace '{namespace}' is not one of this token's "
+                f"namespaces ({', '.join(sorted(names)) or 'none'}). The upload "
+                "will likely fail — pick an org you belong to."
+            )
+            result["accessible"] = False
+        elif namespace not in writable:
+            self.warnings.append(
+                f"Your role in '{namespace}' looks read-only. The upload may be "
+                "rejected — you need write access to create repos there."
+            )
+            result["accessible"] = True
+            result["writable"] = False
+        else:
+            result["accessible"] = True
+            result["writable"] = True
+
+        return result
 
     def _check_dependencies(self) -> Dict[str, Any]:
         """Check for required dependencies"""

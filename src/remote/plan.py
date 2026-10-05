@@ -28,8 +28,6 @@ from .spec import GpuOffer, ModelSpecs, RemotePlan, StagePlan
 
 logger = logging.getLogger(__name__)
 
-PREFERENCE_MODES = {"orpo", "dpo", "simpo", "cpo", "ipo", "kto"}
-
 # Above this native-weight footprint, "auto" merge strategy skips merging:
 # the merged model would need to be re-downloaded/re-uploaded whole, and
 # adapter-only artifacts are the practical format for very large bases.
@@ -112,8 +110,14 @@ def build_remote_plan(
         lora_r=getattr(config, "lora_r", 64) or 64,
         batch_size=getattr(config, "batch_size", 1) or 1,
         max_length=getattr(config, "max_length", 2048) or 2048,
-        gradient_checkpointing=True,
-        preference_mode=(config.training_mode or "").lower() in PREFERENCE_MODES,
+        gradient_checkpointing=bool(getattr(config, "gradient_checkpointing", False)),
+        training_mode=(config.training_mode or "orpo").lower(),
+        use_lora=bool(getattr(config, "use_lora", True)),
+        target_modules=getattr(config, "target_modules", None),
+        modules_to_save=getattr(config, "modules_to_save", None),
+        optimizer_type=getattr(config, "optimizer_type", None) or "paged_adamw_8bit",
+        attn_implementation=getattr(config, "attn_implementation", None) or "auto",
+        use_liger=bool(getattr(config, "use_liger", False)),
     )
     disk_gb = estimate_disk_gb(model_specs)
 

@@ -51,6 +51,7 @@ from grimoire.data import tokenize_sft, tokenize_preference, tokenize_kto
 
 from huggingface_hub import HfApi
 from src.model_card import generate_model_readme, upload_model_readme, generate_wandb_run_name, upload_config_image
+from src.hf_namespaces import resolve_hub_repo_id
 
 from dataset_handlers import (
     DatasetPipeline,
@@ -62,8 +63,14 @@ from dataset_handlers import (
     create_loader_from_config
 )
 from src.job_manager import JobManager
+from src.memory_guard import reclaim_cuda_cache
 from src.websocket_manager import websocket_manager
 from src.preflight_checks import is_local_model_path
+from src.checkpoint_policy import (
+    resolve_save_steps,
+    epoch_end_saves,
+    describe as describe_save_steps,
+)
 from src.utils import (
     build_grimoire_config,
     calculate_effective_batch_size,
@@ -230,16 +237,24 @@ def _run_background_upload(
         api = HfApi()
         repo_visibility = "private" if config.hf_hub_private else "public"
 
+        # Resolve the namespace (org or user account) the repo belongs to.
+        # config.output_name is a bare model name; without the prefix the
+        # upload lands in — or 404s against — the wrong namespace.
+        target_repo_id = resolve_hub_repo_id(
+            config.output_name, getattr(config, "hf_namespace", None)
+        )
+
         # Create or get the repository
         repo_url = api.create_repo(
-            repo_id=config.output_name,
+            repo_id=target_repo_id,
             token=config.hf_token,
             private=config.hf_hub_private,
             exist_ok=True
         )
-        # Use the fully-qualified repo_id (with namespace) from create_repo
-        # config.output_name may lack the user/org prefix, causing 404s on upload
-        full_repo_id = repo_url.repo_id
+        # Use the fully-qualified repo_id (with namespace) from create_repo —
+        # create_repo resolves a bare name against the token's account, but
+        # upload_folder does not, which is what caused 404s on upload.
+        full_repo_id = getattr(repo_url, "repo_id", None) or target_repo_id
         logger.info(f"📦 Repository ready: {full_repo_id}")
 
         # Diffusion LoRAs are uploaded as plain folders — no merge path
@@ -256,7 +271,7 @@ def _run_background_upload(
                 commit_message=f"Upload diffusion LoRA trained with Merlina ({training_mode})",
             )
             logger.info("✅ Diffusion LoRA uploaded successfully!")
-            logger.info(f"💡 To use: pipe.load_lora_weights('{config.output_name}')")
+            logger.info(f"💡 To use: pipe.load_lora_weights('{full_repo_id}')")
         # Handle LLM/VLM upload based on whether LoRA was used and merge preference
         elif config.use_lora and config.merge_lora_before_upload:
             # The merge already happened synchronously upstream. Use the
@@ -287,7 +302,7 @@ def _run_background_upload(
                     commit_message=f"Upload LoRA adapter trained with Merlina ({training_mode})"
                 )
                 logger.info(f"✅ LoRA adapter uploaded successfully!")
-                logger.info(f"💡 To use: PeftModel.from_pretrained('{config.base_model}', '{config.output_name}')")
+                logger.info(f"💡 To use: PeftModel.from_pretrained('{config.base_model}', '{full_repo_id}')")
 
         else:
             # For adapter-only or full model uploads, use upload_folder() directly
@@ -311,7 +326,7 @@ def _run_background_upload(
 
             if config.use_lora:
                 logger.info(f"✅ LoRA adapter uploaded successfully!")
-                logger.info(f"💡 To use: PeftModel.from_pretrained('{config.base_model}', '{config.output_name}')")
+                logger.info(f"💡 To use: PeftModel.from_pretrained('{config.base_model}', '{full_repo_id}')")
             else:
                 logger.info(f"✅ Model uploaded successfully!")
 
@@ -377,7 +392,10 @@ def _run_background_upload(
             from .upload_state import record_upload
             record_upload(
                 Path(final_output_dir),
-                repo_id=getattr(config, "output_name", ""),
+                repo_id=resolve_hub_repo_id(
+                    getattr(config, "output_name", ""),
+                    getattr(config, "hf_namespace", None),
+                ),
                 repo_url="",
                 private=getattr(config, "hf_hub_private", True),
                 commit_message=f"Upload via Merlina ({training_mode})",
@@ -727,6 +745,30 @@ class WebSocketCallback(TrainerCallback):
             self.job_manager.update_job(self.job_id, **update_data)
 
 
+def _teardown_eval_memory() -> None:
+    """Give the eval pass's CUDA cache back to the OS before training
+    resumes. Module-level (not a callback method) so it stays testable when
+    the grimoire base class is mocked out."""
+    reclaim_cuda_cache(context="post-eval teardown")
+
+
+class EvalMemoryTeardownCallback(TrainerCallback):
+    """Tear down the eval pass's CUDA cache before training resumes.
+
+    Evaluation allocates its own batch and logit buffers; when it ends the
+    caching allocator keeps that memory reserved. On a unified-memory
+    machine (DGX Spark) the reserved-but-idle cache is host RAM the OS
+    can't use — the multi-GB reserved/allocated gap right after eval is
+    exactly what pushed free RAM under the memory guard's soft floor and
+    got jobs stopped at their first eval. Only wired in when the memory
+    guard is active (on discrete GPUs the allocator reuses its cache and
+    emptying it mid-run just costs a sync).
+    """
+
+    def on_evaluate(self, trainer, metrics):
+        _teardown_eval_memory()
+
+
 # Trainer-side attribute names that commonly hold strong references back to
 # the model, optimizer state, or accelerator hooks. Clearing these before
 # `del trainer` is what actually lets `gc` reclaim the model — without it,
@@ -920,15 +962,29 @@ def _monitor_distributed_progress(
     Blocks until the subprocess exits.
     """
     last_pos = 0
+    # Track when a stop was first forwarded so we can escalate. The graceful
+    # SIGTERM path depends on the worker's on_step_end callback firing and
+    # grimoire honoring request_stop(); if the loop is between long steps, is
+    # wedged, or the callback isn't reached, SIGTERM alone leaves the run
+    # effectively unstoppable. After a grace window we escalate to SIGKILL so
+    # a stop request is always honored.
+    stop_sigterm_at = None
+    STOP_GRACE_SECONDS = 180
 
     while proc.poll() is None:
         # Check for stop requests and forward to subprocess
         job = job_manager.get_job(job_id)
         if job and job.stop_requested:
-            logger.info(f"Forwarding stop request to distributed subprocess for job {job_id}")
             try:
-                # Send SIGTERM to the entire process group
-                os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                if stop_sigterm_at is None:
+                    logger.info(f"Forwarding stop (SIGTERM) to subprocess for job {job_id}")
+                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
+                    stop_sigterm_at = time.monotonic()
+                elif time.monotonic() - stop_sigterm_at > STOP_GRACE_SECONDS:
+                    logger.warning(
+                        f"Job {job_id} did not exit {STOP_GRACE_SECONDS}s after "
+                        f"SIGTERM — escalating to SIGKILL")
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except (ProcessLookupError, OSError):
                 pass
 
@@ -1081,9 +1137,17 @@ def run_training_distributed(
     num_gpus = _get_distributed_gpu_count(config)
     logger.info(f"Launching distributed training for job {job_id} with {num_gpus} GPUs")
 
-    tmp_dir = tempfile.mkdtemp(prefix=f"merlina_{job_id}_")
+    # Run files live under the data dir, NOT tempfile.mkdtemp(): the config
+    # and progress file must survive an API restart so the restarted server
+    # can re-attach to a still-running worker (src/worker_reattach.py). /tmp
+    # is also actively hostile here — systemd PrivateTmp and tmp cleaners
+    # delete it out from under a worker that outlives its parent.
+    run_dir = Path(job_manager.db_path).parent / "worker_runs" / job_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+    tmp_dir = str(run_dir)
     config_path = os.path.join(tmp_dir, "config.json")
     progress_file = os.path.join(tmp_dir, "progress.jsonl")
+    proc = None
 
     try:
         job_manager.update_job(job_id, status="initializing", progress=0.0)
@@ -1116,7 +1180,14 @@ def run_training_distributed(
             sys.executable, "-m", "accelerate.commands.launch",
             "--num_processes", str(num_gpus),
             "--mixed_precision", accel_mp,
-            "--multi_gpu",
+        ]
+        # --multi_gpu is only valid (and only meaningful) with >1 process.
+        # With num_gpus == 1 this launches an ordinary single-process run in
+        # its own subprocess — which is what isolates training from the API
+        # event loop (see _make_training_callback in merlina.py).
+        if num_gpus > 1:
+            cmd.append("--multi_gpu")
+        cmd += [
             worker_script,
             "--config-path", config_path,
             "--job-id", job_id,
@@ -1128,6 +1199,10 @@ def run_training_distributed(
 
         # Set up environment
         env = os.environ.copy()
+        # Unbuffer the worker's stdout so tqdm progress bars and log lines
+        # stream to the captured pipe live, instead of arriving in one burst
+        # when the block buffer flushes (the "1% ... then 100%" artifact).
+        env["PYTHONUNBUFFERED"] = "1"
         if config.gpu_ids is not None:
             env["CUDA_VISIBLE_DEVICES"] = ",".join(str(g) for g in config.gpu_ids)
 
@@ -1141,6 +1216,13 @@ def run_training_distributed(
             stderr=subprocess.STDOUT,
             start_new_session=True,
         )
+
+        # Record the worker so a restarted API can find it again instead of
+        # orphaning it (see reattach_orphaned_workers in src/worker_reattach.py).
+        try:
+            job_manager.update_job(job_id, worker_pid=proc.pid, progress_file=progress_file)
+        except Exception:
+            logger.exception(f"Could not persist worker pid for job {job_id}")
 
         # Start a thread to log subprocess stdout
         def _log_stdout():
@@ -1166,11 +1248,25 @@ def run_training_distributed(
         )
 
     finally:
-        # Clean up temp files
-        try:
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-        except Exception:
-            pass
+        # Clean up only when the worker has actually exited. If it is still
+        # alive (e.g. the monitor itself raised), keep the pid record and the
+        # run files: deleting the progress file under a live worker destroys
+        # its only error-reporting channel, and dropping the pid makes the
+        # worker unfindable after the next restart.
+        if proc is None or proc.poll() is not None:
+            try:
+                job_manager.update_job(job_id, worker_pid=None)
+            except Exception:
+                pass
+            try:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
+        else:
+            logger.warning(
+                f"Worker for job {job_id} still running (pid {proc.pid}); "
+                f"leaving run files in place: {tmp_dir}"
+            )
 
 
 async def run_training_async(
@@ -1268,9 +1364,30 @@ def run_training_sync(
     model = None
     trainer = None
 
+    # Unified-memory protection (DGX Spark / Grace-Blackwell): on those
+    # machines GPU and system RAM are one pool, so a memory spike crashes
+    # the whole box instead of raising a clean CUDA OOM. The guard caps the
+    # CUDA allocator and watches free system RAM, stopping or aborting the
+    # job before the OS starves. No-op on discrete-GPU systems.
+    from src.memory_guard import TrainingMemoryGuard
+
+    def _memory_guard_notify(level: str, message: str) -> None:
+        send_websocket_update(
+            websocket_manager.send_status_update(
+                job_id=job_id,
+                status="training" if level == "warning" else "error",
+                message=message,
+            ),
+            event_loop,
+        )
+
+    memory_guard = TrainingMemoryGuard(job_id, notify=_memory_guard_notify)
+
     try:
         # Update job status
         job_manager.update_job(job_id, status="initializing", progress=0.0)
+
+        memory_guard.install()
 
         # Send WebSocket update
         send_websocket_update(
@@ -1468,12 +1585,33 @@ def run_training_sync(
                 extra_convert = config.dataset.convert_messages_format
                 additional_loaders.append((extra_loader, extra_mapping, extra_convert))
 
+        # Create explicit eval loader if configured (skips the random split)
+        eval_loader = None
+        eval_column_mapping = None
+        if getattr(config.dataset, 'eval_source', None):
+            logger.info("Creating loader for explicit eval dataset")
+            eval_loader = create_loader_from_config(
+                source_config=config.dataset.eval_source,
+                uploaded_datasets=uploaded_datasets,
+                hf_token=config.hf_token
+            )
+            eval_column_mapping = (config.dataset.eval_source.column_mapping
+                                   or config.dataset.column_mapping)
+
         # Get formatter
         formatter = get_formatter(
             format_type=config.dataset.format.format_type,
             custom_templates=config.dataset.format.custom_templates,
             tokenizer=tokenizer if config.dataset.format.format_type == 'tokenizer' else None
         )
+
+        # eval_steps=0 turns evaluation off. The transforms further down assume an eval dataset
+        # exists, so this path keeps the split and simply withholds it from the trainer rather
+        # than threading None through all of them. train_worker (the path the job queue uses)
+        # skips the split entirely and trains on the full dataset.
+        evals_disabled = not config.eval_steps
+        if evals_disabled:
+            logger.info("eval_steps=0 — evaluation disabled")
 
         # Create pipeline and prepare dataset
         pipeline = DatasetPipeline(
@@ -1491,6 +1629,9 @@ def run_training_sync(
             dedupe_strategy=config.dataset.dedupe_strategy,
             system_prompt=config.dataset.system_prompt,
             system_prompt_mode=config.dataset.system_prompt_mode,
+            eval_loader=eval_loader,
+            eval_column_mapping=eval_column_mapping,
+            eval_convert_messages_format=config.dataset.convert_messages_format,
         )
 
         train_dataset, eval_dataset = pipeline.prepare()
@@ -1644,6 +1785,7 @@ def run_training_sync(
 
         # Convert eval_steps: <1 means ratio (e.g. 0.2 = every 20%), >=1 means absolute steps
         eval_steps = None
+        total_steps = None
         if config.eval_steps:
             if config.eval_steps < 1:
                 import math
@@ -1661,6 +1803,10 @@ def run_training_sync(
                 )
             else:
                 eval_steps = int(config.eval_steps)
+
+        _save_steps = resolve_save_steps(
+            getattr(config, "save_steps", None), eval_steps, total_steps)
+        logger.info(describe_save_steps(_save_steps))
 
         grimoire_config = build_grimoire_config(
             TrainingConfig,
@@ -1684,7 +1830,8 @@ def run_training_sync(
             logging_steps=config.logging_steps,
             eval_steps=eval_steps,
             eval_on_start=config.eval_on_start,
-            save_steps=eval_steps,
+            save_steps=_save_steps,
+            save_on_epoch_end=epoch_end_saves(getattr(config, "save_steps", None)),
             save_total_limit=2,
             seed=config.seed,
             run_name=wandb_run_name if config.use_wandb else config.output_name,
@@ -1706,16 +1853,23 @@ def run_training_sync(
             ),
         )
 
+        callbacks = [WebSocketCallback(job_id, job_manager, event_loop)]
+        if memory_guard.active:
+            callbacks.append(EvalMemoryTeardownCallback())
+
         trainer = GrimoireTrainer(
             model=model,
             tokenizer=tokenizer,
             config=grimoire_config,
             loss_fn=loss_fn,
             train_dataset=train_dataset,
-            eval_dataset=eval_dataset,
+            eval_dataset=None if evals_disabled else eval_dataset,
             peft_config=peft_config,
-            callbacks=[WebSocketCallback(job_id, job_manager, event_loop)],
+            callbacks=callbacks,
         )
+
+        # Let the memory guard request a graceful stop once a trainer exists
+        memory_guard.set_trainer(trainer)
 
         # Capture W&B run URL after trainer init (accelerator owns the wandb run)
         if config.use_wandb and wandb.run is not None:
@@ -1777,6 +1931,9 @@ def run_training_sync(
         # Clean up trainer and model to free VRAM before potential merge/upload
         # This prevents OOM when loading the model again for merging
         logger.info("🧹 Cleaning up training resources to free VRAM...")
+        # Drop the memory guard's trainer reference first — otherwise it
+        # keeps the trainer (and model) alive past the del below.
+        memory_guard.set_trainer(None)
         del trainer, model
         # Set to None so the finally block's _cleanup_training_resources
         # doesn't hit NameError after del
@@ -1931,6 +2088,8 @@ def run_training_sync(
             logger.debug(f"Could not finish W&B run on failure: {wandb_error}")
 
     finally:
+        # Stop the watchdog and drop its trainer reference before cleanup
+        memory_guard.shutdown()
         # Ensure GPU memory is freed even on error
         # This prevents OOM errors in subsequent training jobs
         _cleanup_training_resources(model, trainer)

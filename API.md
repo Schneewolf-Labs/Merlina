@@ -40,8 +40,11 @@ The Merlina API provides a comprehensive interface for training language models 
 
 FastAPI provides interactive API documentation:
 
-- **Swagger UI:** `/api/docs` - Interactive API explorer
-- **ReDoc:** `/api/redoc` - Alternative documentation view
+- **Swagger UI:** `/docs` - Interactive API explorer
+- **ReDoc:** `/redoc` - Alternative documentation view
+- **OpenAPI spec:** `/openapi.json` - Machine-readable OpenAPI 3.x specification
+
+The legacy URLs `/api/docs` and `/api/redoc` redirect to `/docs` and `/redoc`.
 
 ---
 
@@ -141,7 +144,9 @@ Returns basic API information and available endpoints.
     "POST /train": "Start a new training job",
     "GET /status/{job_id}": "Get job status",
     "GET /jobs": "List all jobs",
-    "GET /api/docs": "API documentation"
+    "GET /docs": "Interactive API documentation (Swagger UI)",
+    "GET /redoc": "API documentation (ReDoc)",
+    "GET /openapi.json": "OpenAPI specification"
   }
 }
 ```
@@ -175,6 +180,43 @@ Returns database, WebSocket, and queue statistics.
   }
 }
 ```
+
+---
+
+#### List HuggingFace Namespaces
+
+```http
+POST /hf/namespaces
+```
+
+Lists the namespaces a HuggingFace token can publish to — the token owner's
+own account plus every organization they belong to. Use it to pick
+`hf_namespace` before training or uploading; a bare `output_name` always
+resolves to the personal account, which is what makes org uploads 404.
+
+**Request Body:**
+```json
+{
+  "hf_token": "hf_..."
+}
+```
+
+`hf_token` is optional when `HF_TOKEN` is set in the server's `.env`.
+
+**Response:**
+```json
+{
+  "user": "nbeerbower",
+  "namespaces": [
+    {"name": "nbeerbower", "type": "user", "full_name": "", "role": "owner", "can_write": true},
+    {"name": "Schneewolf-Labs", "type": "org", "full_name": "Schneewolf Labs", "role": "admin", "can_write": true}
+  ]
+}
+```
+
+**Errors:**
+- `400` — no token available, or the Hub rejected it
+- `502` — the Hub could not be reached
 
 ---
 
@@ -239,6 +281,58 @@ Validates training configuration before starting. Checks GPU availability, VRAM,
 **Status Codes:**
 - `200 OK` - Validation completed
 - `400 Bad Request` - Invalid configuration
+
+---
+
+#### Estimate Training VRAM
+
+```http
+POST /estimate/vram
+```
+
+Architecture-aware VRAM estimate for a training configuration. Reads the model's real `config.json` (local directory or HuggingFace Hub, cache-aware) and returns a per-component breakdown. Does not require a GPU.
+
+**Request Body:** Same as `/validate` (see [TrainingConfig Schema](#trainingconfig))
+
+**Response:**
+```json
+{
+  "available": true,
+  "total_gb": 15.42,
+  "breakdown_gb": {
+    "model_weights": 5.4,
+    "trainable_params": 0.62,
+    "gradients": 0.62,
+    "optimizer_states": 0.31,
+    "activations": 3.05,
+    "logits_and_loss": 4.92,
+    "cuda_context": 0.9,
+    "fragmentation_buffer": 1.1
+  },
+  "confidence": "high",
+  "notes": [
+    "ORPO runs chosen+rejected together, doubling the effective forward batch to 2."
+  ],
+  "model_profile": {
+    "num_params_billions": 8.03,
+    "hidden_size": 4096,
+    "num_hidden_layers": 32,
+    "vocab_size": 128256,
+    "source": "hub_config",
+    "params_exact": true
+  },
+  "gpu_total_gb": 24.0
+}
+```
+
+When the model architecture cannot be determined, `available` is `false` and a `reason` string explains why.
+
+`confidence` is `high` (exact parameter count from safetensors metadata), `medium` (parameters derived from config.json dims), or `low` (architecture guessed from the model name).
+
+**Status Codes:**
+- `200 OK` - Estimate completed (check `available`)
+- `400 Bad Request` - Invalid configuration
+- `504 Gateway Timeout` - Estimation timed out
 
 ---
 
@@ -453,6 +547,10 @@ DELETE /jobs/{job_id}
 
 Deletes a specific job and all associated metrics from the database.
 
+If the job was still waiting in the queue, its queue entry is dropped too, so a
+deleted job is never executed later. A running job is not stopped by this
+endpoint — use `POST /jobs/{job_id}/stop` first.
+
 **Path Parameters:**
 - `job_id` - Job identifier
 
@@ -461,9 +559,13 @@ Deletes a specific job and all associated metrics from the database.
 {
   "status": "success",
   "message": "Job job_20250116_143022 deleted successfully",
-  "job_id": "job_20250116_143022"
+  "job_id": "job_20250116_143022",
+  "removed_from_queue": true
 }
 ```
+
+`removed_from_queue` is `true` when the job was queued and its queue entry was
+removed, `false` when it wasn't waiting in the queue.
 
 **Status Codes:**
 - `200 OK` - Job deleted
@@ -477,16 +579,20 @@ Deletes a specific job and all associated metrics from the database.
 DELETE /jobs
 ```
 
-Deletes all jobs and metrics from the database.
+Deletes all jobs and metrics from the database, and clears every queued job
+from the queue (running jobs are left alone).
 
 **Response:**
 ```json
 {
   "status": "success",
   "message": "Cleared all jobs (42 jobs deleted)",
-  "deleted_count": 42
+  "deleted_count": 42,
+  "removed_from_queue": 3
 }
 ```
+
+`removed_from_queue` is the number of queued entries that were dropped.
 
 ---
 
@@ -1274,11 +1380,13 @@ Complete training configuration schema.
   "max_grad_norm": 0.3,
   "warmup_ratio": 0.05,
   "eval_steps": 0.2,
+  "save_steps": null,
   "use_4bit": true,
   "use_wandb": true,
   "push_to_hub": false,
   "merge_lora_before_upload": true,
   "hf_hub_private": true,
+  "hf_namespace": "Schneewolf-Labs",
   "hf_token": "hf_...",
   "wandb_key": "...",
 
@@ -1708,4 +1816,4 @@ For production deployments, consider implementing:
 For issues, questions, or feature requests:
 - **GitHub:** https://github.com/Schneewolf-Labs/Merlina
 - **Documentation:** See `CLAUDE.md` for developer documentation
-- **API Docs:** Visit `/api/docs` for interactive documentation
+- **API Docs:** Visit `/docs` for interactive documentation

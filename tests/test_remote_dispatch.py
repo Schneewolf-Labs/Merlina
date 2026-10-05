@@ -69,7 +69,11 @@ class TestDispatch:
         import src.training_runner as tr
         monkeypatch.setattr(orch, "run_training_remote",
                             lambda *a, **k: remote_calls.append(a))
+        # Local jobs go in-thread or (whenever a GPU is present) through the
+        # subprocess path — either one counts as "stayed local".
         monkeypatch.setattr(tr, "run_training_sync",
+                            lambda *a, **k: local_calls.append(a))
+        monkeypatch.setattr(tr, "run_training_distributed",
                             lambda *a, **k: local_calls.append(a))
         monkeypatch.setattr(tr, "_get_distributed_gpu_count", lambda c: 1)
 

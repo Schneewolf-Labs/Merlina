@@ -21,8 +21,10 @@ Converts to:
 """
 
 import logging
-from typing import Any
+from typing import Any, Optional
 from datasets import Dataset
+
+from .tool_calls import dataset_has_tools, flatten_row, row_has_tools
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +58,7 @@ def has_messages_format(dataset: Dataset) -> bool:
         return False
 
 
-def convert_messages_to_standard(row: dict) -> dict:
+def convert_messages_to_standard(row: dict, tokenizer: Optional[Any] = None) -> dict:
     """
     Convert a row with messages format to standard Merlina format.
 
@@ -92,14 +94,21 @@ def convert_messages_to_standard(row: dict) -> dict:
     if not messages:
         raise ValueError("Row has empty messages list")
 
+    # Tool calls and tool schemas have no place in (system, prompt, chosen) and their text form is
+    # model-specific, so they are rendered through the target template rather than flattened here.
+    if row_has_tools(row):
+        return flatten_row(row, tokenizer)
+
     # Separate messages by role
     system_messages = []
     user_messages = []
     assistant_messages = []
 
     for msg in messages:
-        role = msg.get('role', '').lower()
-        content = msg.get('content', '')
+        role = (msg.get('role') or '').lower()
+        # `.get('content', '')` returns None when the key exists and is null, which the joins
+        # below then fail on with "expected str instance, NoneType found".
+        content = msg.get('content') or ''
 
         if role == 'system':
             system_messages.append(content)
@@ -135,7 +144,7 @@ def convert_messages_to_standard(row: dict) -> dict:
     return result
 
 
-def convert_messages_dataset(dataset: Dataset) -> Dataset:
+def convert_messages_dataset(dataset: Dataset, tokenizer: Optional[Any] = None) -> Dataset:
     """
     Convert entire dataset from messages format to standard format.
 
@@ -151,9 +160,12 @@ def convert_messages_dataset(dataset: Dataset) -> Dataset:
     logger.info(f"Converting {len(dataset)} samples from messages format to standard format")
 
     # Convert all rows
+    drop = [c for c in ('messages', 'tools') if c in dataset.column_names]
+    if dataset_has_tools(dataset):
+        logger.info("  Dataset carries tool calls; rendering them with the model's chat template")
     converted = dataset.map(
-        convert_messages_to_standard,
-        remove_columns=['messages'],
+        lambda row: convert_messages_to_standard(row, tokenizer),
+        remove_columns=drop,
         desc="Converting messages format"
     )
 

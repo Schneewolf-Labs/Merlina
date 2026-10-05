@@ -87,7 +87,7 @@ python merlina.py
 
 Visit http://localhost:8000 and start training! 🎉
 
-API docs are available at http://localhost:8000/api/docs.
+Interactive API docs (Swagger UI) are available at http://localhost:8000/docs, with ReDoc at http://localhost:8000/redoc and the raw OpenAPI spec at http://localhost:8000/openapi.json.
 
 ## Training Modes
 
@@ -259,12 +259,49 @@ merlina/
 - `POST /validate` — Validate configuration before training
 - `GET /version` — Current version info
 - `GET /stats` — Database and system statistics
-- `GET /api/docs` — Interactive API documentation
+- `GET /docs` — Interactive API documentation (Swagger UI)
+- `GET /redoc` — API documentation (ReDoc)
+- `GET /openapi.json` — OpenAPI specification
 
 **WebSocket:**
 - `WS /ws/{job_id}` — Real-time training and export updates (status, metrics, `gguf_progress`)
 
 Full API documentation: **[API.md](API.md)**
+
+## MCP Server
+
+Merlina ships an **[MCP](https://modelcontextprotocol.io) server** so an LLM
+agent (Claude Desktop, Claude Code, Cursor, …) can drive the workshop
+conversationally — queue training jobs, watch progress, preview datasets, and
+manage the GPU queue. It's a thin HTTP client to a running Merlina server, so
+it pulls in no torch.
+
+```bash
+# 1. Start Merlina as usual
+merlina serve            # or: python merlina.py
+
+# 2. In another shell (or wired into your MCP client), run the MCP server
+pip install 'merlina[mcp]'
+MERLINA_API_URL=http://localhost:8000 merlina-mcp
+```
+
+Wire it into an MCP client (e.g. Claude Desktop's `claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "merlina": {
+      "command": "merlina-mcp",
+      "env": { "MERLINA_API_URL": "http://localhost:8000" }
+    }
+  }
+}
+```
+
+Exposed tools include `start_training`, `get_job_status`, `get_job_history`,
+`get_job_metrics`, `stop_job`, `queue_status`, `validate_training_config`,
+`preview_dataset`, `list_local_models`, `list_gpus`, and `get_stats`. See
+**[docs/user/mcp.md](docs/user/mcp.md)** for the full reference.
 
 ## GPU Memory Requirements
 
@@ -332,6 +369,7 @@ docker run --gpus all -p 8000:8000 merlina
 - 🤖 **[Tokenizer Format Guide](docs/user/tokenizer-format.md)** — Automatic chat formatting (recommended!)
 - ⚙️ **[Configuration Management](docs/user/config_management.md)** — Save and reuse training configs
 - 🆕 **[New Features Guide](docs/user/new-features.md)** — What's new in v1.1+
+- 🔌 **[MCP Server Guide](docs/user/mcp.md)** — Drive Merlina from an LLM agent via Model Context Protocol
 - 📋 **[Examples](examples/)** — Ready-to-use training configurations
 - 📡 **[API Reference](API.md)** — Full REST and WebSocket API docs
 

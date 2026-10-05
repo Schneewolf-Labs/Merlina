@@ -165,6 +165,8 @@ def mock_job_queue():
     mock = Mock()
     mock.submit.return_value = 1  # Queue position
     mock.cancel.return_value = True
+    mock.remove.return_value = False
+    mock.remove_all_queued.return_value = 0
     mock.get_status.return_value = {
         "state": "queued",
         "position": 1
@@ -611,20 +613,33 @@ class TestValidationAndJobManagement:
         data = response.json()
         assert data["status"] == "success"
 
-    def test_delete_job_not_found(self, client, mock_job_manager):
+    def test_delete_job_not_found(self, client, mock_job_manager, mock_job_queue):
         """Test DELETE /jobs/{job_id} for non-existent job"""
         mock_job_manager.delete_job.return_value = False
 
         response = client.delete("/jobs/nonexistent_job")
         assert response.status_code == 404
+        # Nothing was deleted, so the queue must be left alone
+        mock_job_queue.remove.assert_not_called()
 
-    def test_clear_all_jobs(self, client):
+    def test_delete_queued_job_clears_queue_entry(self, client, mock_job_queue):
+        """Deleting a queued job also drops it from the queue"""
+        mock_job_queue.remove.return_value = True
+
+        response = client.delete("/jobs/test_job_001")
+        assert response.status_code == 200
+        mock_job_queue.remove.assert_called_once_with("test_job_001")
+        assert response.json()["removed_from_queue"] is True
+
+    def test_clear_all_jobs(self, client, mock_job_queue):
         """Test DELETE /jobs endpoint"""
         response = client.delete("/jobs")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "success"
         assert "deleted_count" in data
+        # Every record is gone, so no queued job may still be waiting to run
+        mock_job_queue.remove_all_queued.assert_called_once()
 
 
 # ============================================================================
@@ -1156,6 +1171,179 @@ class TestErrorCases:
 
         response = client.get("/gpu/list")
         assert response.status_code == 500
+
+
+# ============================================================================
+# Test Job Re-Upload Endpoint (POST /jobs/{job_id}/upload)
+# ============================================================================
+
+class TestJobReUpload:
+    """Regression tests for re-uploading a completed job's model.
+
+    The sync-merge refactor moved the LoRA merge out of
+    _run_background_upload — without a pre-merged artifact it falls back
+    to uploading the adapter only. The endpoint must therefore run
+    _perform_sync_merge itself when merge_lora_before_upload=True, and the
+    RAM-heavy merge must go through a job-queue slot so it can't race an
+    active training job for system RAM.
+    """
+
+    def _completed_lora_job(self, tmp_path):
+        from src.job_manager import JobRecord
+        return JobRecord(
+            job_id="job_up_001",
+            status="completed",
+            progress=1.0,
+            created_at=datetime.now().isoformat(),
+            updated_at=datetime.now().isoformat(),
+            config={
+                "base_model": "test/base-model",
+                "output_name": "test-model",
+                "use_lora": True,
+            },
+            output_dir=str(tmp_path),
+        )
+
+    def _post_upload(self, client, mock_job_manager, mock_job_queue, tmp_path, *, merge):
+        import threading
+
+        mock_job_manager.get_job.return_value = self._completed_lora_job(tmp_path)
+
+        # Execute queued callbacks inline so the gated merge path actually
+        # runs during the test (the real queue does this on a worker thread).
+        def _run_callback(job_id, config, callback, priority):
+            callback(job_id, config)
+            return 0
+        mock_job_queue.submit.side_effect = _run_callback
+
+        done = threading.Event()
+        merge_mock = Mock(return_value="MERGE_ARTIFACT")
+        upload_calls = []
+
+        def fake_upload(*args, **kwargs):
+            upload_calls.append((args, kwargs))
+            done.set()
+
+        with patch("src.training_runner._perform_sync_merge", merge_mock), \
+             patch("src.training_runner._run_background_upload", fake_upload), \
+             patch("merlina._resolve_is_vlm", return_value=False):
+            response = client.post(
+                "/jobs/job_up_001/upload",
+                json={"hf_token": "hf_test_token", "merge_lora_before_upload": merge},
+            )
+            assert response.status_code == 200
+            assert done.wait(timeout=10), "upload thread never ran"
+
+        return merge_mock, upload_calls, response
+
+    def test_reupload_with_merge_runs_sync_merge(
+        self, client, mock_job_manager, mock_job_queue, tmp_path
+    ):
+        """merge=True must merge via a queue slot and pass the artifact along"""
+        from src.job_queue import JobPriority
+
+        merge_mock, upload_calls, response = self._post_upload(
+            client, mock_job_manager, mock_job_queue, tmp_path, merge=True
+        )
+        # Merge went through the job queue (HIGH priority) — not a free thread
+        assert mock_job_queue.submit.call_count == 1
+        assert mock_job_queue.submit.call_args.args[3] == JobPriority.HIGH
+        assert response.json()["status"] == "queued"
+
+        assert merge_mock.call_count == 1
+        assert merge_mock.call_args.kwargs.get("num_consumers") == 1
+        _, kwargs = upload_calls[0]
+        assert kwargs.get("merge_artifact") == "MERGE_ARTIFACT"
+
+    def test_reupload_without_merge_skips_merge(
+        self, client, mock_job_manager, mock_job_queue, tmp_path
+    ):
+        """merge=False uploads the adapter as-is: no merge, no queue slot"""
+        merge_mock, upload_calls, response = self._post_upload(
+            client, mock_job_manager, mock_job_queue, tmp_path, merge=False
+        )
+        merge_mock.assert_not_called()
+        mock_job_queue.submit.assert_not_called()
+        assert response.json()["status"] == "uploading"
+        _, kwargs = upload_calls[0]
+        assert kwargs.get("merge_artifact") is None
+
+
+class TestDispatchMergeGated:
+    """Unit tests for the merge queue-gating helper."""
+
+    def _wait_for(self, event):
+        assert event.wait(timeout=10), "background work never ran"
+
+    def test_no_merge_runs_work_immediately(self):
+        import threading
+        import merlina
+
+        done = threading.Event()
+        received = []
+
+        def work(artifact):
+            received.append(artifact)
+            done.set()
+
+        with patch.object(merlina, "job_queue") as queue_mock:
+            position = merlina._dispatch_merge_gated(
+                "job_x", {}, needs_merge=False,
+                merge=Mock(), work=work, on_error=Mock(),
+                thread_name="test-no-merge",
+            )
+        assert position is None
+        self._wait_for(done)
+        assert received == [None]
+        queue_mock.submit.assert_not_called()
+
+    def test_merge_holds_queue_slot_then_spawns_work(self):
+        import threading
+        import merlina
+
+        done = threading.Event()
+        received = []
+
+        def work(artifact):
+            received.append(artifact)
+            done.set()
+
+        with patch.object(merlina, "job_queue") as queue_mock:
+            def _run_callback(job_id, config, callback, priority):
+                callback(job_id, config)
+                return 3
+            queue_mock.submit.side_effect = _run_callback
+
+            position = merlina._dispatch_merge_gated(
+                "job_x", {}, needs_merge=True,
+                merge=Mock(return_value="ARTIFACT"), work=work, on_error=Mock(),
+                thread_name="test-merge",
+            )
+        assert position == 3
+        self._wait_for(done)
+        assert received == ["ARTIFACT"]
+
+    def test_merge_failure_reports_via_on_error(self):
+        import merlina
+
+        errors = []
+        work = Mock()
+
+        with patch.object(merlina, "job_queue") as queue_mock:
+            def _run_callback(job_id, config, callback, priority):
+                callback(job_id, config)
+                return 0
+            queue_mock.submit.side_effect = _run_callback
+
+            merlina._dispatch_merge_gated(
+                "job_x", {}, needs_merge=True,
+                merge=Mock(side_effect=RuntimeError("merge exploded")),
+                work=work, on_error=lambda exc: errors.append(exc),
+                thread_name="test-merge-fail",
+            )
+        assert len(errors) == 1
+        assert "merge exploded" in str(errors[0])
+        work.assert_not_called()
 
 
 # ============================================================================

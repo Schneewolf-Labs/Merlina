@@ -1,33 +1,32 @@
 """
 MoE-aware model sizing and instance selection for remote runs.
 
-Unlike the local preflight estimator (which guesses hidden size from the
-parameter count in the model's *name*), this module reads the model's
-actual ``config.json`` — so a 1T-parameter MoE like Kimi-K2 with 7168
-hidden size and 32B active parameters sizes correctly instead of
-absurdly. Only ``huggingface_hub`` is needed; never torch/transformers.
+Reads the model's actual ``config.json`` including DeepSeek-V3-style MoE
+fields, so a 1T-parameter MoE like Kimi-K2 (7168 hidden, ~32B active)
+sizes correctly. VRAM itself is estimated by the shared
+``src/vram_estimator.py`` (the same estimator local pre-flight uses);
+this module adds the MoE-aware parameter counting, disk sizing, and
+instance selection. Only ``huggingface_hub`` is needed; never
+torch/transformers.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from .spec import GpuOffer, ModelSpecs, SizingDecision
 
+if TYPE_CHECKING:
+    from src.vram_estimator import ModelProfile
+
 logger = logging.getLogger(__name__)
 
-# Bytes per parameter for the loaded base weights.
-BYTES_PER_PARAM_4BIT = 0.55     # NF4 + double-quant + bnb bookkeeping
+# Bytes per parameter for bf16 checkpoint downloads (disk sizing).
 BYTES_PER_PARAM_BF16 = 2.0
 
-# AdamW on LoRA params: bf16 grads (2) + fp32 master copy (4) + two fp32
-# moments (8) on top of the bf16 weight itself.
-OPTIMIZER_BYTES_PER_TRAINABLE = 16.0
-
 CUDA_CONTEXT_GB_PER_GPU = 2.0   # CUDA context + framework overhead per GPU
-VRAM_HEADROOM_FACTOR = 1.2      # fragmentation, temporary buffers
 USABLE_VRAM_FRACTION = 0.94     # never plan to the last byte of a GPU
 
 
@@ -156,6 +155,50 @@ def fetch_model_specs(model_id: str, hf_token: Optional[str] = None) -> ModelSpe
     return parse_model_specs(model_id, config, weight_bytes)
 
 
+def specs_to_profile(specs: ModelSpecs) -> "ModelProfile":
+    """
+    Adapt MoE-aware :class:`ModelSpecs` into the shared
+    :class:`src.vram_estimator.ModelProfile` so remote sizing runs through
+    the same estimator as local pre-flight and ``POST /estimate/vram``.
+
+    The shared estimator derives parameter counts for dense decoders only,
+    so the total comes from here (exact safetensors bytes when known, else
+    the MoE-aware count). For MoE models the per-token MLP width is the
+    *active* expert width (routed-per-token + shared), which is what drives
+    activation memory.
+    """
+    from src.vram_estimator import ModelProfile
+
+    if specs.weight_bytes_total:
+        num_params = specs.weight_bytes_total / 2.0   # bf16/fp16 checkpoints
+        exact = True
+    else:
+        num_params = (specs.total_params_b or 1.0) * 1e9
+        exact = False
+
+    intermediate = specs.intermediate_size
+    if specs.is_moe and specs.moe_intermediate_size:
+        active_experts = (specs.num_experts_per_tok or 0) + (specs.num_shared_experts or 0)
+        if active_experts:
+            intermediate = active_experts * specs.moe_intermediate_size
+
+    has_config = bool(specs.hidden_size and specs.num_layers and specs.vocab_size)
+    return ModelProfile(
+        model_id=specs.model_id,
+        num_params=num_params,
+        hidden_size=specs.hidden_size,
+        num_hidden_layers=specs.num_layers,
+        num_attention_heads=specs.num_attention_heads,
+        num_key_value_heads=specs.num_key_value_heads,
+        head_dim=specs.head_dim,
+        intermediate_size=intermediate,
+        vocab_size=specs.vocab_size,
+        tie_word_embeddings=specs.tie_word_embeddings,
+        source="hub_config" if has_config else "unknown",
+        params_exact=exact,
+    )
+
+
 def estimate_train_vram_gb(
     specs: ModelSpecs,
     *,
@@ -165,38 +208,42 @@ def estimate_train_vram_gb(
     max_length: int = 2048,
     gradient_checkpointing: bool = True,
     preference_mode: bool = False,
+    training_mode: Optional[str] = None,
+    use_lora: bool = True,
+    target_modules: Optional[List[str]] = None,
+    modules_to_save: Optional[List[str]] = None,
+    optimizer_type: str = "paged_adamw_8bit",
+    attn_implementation: str = "auto",
+    use_liger: bool = False,
 ) -> float:
     """
-    Estimate total VRAM (GB) for a LoRA/QLoRA run, across all GPUs.
+    Estimate total VRAM (GB) for a training run, across all GPUs.
 
-    Uses real architecture numbers: base weights from the (exact when
-    available) weight footprint, optimizer state from the actual LoRA
-    parameter count, activations from the true hidden size.
+    Delegates to the shared architecture-aware estimator
+    (:func:`src.vram_estimator.estimate_vram`) — the same model local
+    pre-flight uses — fed with the MoE-aware profile from
+    :func:`specs_to_profile`. ``training_mode`` wins over the legacy
+    ``preference_mode`` flag when given.
     """
-    gib = 1024 ** 3
+    from src.vram_estimator import estimate_vram
 
-    if specs.weight_bytes_total and not use_4bit:
-        weights_gb = specs.weight_bytes_total / gib
-    else:
-        params_b = specs.total_params_b or 1.0
-        bpp = BYTES_PER_PARAM_4BIT if use_4bit else BYTES_PER_PARAM_BF16
-        weights_gb = params_b * bpp
-
-    # LoRA on attention projections: 2 low-rank matrices per projection,
-    # 4 projections per layer.
-    h, L = specs.hidden_size or 4096, specs.num_layers or 32
-    lora_params = 8 * lora_r * h * L
-    optimizer_gb = lora_params * OPTIMIZER_BYTES_PER_TRAINABLE / gib
-
-    # Activations: per-layer residual streams in bf16; preference modes
-    # (ORPO/DPO/...) forward chosen + rejected, doubling the batch.
-    eff_batch = batch_size * (2 if preference_mode else 1)
-    act_per_layer = eff_batch * max_length * h * 2  # bytes, bf16
-    layers_resident = max(L * 0.15, 4) if gradient_checkpointing else L
-    activations_gb = act_per_layer * layers_resident * 4 / gib  # ~4 tensors/layer
-
-    total = (weights_gb + optimizer_gb + activations_gb) * VRAM_HEADROOM_FACTOR
-    return round(total, 1)
+    mode = training_mode or ("orpo" if preference_mode else "sft")
+    estimate = estimate_vram(
+        specs_to_profile(specs),
+        batch_size=batch_size,
+        max_length=max_length,
+        training_mode=mode,
+        use_4bit=use_4bit,
+        use_lora=use_lora,
+        lora_r=lora_r,
+        target_modules=target_modules,
+        modules_to_save=modules_to_save,
+        gradient_checkpointing=gradient_checkpointing,
+        optimizer_type=optimizer_type,
+        attn_implementation=attn_implementation,
+        use_liger=use_liger,
+    )
+    return round(estimate.total_gb, 1)
 
 
 def estimate_disk_gb(specs: ModelSpecs, *, merge_stage: bool = False) -> float:

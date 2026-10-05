@@ -147,7 +147,28 @@ class MerlinaAPI {
                 throw new APIError(errorMessage, type, response.status, errorDetails);
             }
 
-            return await response.json();
+            // Read the body as text first so an empty or truncated body
+            // (dropped connection, proxy timeout) surfaces as a distinct,
+            // recoverable error instead of a generic JSON parse failure.
+            const text = await response.text();
+            if (!text) {
+                throw new APIError(
+                    'Empty response from server',
+                    ErrorType.SERVER,
+                    response.status,
+                    { emptyResponse: true }
+                );
+            }
+            try {
+                return JSON.parse(text);
+            } catch {
+                throw new APIError(
+                    'Invalid JSON response from server',
+                    ErrorType.SERVER,
+                    response.status,
+                    { emptyResponse: false, body: text.slice(0, 200) }
+                );
+            }
         } catch (error) {
             clearTimeout(timeoutId);
 
@@ -170,6 +191,13 @@ class MerlinaAPI {
         }, LONG_TIMEOUT);
     }
 
+    static async estimateVRAM(config) {
+        return this.fetch('/estimate/vram', {
+            method: 'POST',
+            body: JSON.stringify(config)
+        });
+    }
+
     static async getJobStatus(jobId) {
         return this.fetch(`/status/${jobId}`);
     }
@@ -182,9 +210,13 @@ class MerlinaAPI {
         return this.fetch(`/jobs/${jobId}/retry`, { method: 'POST' }, LONG_TIMEOUT);
     }
 
-    static async uploadJob(jobId, { hf_token, output_name = null, merge_lora_before_upload = true, hf_hub_private = true } = {}) {
+    static async uploadJob(jobId, { hf_token, output_name = null, hf_namespace, merge_lora_before_upload = true, hf_hub_private = true } = {}) {
         const body = { hf_token, merge_lora_before_upload, hf_hub_private };
         if (output_name) body.output_name = output_name;
+        // Sent whenever the caller states one — including null, which means
+        // "upload to my personal account" and overrides the job's original
+        // namespace. Omitting the key entirely keeps that namespace.
+        if (hf_namespace !== undefined) body.hf_namespace = hf_namespace;
         return this.fetch(`/jobs/${jobId}/upload`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -344,6 +376,15 @@ class MerlinaAPI {
         return data;
     }
 
+    // Decode a training config from a pasted `merlina-config-v1:` code
+    // (the compact block Merlina publishes in a model card) or raw JSON.
+    static async decodeConfigText(payload) {
+        return this.fetch('/configs/decode-text', {
+            method: 'POST',
+            body: JSON.stringify({ payload })
+        });
+    }
+
     // Job config endpoint (for loading config from previous job)
     static async getJobConfig(jobId) {
         return this.fetch(`/jobs/${jobId}/config`);
@@ -365,6 +406,14 @@ class MerlinaAPI {
     // Server-side secret availability (hf_token, wandb_api_key)
     static async getEnvSecrets() {
         return this.fetch('/env/secrets');
+    }
+
+    // HuggingFace namespaces (personal account + orgs) a token can push to
+    static async getHfNamespaces(hfToken = null) {
+        return this.fetch('/hf/namespaces', {
+            method: 'POST',
+            body: JSON.stringify({ hf_token: hfToken })
+        }, LONG_TIMEOUT);
     }
 
     // Disk cleanup & analysis endpoints

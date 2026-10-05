@@ -20,6 +20,11 @@ additionally needs OpenCV (``cv2``) and is skipped silently when unavailable.
 The envelope shape is the same one produced by ``/configs/save`` and the
 README embedder (see ``src/config_manager.build_config_envelope``), so anything
 extracted here drops straight into the *Load Configuration* flow.
+
+The compressed wire format is also used on its own, without a PNG around it:
+:func:`encode_config_payload` renders the one-line ``merlina-config-v1:`` code
+that model cards publish, and :func:`decode_config_payload` reads it back for
+``POST /configs/decode-text`` (the *Load Config → From Code* button).
 """
 
 import base64
@@ -27,6 +32,7 @@ import gzip
 import io
 import json
 import logging
+import zlib
 from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
@@ -38,6 +44,12 @@ PNG_TEXT_KEY = "merlina-config"
 # Prefix on the QR payload so a decoder can recognise a Merlina config blob
 # and version the compressed wire format independently of the JSON schema.
 _QR_PREFIX = "merlina-config-v1:"
+
+# Bounds on what we'll accept when decoding an untrusted payload. The
+# compressed form of a real config is ~1-2 KB; anything wildly larger is
+# either not a Merlina config or a decompression bomb.
+_MAX_ENCODED_CHARS = 512 * 1024
+_MAX_DECODED_BYTES = 4 * 1024 * 1024
 
 
 def _compress_envelope(envelope: Dict[str, Any]) -> str:
@@ -52,13 +64,86 @@ def _decompress_payload(payload: str) -> Optional[Dict[str, Any]]:
     if not payload.startswith(_QR_PREFIX):
         return None
     b64 = payload[len(_QR_PREFIX):]
+    # Re-pad: some encoders (and every "base64url" implementation) drop the
+    # trailing '=', which Python's decoder insists on.
+    b64 += "=" * (-len(b64) % 4)
     try:
         packed = base64.urlsafe_b64decode(b64.encode("ascii"))
-        raw = gzip.decompress(packed)
+        raw = _gunzip_bounded(packed, _MAX_DECODED_BYTES)
+        if raw is None:
+            return None
         data = json.loads(raw.decode("utf-8"))
     except Exception:
         return None
     return data if isinstance(data, dict) else None
+
+
+def _gunzip_bounded(packed: bytes, limit: int) -> Optional[bytes]:
+    """gunzip ``packed``, refusing anything that inflates past ``limit``.
+
+    Decoding runs on payloads pasted by a user from someone else's model
+    card, so a hostile blob must not be able to balloon memory.
+    """
+    decompressor = zlib.decompressobj(wbits=16 + zlib.MAX_WBITS)
+    raw = decompressor.decompress(packed, limit + 1)
+    if len(raw) > limit or decompressor.unconsumed_tail:
+        logger.warning("config payload exceeds %d bytes decompressed; rejecting", limit)
+        return None
+    return raw
+
+
+def encode_config_payload(envelope: Dict[str, Any]) -> str:
+    """Encode a config envelope as the compact ``merlina-config-v1:`` string.
+
+    This is the same wire format the QR code carries, exposed for the
+    model-card "Reproduce this training run" block — one copy-pasteable
+    line instead of a hundred lines of JSON.
+    """
+    return _compress_envelope(envelope)
+
+
+def decode_config_payload(text: str) -> Optional[Dict[str, Any]]:
+    """Recover a config envelope from a pasted string.
+
+    Accepts, in order of preference:
+
+      * A ``merlina-config-v1:`` blob (as published in a model card or QR
+        code), with any surrounding whitespace/newlines from copy-paste.
+      * Raw envelope JSON — so pasting the ``<details>`` block from a
+        README works just as well as pasting the short code.
+
+    Returns ``None`` when the text is neither.
+    """
+    if not text:
+        return None
+    if len(text) > _MAX_ENCODED_CHARS:
+        logger.warning("config payload too large (%d chars); rejecting", len(text))
+        return None
+
+    stripped = text.strip()
+
+    # Compact code — tolerate line breaks a terminal or editor may have
+    # wrapped into the middle of the base64.
+    idx = stripped.find(_QR_PREFIX)
+    if idx != -1:
+        compact = "".join(stripped[idx:].split())
+        decoded = _decompress_payload(compact)
+        if decoded is not None:
+            return decoded
+
+    # Raw JSON fallback (possibly still wrapped in a ```json fence).
+    candidate = stripped
+    if candidate.startswith("```"):
+        lines = candidate.splitlines()
+        lines = lines[1:]
+        while lines and lines[-1].strip().startswith("```"):
+            lines.pop()
+        candidate = "\n".join(lines).strip()
+    try:
+        obj = json.loads(candidate)
+    except Exception:
+        return None
+    return obj if isinstance(obj, dict) else None
 
 
 def build_config_image_bytes(envelope: Dict[str, Any]) -> Optional[bytes]:

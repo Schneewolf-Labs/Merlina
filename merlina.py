@@ -19,7 +19,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, BackgroundTasks, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from pydantic import BaseModel, Field, model_validator
 
 from datasets import load_dataset, Dataset
@@ -46,7 +46,7 @@ from dataset_handlers import (
 from src.job_manager import JobManager
 from src.websocket_manager import websocket_manager
 from src.preflight_checks import validate_config
-from src.config_manager import ConfigManager
+from src.config_manager import ConfigManager, strip_secrets
 from src.job_queue import JobQueue, JobPriority
 from src.gpu_utils import get_gpu_manager
 from src.presets import get_preset, get_all_presets
@@ -72,13 +72,103 @@ from version import __version__, get_version_info, get_version_string
 logging.basicConfig(level=getattr(logging, settings.log_level.upper()))
 logger = logging.getLogger(__name__)
 
+# OpenAPI tag metadata — groups endpoints in Swagger UI / ReDoc
+openapi_tags = [
+    {
+        "name": "System",
+        "description": "Health checks, version info, server capabilities, and statistics.",
+    },
+    {
+        "name": "Training",
+        "description": "Validate configurations and submit training jobs "
+                       "(ORPO, DPO, SimPO, CPO, IPO, KTO, SFT, and VLM/diffusion modes).",
+    },
+    {
+        "name": "Jobs",
+        "description": "Track, manage, retry, stop, and delete training jobs; "
+                       "fetch metrics, configs, and generated samples.",
+    },
+    {
+        "name": "Queue",
+        "description": "Job queue status and positions. Jobs run with configurable "
+                       "concurrency and priority (low/normal/high).",
+    },
+    {
+        "name": "GPU",
+        "description": "GPU discovery, availability, and selection recommendations.",
+    },
+    {
+        "name": "Presets",
+        "description": "Paper-backed recommended hyperparameters per training mode.",
+    },
+    {
+        "name": "Datasets",
+        "description": "Load, preview, format, inspect, upload, and manage datasets "
+                       "from HuggingFace Hub, local files, or direct uploads.",
+    },
+    {
+        "name": "Configs",
+        "description": "Save, load, export, import, and share training configurations.",
+    },
+    {
+        "name": "Models",
+        "description": "Local model discovery, tokenizer preloading, layer detection, "
+                       "artifact management, HuggingFace Hub uploads, and GGUF exports.",
+    },
+    {
+        "name": "Inference",
+        "description": "Load trained models and chat with them for quick evaluation.",
+    },
+    {
+        "name": "Diffusion",
+        "description": "Diffusion image-LoRA browsing and one-off image generation.",
+    },
+    {
+        "name": "Disk & Cleanup",
+        "description": "Disk usage analysis and cleanup of checkpoints, caches, "
+                       "artifacts, and expired uploads. Destructive operations are "
+                       "dry-run unless explicitly applied.",
+    },
+]
+
 # FastAPI app
 app = FastAPI(
     title=settings.app_name,
-    description="Train LLMs with ORPO, powered by magic ✨",
+    description=(
+        "Merlina is a magical LLM training system ✨\n\n"
+        "Fine-tune language models with LoRA adapters using ORPO, DPO, SimPO, "
+        "CPO, IPO, KTO, or SFT — plus Artemis VLM and diffusion image-LoRA "
+        "training modes. Merlina handles dataset loading and formatting, "
+        "pre-flight validation, job queueing, real-time progress updates, and "
+        "publishing to the HuggingFace Hub.\n\n"
+        "### Highlights\n"
+        "- **Training jobs**: submit via `POST /train`, monitor via "
+        "`GET /status/{job_id}` or the `/ws/{job_id}` WebSocket\n"
+        "- **Datasets**: load from HuggingFace Hub, local files, or uploads; "
+        "preview raw and formatted samples before training\n"
+        "- **Pre-flight checks**: `POST /validate` catches configuration "
+        "problems before any GPU time is spent\n"
+        "- **Exports**: merge LoRA adapters, upload to HuggingFace Hub, and "
+        "export GGUF quantizations\n\n"
+        "### Real-time updates (WebSocket)\n"
+        "Not part of the OpenAPI spec, but available:\n"
+        "- `WS /ws/{job_id}` — live training status, metrics, completion, and "
+        "error events\n"
+        "- `WS /ws-inference` — streaming token generation for loaded "
+        "inference models\n"
+    ),
     version=__version__,
-    docs_url="/api/docs",
-    redoc_url="/api/redoc"
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_tags=openapi_tags,
+    contact={
+        "name": "Schneewolf Labs",
+        "url": "https://github.com/Schneewolf-Labs/Merlina",
+    },
+    license_info={
+        "name": "MIT License",
+        "url": "https://github.com/Schneewolf-Labs/Merlina/blob/main/LICENSE",
+    },
 )
 
 app.add_middleware(
@@ -88,6 +178,63 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _warm_training_runner_import():
+    """Pre-import the heavy training stack (grimoire, TRL-adjacent deps).
+
+    src.training_runner is imported lazily inside the training callback, on
+    the queue worker thread. Warming it at startup means the first job after
+    a server start doesn't spend its first ~seconds importing, and the
+    import's GIL churn doesn't compete with live request handling.
+    Failure is tolerated (e.g. test servers that mock the ML stack).
+    """
+    try:
+        import src.training_runner  # noqa: F401
+        logger.info("Training modules pre-loaded")
+    except Exception as e:
+        logger.warning(f"Training module pre-load failed (will import lazily on demand): {e}")
+
+
+@app.on_event("startup")
+async def _preload_training_modules():
+    threading.Thread(
+        target=_warm_training_runner_import,
+        name="TrainingRunnerWarmup",
+        daemon=True,
+    ).start()
+
+
+@app.on_event("startup")
+async def _reconcile_jobs_after_restart():
+    """Re-adopt training workers that survived a server restart.
+
+    Training runs in a detached subprocess, so a restart doesn't kill it.
+    This scan re-attaches a monitor to workers that are still alive (progress
+    keeps flowing, /stop keeps working) and marks jobs whose worker is gone
+    as failed instead of leaving them presenting as "training" forever.
+    """
+    loop = asyncio.get_running_loop()
+
+    def _run():
+        try:
+            from src.worker_reattach import reattach_orphaned_workers
+            reattach_orphaned_workers(job_manager, event_loop=loop)
+        except Exception as e:
+            logger.warning(f"Worker reattach scan failed: {e}")
+
+    threading.Thread(target=_run, name="WorkerReattach", daemon=True).start()
+
+
+# Backwards-compatible redirects for the old documentation URLs
+@app.get("/api/docs", include_in_schema=False)
+async def legacy_docs_redirect():
+    return RedirectResponse(url="/docs")
+
+
+@app.get("/api/redoc", include_in_schema=False)
+async def legacy_redoc_redirect():
+    return RedirectResponse(url="/redoc")
 
 # Initialize job manager with persistent storage
 job_manager = JobManager(db_path=settings.database_path)
@@ -118,42 +265,16 @@ UPLOAD_TTL_HOURS = 24
 tokenizer_cache = {}  # model_name -> tokenizer instance
 _tokenizer_cache_lock = threading.Lock()
 
-# Keep backwards compatibility - jobs dict now proxies to job_manager
-class JobsProxy:
-    """Proxy dict-like access to job_manager for backwards compatibility"""
-    def __getitem__(self, job_id: str):
-        job = job_manager.get_job(job_id)
-        if not job:
-            raise KeyError(job_id)
-        return {
-            "status": job.status,
-            "progress": job.progress,
-            "current_step": job.current_step,
-            "total_steps": job.total_steps,
-            "loss": job.loss,
-            "error": job.error,
-            "upload_error": job.upload_error,
-            "gguf_error": job.gguf_error,
-            "wandb_url": job.wandb_url
-        }
 
-    def __setitem__(self, job_id: str, value: dict):
-        # Update job in database
-        job_manager.update_job(job_id, **value)
+def _new_job_id() -> str:
+    """Generate a unique job id.
 
-    def __contains__(self, job_id: str):
-        return job_manager.get_job(job_id) is not None
-
-    def items(self):
-        jobs_list = job_manager.list_jobs()
-        for job in jobs_list:
-            yield job.job_id, {
-                "status": job.status,
-                "progress": job.progress,
-                "name": job.config.get("output_name", job.job_id) if job.config else job.job_id
-            }
-
-jobs = JobsProxy()
+    The timestamp keeps ids readable/sortable; the random suffix prevents
+    UNIQUE-constraint failures when two jobs are created within the same
+    second (e.g. a double-clicked submit button).
+    """
+    import uuid
+    return f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
 
 # Get the directory where this script is located
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -175,6 +296,12 @@ class DatasetSource(BaseModel):
     # For HuggingFace datasets
     repo_id: Optional[str] = Field(None, description="HuggingFace repository ID")
     split: str = Field("train", description="Dataset split to use")
+    config_name: Optional[str] = Field(
+        None,
+        description="HuggingFace dataset configuration / subset name (the `name` "
+                    "argument to load_dataset, e.g. 'high_quality'). Leave empty for "
+                    "the dataset's default configuration."
+    )
 
     # For local file datasets
     file_path: Optional[str] = Field(None, description="Path to local dataset file")
@@ -205,7 +332,7 @@ class DatasetSource(BaseModel):
 
 class DatasetFormat(BaseModel):
     """Configuration for dataset formatting"""
-    format_type: str = Field("chatml", description="Format type: chatml, llama3, mistral, qwen3, tokenizer, custom")
+    format_type: str = Field("chatml", description="Format type: chatml, llama3, mistral, qwen3, tokenizer, custom, raw (no formatting)")
 
     # For custom format
     custom_templates: Optional[dict] = Field(
@@ -244,17 +371,27 @@ class DatasetFormat(BaseModel):
 class DatasetConfig(BaseModel):
     """Complete dataset configuration"""
     source: DatasetSource = Field(
-        default=DatasetSource(
+        default_factory=lambda: DatasetSource(
             source_type="huggingface",
-            repo_id="schneewolflabs/Athanorlite-DPO",
             split="train"
         ),
-        description="Primary dataset source configuration"
+        description="Primary dataset source configuration. There is no default "
+                    "dataset — repo_id (or file_path / dataset_id) must be set, "
+                    "otherwise validation and pre-flight fail rather than "
+                    "silently training on an unintended corpus."
     )
 
     additional_sources: list[DatasetSource] = Field(
         default_factory=list,
         description="Additional dataset sources to concatenate with the primary source"
+    )
+
+    eval_source: Optional[DatasetSource] = Field(
+        None,
+        description="Optional explicit evaluation dataset. When set, it is used as "
+                    "the eval split verbatim and the random `test_size` split is "
+                    "skipped (the full primary source is used for training). Useful "
+                    "for held-out / cross-distribution evaluation."
     )
 
     format: DatasetFormat = Field(
@@ -351,6 +488,28 @@ class RemoteComputeConfig(BaseModel):
     )
 
 
+def _clean_hf_namespace(value: Optional[str]) -> Optional[str]:
+    """Normalize and validate a user-supplied HuggingFace namespace.
+
+    Returns ``None`` for blank input. Raises ``ValueError`` (surfaced by
+    Pydantic as a 422) if the namespace isn't a legal Hub owner name, so a
+    typo fails at request time instead of after hours of training.
+
+    Callers must skip the assignment when the value is already ``None`` —
+    writing to the field marks it as explicitly set, which the upload
+    endpoint uses to tell "not specified" from "clear the namespace".
+    """
+    from src.hf_namespaces import is_valid_name, normalize_namespace
+
+    cleaned = normalize_namespace(value)
+    if cleaned and not is_valid_name(cleaned):
+        raise ValueError(
+            f"Invalid HuggingFace namespace '{cleaned}'. Use only letters, "
+            "numbers, hyphens, underscores, and periods (no slashes)."
+        )
+    return cleaned
+
+
 # Pydantic models
 class TrainingConfig(BaseModel):
     # Model settings
@@ -382,8 +541,15 @@ class TrainingConfig(BaseModel):
     num_epochs: int = Field(2, ge=1, le=10)
     batch_size: int = Field(1, ge=1, le=8)
     gradient_accumulation_steps: int = Field(16, ge=1, le=128)
-    max_length: int = Field(2048, ge=512, le=8192)
-    max_prompt_length: int = Field(1024, ge=256, le=4096)
+    # These ceilings are not hardware limits, they are guesses that predate long-context
+    # models. A 4096-token prompt cap silently truncates 30% of a real agentic dataset
+    # (RaifuWars Warrior: mean 3,513 prompt tokens, p95 5,329), and truncation runs from the
+    # right — which for tool-calling data removes the legal action list the answer must be
+    # drawn from. The model is then trained to name options it was never shown, and nothing
+    # reports it. Raised to the context lengths current bases actually support; VRAM remains
+    # the real constraint and is checked separately.
+    max_length: int = Field(2048, ge=512, le=131072)
+    max_prompt_length: int = Field(1024, ge=256, le=131072)
 
     # Model type
     model_type: str = Field(
@@ -502,11 +668,20 @@ class TrainingConfig(BaseModel):
     )
     dataset_jsonl_path: Optional[str] = Field(
         None,
-        description="Absolute path to a local JSONL of {prompt, image} (or {prompt, chosen, rejected}) rows for diffusion training."
+        description=(
+            "Absolute path to a JSONL of {prompt, image} (or {prompt, chosen, rejected}) "
+            "rows for diffusion training. Resolved on the machine running Merlina — a "
+            "remote API client cannot point this at files on its own host. Remote clients "
+            "should POST /dataset/upload-images (which returns a server-side jsonl_path "
+            "to use here) or use dataset_name instead."
+        )
     )
     dataset_name: Optional[str] = Field(
         None,
-        description="HF Hub dataset id for diffusion training (alternative to dataset_jsonl_path / uploads)."
+        description=(
+            "HF Hub dataset id for diffusion training (alternative to dataset_jsonl_path "
+            "/ uploads). Works from any client since the server downloads it from the Hub."
+        )
     )
     dataset_split: Optional[str] = Field(
         None,
@@ -533,12 +708,30 @@ class TrainingConfig(BaseModel):
 
     # Optional settings
     warmup_ratio: float = Field(0.05, ge=0.0, le=0.5)
-    eval_steps: float = Field(0.2, gt=0, description="<1 = ratio of total steps, >=1 = absolute step count")
+    eval_steps: float = Field(
+        0.2, ge=0,
+        description="Evaluation cadence. 0 disables evaluation entirely — no eval split is held "
+                    "back and the full dataset is used for training; <1 = ratio of total steps; "
+                    ">=1 = absolute step count."
+    )
+    save_steps: Optional[float] = Field(
+        None, ge=0,
+        description="Intermediate checkpoint cadence. None follows eval_steps; 0 disables "
+                    "intermediate checkpoints (final model only); <1 = ratio of total steps; "
+                    ">=1 = absolute step count. Set 0 on unified-memory boards, where the "
+                    "full-model checkpoint write can trip the memory guard."
+    )
     use_4bit: bool = Field(True, description="Use 4-bit quantization")
     use_wandb: bool = Field(True, description="Log to Weights & Biases")
     push_to_hub: bool = Field(False, description="Push to HuggingFace Hub")
     merge_lora_before_upload: bool = Field(True, description="Merge LoRA with base model before uploading (if False, uploads LoRA adapter only)")
     hf_hub_private: bool = Field(True, description="Make HuggingFace Hub repository private")
+    hf_namespace: Optional[str] = Field(
+        None,
+        description="HuggingFace namespace (org or username) to upload under. "
+                    "Empty uploads to the token's own account. Ignored when "
+                    "output_name already contains a namespace."
+    )
     hf_token: Optional[str] = Field(None, description="HuggingFace token for pushing")
     wandb_key: Optional[str] = Field(None, description="Weights & Biases API key")
 
@@ -665,6 +858,13 @@ class TrainingConfig(BaseModel):
         return self
 
     @model_validator(mode="after")
+    def _normalize_hf_namespace(self):
+        """Trim the namespace (tolerating a pasted profile URL) and validate it."""
+        if self.hf_namespace is not None:
+            self.hf_namespace = _clean_hf_namespace(self.hf_namespace)
+        return self
+
+    @model_validator(mode="after")
     def _validate_gguf_quant_types(self):
         """Normalize + validate requested GGUF quant types (uppercase, dedup)."""
         if not self.export_gguf:
@@ -678,6 +878,69 @@ class TrainingConfig(BaseModel):
             raise ValueError(
                 "export_gguf is enabled but gguf_quant_types is empty — "
                 "pick at least one (e.g. 'Q4_K_M')."
+            )
+        return self
+
+    def _is_diffusion_job(self) -> bool:
+        mode = (self.model_type or "auto").lower()
+        train_mode = (self.training_mode or "").lower()
+        return mode == "diffusion" or train_mode.startswith("diffusion_")
+
+    @model_validator(mode="after")
+    def _resolve_dataset_name_for_text_modes(self):
+        """Make ``dataset_name`` count for every training mode.
+
+        ``dataset_name`` / ``dataset_split`` started as diffusion-only fields;
+        text-mode runners only read ``dataset.source``. A text-mode request
+        that set ``dataset_name`` used to be accepted and then silently
+        trained on whatever ``dataset.source`` held instead. Now:
+
+        - If the primary ``dataset.source`` is unset, ``dataset_name`` is
+          mapped into it (as a HuggingFace source).
+        - If both are set and disagree, the request is rejected instead of
+          picking one silently.
+        """
+        if self._is_diffusion_job() or not self.dataset_name:
+            return self
+
+        src = self.dataset.source
+        src_specified = bool(src.repo_id or src.file_path or src.dataset_id)
+        if not src_specified:
+            self.dataset.source = DatasetSource(
+                source_type="huggingface",
+                repo_id=self.dataset_name,
+                split=self.dataset_split or "train",
+            )
+        else:
+            matches = (
+                src.source_type == "huggingface"
+                and src.repo_id == self.dataset_name
+                and (not self.dataset_split or self.dataset_split == src.split)
+            )
+            if not matches:
+                described = src.repo_id or src.file_path or src.dataset_id
+                raise ValueError(
+                    f"dataset_name ('{self.dataset_name}') and dataset.source "
+                    f"({src.source_type}: '{described}') disagree — it is ambiguous "
+                    "which corpus to train on. For text training modes set "
+                    "dataset.source.repo_id, or drop dataset.source and pass only "
+                    "dataset_name."
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _reject_diffusion_only_dataset_fields(self):
+        """``dataset_jsonl_path`` has no consumer outside the diffusion runner.
+
+        Accepting it on a text-mode job means the named data is silently
+        ignored and training proceeds on ``dataset.source`` — fail loudly
+        instead.
+        """
+        if not self._is_diffusion_job() and self.dataset_jsonl_path:
+            raise ValueError(
+                "dataset_jsonl_path is only supported for diffusion training "
+                "modes. For text modes, set dataset.source (HuggingFace repo, "
+                "local file, or uploaded dataset id) instead."
             )
         return self
 
@@ -795,6 +1058,11 @@ class ModelUploadRequest(BaseModel):
         None,
         description="Override the Hub repo ID. Defaults to the model directory name."
     )
+    hf_namespace: Optional[str] = Field(
+        None,
+        description="Namespace (org or username) to upload under. Ignored when "
+                    "repo_id already contains one."
+    )
     private: bool = Field(True, description="Create/update repo as private")
     commit_message: Optional[str] = Field(None, description="Commit message")
     hf_token: Optional[str] = Field(None, description="HuggingFace token; falls back to env")
@@ -817,6 +1085,8 @@ class ModelUploadRequest(BaseModel):
     @model_validator(mode="after")
     def _fill_hf_token_from_env(self):
         self.hf_token = resolve_hf_token(self.hf_token)
+        if self.hf_namespace is not None:
+            self.hf_namespace = _clean_hf_namespace(self.hf_namespace)
         return self
 
 
@@ -867,6 +1137,11 @@ _inference_state = {
 }
 _inference_lock = threading.Lock()
 
+# Serializes /inference/load requests. Loads used to be implicitly serialized
+# by blocking the event loop; now that they run in the threadpool, this lock
+# keeps two concurrent loads from racing each other for VRAM.
+_inference_load_lock = threading.Lock()
+
 
 def _unload_current_inference() -> Optional[str]:
     """
@@ -908,7 +1183,7 @@ def _unload_current_inference() -> Optional[str]:
 
 # Mount static files for frontend
 if FRONTEND_DIR.exists():
-    @app.get("/")
+    @app.get("/", include_in_schema=False)
     async def serve_frontend():
         """Serve the main HTML page"""
         return FileResponse(FRONTEND_DIR / "index.html")
@@ -936,11 +1211,11 @@ if FRONTEND_DIR.exists():
               name="model-files")
     
     # Also serve CSS, JS modules, and images from root for simplicity
-    @app.get("/styles.css")
+    @app.get("/styles.css", include_in_schema=False)
     async def serve_css():
         return FileResponse(FRONTEND_DIR / "styles.css", media_type="text/css")
 
-    @app.get("/js/{file_path:path}")
+    @app.get("/js/{file_path:path}", include_in_schema=False)
     async def serve_js_modules(file_path: str):
         """Serve JavaScript modules from js/ directory"""
         js_file = FRONTEND_DIR / "js" / file_path
@@ -948,7 +1223,7 @@ if FRONTEND_DIR.exists():
             return FileResponse(js_file, media_type="application/javascript")
         return {"error": "File not found"}
 
-    @app.get("/css/{file_path:path}")
+    @app.get("/css/{file_path:path}", include_in_schema=False)
     async def serve_css_modules(file_path: str):
         """Serve CSS files from css/ directory"""
         css_file = FRONTEND_DIR / "css" / file_path
@@ -956,15 +1231,15 @@ if FRONTEND_DIR.exists():
             return FileResponse(css_file, media_type="text/css")
         raise HTTPException(status_code=404, detail="CSS file not found")
 
-    @app.get("/merlina.png")
+    @app.get("/merlina.png", include_in_schema=False)
     async def serve_logo():
         return FileResponse(FRONTEND_DIR / "merlina.png", media_type="image/png")
 
-    @app.get("/favicon.ico")
+    @app.get("/favicon.ico", include_in_schema=False)
     async def serve_favicon():
         return FileResponse(FRONTEND_DIR / "favicon.ico", media_type="image/x-icon")
 else:
-    @app.get("/")
+    @app.get("/", include_in_schema=False)
     async def root():
         return {
             "name": "Merlina",
@@ -974,7 +1249,7 @@ else:
         }
 
 # API Endpoints
-@app.get("/health")
+@app.get("/health", tags=["System"], summary="Health check")
 async def health_check():
     """
     Health check endpoint for load balancers and monitoring.
@@ -1003,7 +1278,7 @@ async def health_check():
 
     # Check database connectivity
     try:
-        db_stats = job_manager.get_stats()
+        db_stats = await asyncio.to_thread(job_manager.get_stats)
         checks["database"] = {
             "connected": True,
             "total_jobs": db_stats.get("total_jobs", 0)
@@ -1045,8 +1320,9 @@ async def health_check():
     }
 
 
-@app.get("/api")
+@app.get("/api", tags=["System"], summary="API overview")
 async def api_info():
+    """Overview of the API with pointers to the most commonly used endpoints."""
     return {
         "name": "Merlina",
         "version": __version__,
@@ -1057,17 +1333,19 @@ async def api_info():
             "GET /jobs": "List all jobs",
             "GET /version": "Get version information",
             "GET /health": "Health check for monitoring",
-            "GET /api/docs": "API documentation"
+            "GET /docs": "Interactive API documentation (Swagger UI)",
+            "GET /redoc": "API documentation (ReDoc)",
+            "GET /openapi.json": "OpenAPI specification"
         }
     }
 
-@app.get("/version")
+@app.get("/version", tags=["System"], summary="Version information")
 async def get_version():
     """Get detailed version information"""
     return get_version_info()
 
 
-@app.get("/env/secrets")
+@app.get("/env/secrets", tags=["System"], summary="Server-side secret availability")
 async def get_env_secrets_status():
     """
     Report which secrets are configured on the server via .env or environment.
@@ -1079,7 +1357,41 @@ async def get_env_secrets_status():
     return env_secret_status()
 
 
-@app.get("/llama-cpp/status")
+class HFNamespacesRequest(BaseModel):
+    """Ask the Hub which namespaces a token may publish to."""
+    hf_token: Optional[str] = Field(
+        None,
+        description="HuggingFace token. Falls back to HF_TOKEN in the server's .env."
+    )
+
+    @model_validator(mode="after")
+    def _fill_hf_token_from_env(self):
+        self.hf_token = resolve_hf_token(self.hf_token)
+        return self
+
+
+@app.post("/hf/namespaces", tags=["System"], summary="List HuggingFace namespaces for a token")
+async def list_hf_namespaces(request: HFNamespacesRequest):
+    """
+    List the namespaces (the token owner's account plus every organization
+    they belong to) that a HuggingFace token can publish models to.
+
+    The UI uses this to offer an org picker at upload time — uploading with a
+    bare model name silently targets the personal account, which is what makes
+    org uploads 404.
+    """
+    from src.hf_namespaces import HFNamespaceError, list_namespaces
+
+    try:
+        return await asyncio.to_thread(list_namespaces, request.hf_token)
+    except HFNamespaceError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.warning(f"Failed to list HuggingFace namespaces: {exc}")
+        raise HTTPException(status_code=502, detail=f"Could not list namespaces: {exc}")
+
+
+@app.get("/llama-cpp/status", tags=["System"], summary="llama.cpp availability")
 async def get_llama_cpp_status():
     """
     Report whether llama.cpp is resolvable so the UI can enable/disable
@@ -1097,13 +1409,13 @@ async def get_llama_cpp_status():
     return resolution
 
 
-@app.get("/presets")
+@app.get("/presets", tags=["Presets"], summary="List presets for all training modes")
 async def list_presets():
     """List recommended presets for all training modes."""
     return get_all_presets()
 
 
-@app.get("/presets/{training_mode}")
+@app.get("/presets/{training_mode}", tags=["Presets"], summary="Get preset for a training mode")
 async def get_training_preset(training_mode: str):
     """Get recommended hyperparameters for a training mode.
 
@@ -1119,7 +1431,7 @@ async def get_training_preset(training_mode: str):
     return preset
 
 
-@app.post("/validate", response_model=dict)
+@app.post("/validate", response_model=dict, tags=["Training"], summary="Validate a training configuration")
 async def validate_training_config(config: TrainingConfig):
     """
     Validate training configuration before starting.
@@ -1202,14 +1514,82 @@ async def preview_remote_plan(config: TrainingConfig):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+@app.post("/estimate/vram", response_model=dict, tags=["Training"], summary="Estimate training VRAM for a configuration")
+async def estimate_training_vram_endpoint(config: TrainingConfig):
+    """
+    Architecture-aware VRAM estimate for a training configuration.
+
+    Reads the model's real config.json (local directory or HuggingFace Hub,
+    cache-aware) and returns a per-component breakdown: weights, LoRA/optimizer
+    states, activations, logits memory, reference model, and overhead. Does not
+    require a GPU — the UI calls this before submitting a job.
+    """
+    from src.vram_estimator import estimate_vram, get_model_profile
+
+    def _estimate():
+        hf_token = config.hf_token or os.getenv("HF_TOKEN")
+        profile = get_model_profile(config.base_model, hf_token=hf_token)
+        if profile is None:
+            return None
+        return estimate_vram(
+            profile,
+            batch_size=config.batch_size,
+            max_length=config.max_length,
+            training_mode=config.training_mode,
+            use_4bit=config.use_4bit,
+            use_lora=config.use_lora,
+            lora_r=config.lora_r,
+            target_modules=config.target_modules,
+            modules_to_save=config.modules_to_save,
+            gradient_checkpointing=config.gradient_checkpointing,
+            optimizer_type=config.optimizer_type,
+            attn_implementation=config.attn_implementation,
+            use_liger=config.use_liger,
+        )
+
+    try:
+        estimate = await asyncio.wait_for(asyncio.to_thread(_estimate), timeout=20.0)
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="VRAM estimation timed out")
+    except Exception as e:
+        logger.error(f"VRAM estimation error: {e}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if estimate is None:
+        return {
+            "available": False,
+            "reason": (
+                f"Could not determine the architecture of '{config.base_model}' "
+                "(no readable config.json and no size in the name)."
+            ),
+        }
+
+    result = estimate.to_dict()
+    result["available"] = True
+
+    # Include what the GPU can actually offer when one is present, so the UI
+    # can show estimate-vs-capacity in the same place.
+    try:
+        if torch.cuda.is_available():
+            result["gpu_total_gb"] = round(
+                torch.cuda.get_device_properties(0).total_memory / (1024**3), 2
+            )
+    except Exception:
+        pass
+
+    return result
+
+
 def _make_training_callback(event_loop):
     """Create a training callback that auto-selects single-process or DDP.
 
     Returns a callback suitable for JobQueue.submit().
     """
-    from src.training_runner import run_training_sync, run_training_distributed, _get_distributed_gpu_count
-
     def training_callback(job_id: str, config_dict: dict):
+        # Imported here so the heavy training stack (grimoire, peft, etc.)
+        # loads on the queue worker thread — importing it on the API event
+        # loop would freeze every endpoint until the import finishes.
+        from src.training_runner import run_training_sync, run_training_distributed, _get_distributed_gpu_count
         from pydantic import TypeAdapter
         config_obj = TypeAdapter(TrainingConfig).validate_python(config_dict)
 
@@ -1224,11 +1604,19 @@ def _make_training_callback(event_loop):
 
         strategy = config_obj.multi_gpu_strategy
         num_gpus = _get_distributed_gpu_count(config_obj)
-        use_distributed = strategy != "single" and num_gpus > 1
+        # Run training in a subprocess whenever a GPU is present, even for a
+        # single GPU. The subprocess path (run_training_distributed ->
+        # accelerate launch -> train_worker.py) isolates the heavy, GIL-holding
+        # model-load + train loop from the API event loop, so /health, /status,
+        # and /jobs/*/stop stay responsive *during* training. Running in-thread
+        # (the old num_gpus > 1 gate) froze every endpoint for the whole run.
+        # strategy == "single" is the escape hatch back to in-thread execution.
+        use_subprocess = strategy != "single" and num_gpus >= 1
 
-        if use_distributed:
+        if use_subprocess:
+            mode = "DDP" if num_gpus > 1 else "single-GPU subprocess"
             logger.info(
-                f"Using distributed DDP training with {num_gpus} GPUs "
+                f"Using {mode} training with {num_gpus} GPU(s) "
                 f"(strategy={strategy})"
             )
             run_training_distributed(
@@ -1242,7 +1630,7 @@ def _make_training_callback(event_loop):
     return training_callback
 
 
-@app.post("/train", response_model=JobResponse)
+@app.post("/train", response_model=JobResponse, tags=["Training"], summary="Submit a training job")
 async def create_training_job(config: TrainingConfig, priority: Optional[str] = "normal"):
     """
     Create and queue a training job.
@@ -1290,32 +1678,60 @@ async def create_training_job(config: TrainingConfig, priority: Optional[str] = 
     }
     job_priority = priority_map.get(priority.lower(), JobPriority.NORMAL)
 
-    # Create job in database
-    job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    job_manager.create_job(job_id, config.model_dump())
-
     # Get the current event loop for WebSocket updates
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = None
 
+    # Build the callback BEFORE creating the job record: everything that can
+    # fail should fail while no job row exists yet, so the client never sees
+    # a lost response for a job that was actually created. (The heavy
+    # training-stack import happens inside the callback, on the queue worker
+    # thread — never on this event loop.)
     training_callback = _make_training_callback(loop)
 
-    # Submit job to queue (remote jobs have their own queue so they never
-    # contend with local-GPU slots)
-    is_remote = bool(config.remote and config.remote.enabled)
-    target_queue = remote_job_queue if is_remote else job_queue
-    position = target_queue.submit(
-        job_id=job_id,
-        config=config.model_dump(),
-        callback=training_callback,
-        priority=job_priority
-    )
+    # Create job in database
+    job_id = _new_job_id()
+    await asyncio.to_thread(job_manager.create_job, job_id, config.model_dump())
 
-    # Return response with warnings if any
+    # From this point the job exists server-side: any internal failure must
+    # still produce a JSON body that names the job, never a broken response.
+    try:
+        # Submit job to queue (remote jobs have their own queue so they never
+        # contend with local-GPU slots)
+        is_remote = bool(config.remote and config.remote.enabled)
+        target_queue = remote_job_queue if is_remote else job_queue
+        position = target_queue.submit(
+            job_id=job_id,
+            config=config.model_dump(),
+            callback=training_callback,
+            priority=job_priority
+        )
+    except Exception as e:
+        logger.error(f"Failed to queue job {job_id}: {e}", exc_info=True)
+        try:
+            await asyncio.to_thread(
+                job_manager.update_job, job_id, status="failed", error=f"Failed to queue job: {e}"
+            )
+        except Exception:
+            logger.exception(f"Could not mark job {job_id} as failed after queue error")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": f"Job {job_id} was created but could not be queued",
+                "job_id": job_id,
+                "error": str(e),
+            }
+        )
+
+    # Return response with warnings if any. Position can be None if an idle
+    # worker picked the job up before we read it — that means it started.
     queue_label = "remote queue" if is_remote else "queue"
-    message = f"Training spell cast! Job {job_id} queued at position {position} ({queue_label})."
+    if position is None:
+        message = f"Training spell cast! Job {job_id} started immediately."
+    else:
+        message = f"Training spell cast! Job {job_id} queued at position {position} ({queue_label})."
     if validation_results.get("warnings"):
         message += f" Note: {len(validation_results['warnings'])} warning(s) detected."
 
@@ -1325,51 +1741,51 @@ async def create_training_job(config: TrainingConfig, priority: Optional[str] = 
         message=message
     )
 
-@app.get("/status/{job_id}", response_model=JobStatus)
+@app.get("/status/{job_id}", response_model=JobStatus, tags=["Training"], summary="Get training job status")
 async def get_job_status(job_id: str):
     """Get status of a training job with queue information"""
-    if job_id not in jobs:
+    job = await asyncio.to_thread(job_manager.get_job, job_id)
+    if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-
-    job = jobs[job_id]
 
     # Get queue status
     queue_status = job_queue.get_status(job_id)
 
     return JobStatus(
         job_id=job_id,
-        status=job["status"],
-        progress=job.get("progress", 0.0),
-        current_step=job.get("current_step"),
-        total_steps=job.get("total_steps"),
-        loss=job.get("loss"),
-        error=job.get("error"),
-        upload_error=job.get("upload_error"),
-        gguf_error=job.get("gguf_error"),
-        wandb_url=job.get("wandb_url"),
+        status=job.status,
+        progress=job.progress,
+        current_step=job.current_step,
+        total_steps=job.total_steps,
+        loss=job.loss,
+        error=job.error,
+        upload_error=job.upload_error,
+        gguf_error=job.gguf_error,
+        wandb_url=job.wandb_url,
         queue_position=queue_status.get("position"),
         queue_state=queue_status.get("state")
     )
 
-@app.get("/jobs")
+@app.get("/jobs", tags=["Jobs"], summary="List all jobs")
 async def list_jobs():
     """List all jobs"""
+    jobs_list = await asyncio.to_thread(job_manager.list_jobs)
     return {
-        job_id: {
-            "status": job["status"],
-            "progress": job.get("progress", 0.0)
+        job.job_id: {
+            "status": job.status,
+            "progress": job.progress
         }
-        for job_id, job in jobs.items()
+        for job in jobs_list
     }
 
 
-@app.get("/jobs/history")
+@app.get("/jobs/history", tags=["Jobs"], summary="Get paginated job history")
 async def get_job_history(limit: int = 50, offset: int = 0, status: Optional[str] = None):
     """
     Get job history with pagination.
     Now persisted across server restarts!
     """
-    jobs_list = job_manager.list_jobs(status=status, limit=limit, offset=offset)
+    jobs_list = await asyncio.to_thread(job_manager.list_jobs, status=status, limit=limit, offset=offset)
     return {
         "jobs": [
             {
@@ -1394,31 +1810,33 @@ async def get_job_history(limit: int = 50, offset: int = 0, status: Optional[str
     }
 
 
-@app.get("/jobs/{job_id}/config")
+@app.get("/jobs/{job_id}/config", tags=["Jobs"], summary="Get a job's training configuration")
 async def get_job_config(job_id: str):
     """
     Get the training configuration used for a specific job.
     Useful for reusing a previous job's config as a starting point for a new training run.
     """
-    job = job_manager.get_job(job_id)
+    job = await asyncio.to_thread(job_manager.get_job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
+    # Credentials (hf_token, wandb_key) are stored with the job so retries
+    # work, but must never travel back out over the API.
     return {
         "status": "success",
         "job_id": job_id,
-        "config": job.config
+        "config": strip_secrets(job.config) if job.config else job.config
     }
 
 
-@app.get("/jobs/{job_id}/metrics")
+@app.get("/jobs/{job_id}/metrics", tags=["Jobs"], summary="Get a job's training metrics")
 async def get_job_metrics(job_id: str):
     """Get detailed metrics for a job"""
-    job = job_manager.get_job(job_id)
+    job = await asyncio.to_thread(job_manager.get_job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    metrics = job_manager.get_metrics(job_id)
+    metrics = await asyncio.to_thread(job_manager.get_metrics, job_id)
     return {
         "job_id": job_id,
         "metrics": metrics,
@@ -1426,13 +1844,13 @@ async def get_job_metrics(job_id: str):
     }
 
 
-@app.post("/jobs/{job_id}/retry", response_model=JobResponse)
+@app.post("/jobs/{job_id}/retry", response_model=JobResponse, tags=["Jobs"], summary="Retry a failed or stopped job")
 async def retry_job(job_id: str, priority: Optional[str] = "normal"):
     """
     Retry a failed or stopped job with the same configuration.
     Creates a new job using the original job's config.
     """
-    job = job_manager.get_job(job_id)
+    job = await asyncio.to_thread(job_manager.get_job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -1460,23 +1878,41 @@ async def retry_job(job_id: str, priority: Optional[str] = "normal"):
     }
     job_priority = priority_map.get(priority.lower(), JobPriority.NORMAL)
 
-    # Create new job
-    new_job_id = f"job_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    job_manager.create_job(new_job_id, config.model_dump())
-
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         loop = None
 
+    # As in /train: build the callback before the job record exists.
     training_callback = _make_training_callback(loop)
 
-    position = job_queue.submit(
-        job_id=new_job_id,
-        config=config.model_dump(),
-        callback=training_callback,
-        priority=job_priority
-    )
+    # Create new job
+    new_job_id = _new_job_id()
+    await asyncio.to_thread(job_manager.create_job, new_job_id, config.model_dump())
+
+    try:
+        position = job_queue.submit(
+            job_id=new_job_id,
+            config=config.model_dump(),
+            callback=training_callback,
+            priority=job_priority
+        )
+    except Exception as e:
+        logger.error(f"Failed to queue retry job {new_job_id}: {e}", exc_info=True)
+        try:
+            await asyncio.to_thread(
+                job_manager.update_job, new_job_id, status="failed", error=f"Failed to queue job: {e}"
+            )
+        except Exception:
+            logger.exception(f"Could not mark job {new_job_id} as failed after queue error")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": f"Job {new_job_id} was created but could not be queued",
+                "job_id": new_job_id,
+                "error": str(e),
+            }
+        )
 
     return JobResponse(
         job_id=new_job_id,
@@ -1485,35 +1921,106 @@ async def retry_job(job_id: str, priority: Optional[str] = "normal"):
     )
 
 
+def _dispatch_merge_gated(
+    job_id: str,
+    config,
+    *,
+    needs_merge: bool,
+    merge,
+    work,
+    on_error,
+    thread_name: str,
+) -> Optional[int]:
+    """
+    Run ``work(merge_artifact)`` in a background thread, gating the RAM-heavy
+    LoRA merge on a job-queue slot.
+
+    The CPU bf16 merge holds ~2 bytes/param of system RAM (≈24 GB for a 12B
+    model). Post-training merges run on the queue worker so they can't race
+    the next job's startup for that memory (see ``_perform_sync_merge``);
+    this helper gives on-demand merges (job re-upload, post-hoc upload and
+    GGUF export) the same guarantee by submitting them to the job queue with
+    HIGH priority. The slot is released as soon as the merge finishes —
+    ``work`` (network upload, GGUF convert/quantize) runs in a plain
+    background thread because it doesn't compete with training for RAM.
+
+    Args:
+        job_id: Job to run under (queue tracking + status updates).
+        config: Stored config for the queue record.
+        needs_merge: When False, ``work(None)`` is spawned immediately and
+            no queue slot is taken.
+        merge: Zero-arg callable returning a MergeArtifact. Runs on the
+            queue worker thread.
+        work: One-arg callable receiving the MergeArtifact (or None). Runs
+            in a background thread.
+        on_error: One-arg callable receiving the exception, for failures
+            outside merge/work's own error handling.
+        thread_name: Name for the background work thread.
+
+    Returns:
+        The queue position when the merge was queued, else None.
+    """
+    def _spawn(merge_artifact):
+        def _thread_body():
+            try:
+                work(merge_artifact)
+            except Exception as exc:
+                on_error(exc)
+        threading.Thread(target=_thread_body, name=thread_name, daemon=False).start()
+
+    if not needs_merge:
+        _spawn(None)
+        return None
+
+    def _queue_callback(_jid, _cfg):
+        try:
+            _spawn(merge())
+        except Exception as exc:
+            on_error(exc)
+
+    return job_queue.submit(job_id, config, _queue_callback, JobPriority.HIGH)
+
+
 class UploadJobRequest(BaseModel):
     hf_token: Optional[str] = Field(
         None,
         description="HuggingFace API token. Optional if HF_TOKEN is set in the server's .env"
     )
     output_name: Optional[str] = Field(None, description="Override repository name (defaults to original output_name)")
+    hf_namespace: Optional[str] = Field(
+        None,
+        description="Namespace (org or username) to upload under. Send null "
+                    "explicitly to publish to the token's own account; omit the "
+                    "field to keep the namespace the job was trained with."
+    )
     merge_lora_before_upload: bool = Field(True, description="Merge LoRA with base model before uploading")
     hf_hub_private: bool = Field(True, description="Make HuggingFace Hub repository private")
 
     @model_validator(mode="after")
     def _fill_hf_token_from_env(self):
         self.hf_token = resolve_hf_token(self.hf_token)
+        if self.hf_namespace is not None:
+            self.hf_namespace = _clean_hf_namespace(self.hf_namespace)
         return self
 
 
-@app.post("/jobs/{job_id}/upload", response_model=JobResponse)
+@app.post("/jobs/{job_id}/upload", response_model=JobResponse, tags=["Jobs"], summary="Upload a job's model to HuggingFace Hub")
 async def upload_job(job_id: str, request: UploadJobRequest):
     """
     Upload or re-upload a completed/stopped job's model to HuggingFace Hub.
     The job must have saved model artifacts (output_dir must exist).
     """
-    job = job_manager.get_job(job_id)
+    job = await asyncio.to_thread(job_manager.get_job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    if job.status not in ("completed", "stopped"):
+    # 'failed' is allowed because a run that died part-way usually leaves an intact periodic
+    # checkpoint, and those GPU hours are worth recovering. The artifacts still have to exist —
+    # the checks below reject a failure that never got as far as writing one.
+    if job.status not in ("completed", "stopped", "failed"):
         raise HTTPException(
             status_code=400,
-            detail=f"Only completed or stopped jobs can be uploaded. Job is '{job.status}'."
+            detail=f"Only completed, stopped or failed jobs can be uploaded. Job is '{job.status}'."
         )
 
     if not job.output_dir:
@@ -1528,6 +2035,36 @@ async def upload_job(job_id: str, request: UploadJobRequest):
             status_code=400,
             detail=f"Model directory not found: {output_dir}. The model files may have been deleted."
         )
+
+    # A failed run has no finalised model directory, only ``checkpoint-<step>`` subdirs holding
+    # accelerate state dicts. Extract the newest one into a real PEFT adapter so the rest of the
+    # upload path — which expects an adapter directory — works unchanged.
+    if job.status == "failed":
+        from src.checkpoint_rescue import extract_adapter, find_resumable_adapter
+
+        ckpt = find_resumable_adapter(output_dir)
+        if ckpt is None:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Job failed and no checkpoint containing LoRA weights was found under "
+                    f"{output_dir}. Nothing to recover."
+                ),
+            )
+        rescue_dir = os.path.join(output_dir, "rescued_adapter")
+        try:
+            from pydantic import TypeAdapter as _TA
+            _cfg = _TA(TrainingConfig).validate_python(job.config) if job.config else None
+            await asyncio.to_thread(extract_adapter, ckpt, rescue_dir, _cfg)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Could not extract an adapter from {ckpt}: {exc}",
+            )
+        logger.info("Recovered adapter from %s for failed job %s", ckpt, job_id)
+        output_dir = rescue_dir
 
     if not job.config:
         raise HTTPException(
@@ -1552,6 +2089,10 @@ async def upload_job(job_id: str, request: UploadJobRequest):
     config.hf_hub_private = request.hf_hub_private
     if request.output_name:
         config.output_name = request.output_name
+    # Distinguish "not specified" (keep the job's namespace) from an explicit
+    # null (publish to the token's own account).
+    if "hf_namespace" in request.model_fields_set:
+        config.hf_namespace = request.hf_namespace
 
     training_mode = config.training_mode
 
@@ -1562,10 +2103,7 @@ async def upload_job(job_id: str, request: UploadJobRequest):
         event_loop = None
 
     # Clear any previous upload error before retrying
-    job_manager.update_job(job_id, upload_error="")
-
-    # Start upload in background thread
-    from src.training_runner import _run_background_upload
+    await asyncio.to_thread(job_manager.update_job, job_id, upload_error="")
 
     # Diffusion jobs need the is_diffusion flag so the helper skips the
     # LLM merge path and the model card renders for diffusers.
@@ -1574,14 +2112,82 @@ async def upload_job(job_id: str, request: UploadJobRequest):
         or training_mode.lower().startswith("diffusion_")
     )
 
-    upload_thread = threading.Thread(
-        target=_run_background_upload,
-        args=(config, output_dir, training_mode, job_id, job_manager, event_loop),
-        kwargs={"is_diffusion": is_diffusion},
-        name=f"UploadThread-{job_id}",
-        daemon=False
+    # _run_background_upload no longer merges on its own — it expects a
+    # pre-merged artifact from _perform_sync_merge and otherwise falls back
+    # to uploading the LoRA adapter only.
+    needs_merge = (
+        not is_diffusion
+        and bool(config.use_lora)
+        and config.merge_lora_before_upload
     )
-    upload_thread.start()
+
+    # Resolved lazily (may fetch the base model's config) and cached so the
+    # merge and the upload agree on the answer.
+    _vlm_cache: dict = {}
+
+    def _is_vlm() -> bool:
+        if "value" not in _vlm_cache:
+            value = False
+            if not is_diffusion:
+                try:
+                    value = _resolve_is_vlm(
+                        getattr(config, "model_type", "auto") or "auto",
+                        config.base_model,
+                    )
+                except Exception:
+                    value = False
+            _vlm_cache["value"] = value
+        return _vlm_cache["value"]
+
+    def _merge():
+        # Imported on the worker thread — the heavy training stack must
+        # never be imported on the API event loop.
+        from src.training_runner import _perform_sync_merge
+        return _perform_sync_merge(
+            config, output_dir, job_id, job_manager,
+            event_loop=event_loop,
+            is_vlm=_is_vlm(),
+            num_consumers=1,
+        )
+
+    def _upload(merge_artifact):
+        from src.training_runner import _run_background_upload
+        _run_background_upload(
+            config, output_dir, training_mode, job_id, job_manager,
+            event_loop, _is_vlm(),
+            merge_artifact=merge_artifact,
+            is_diffusion=is_diffusion,
+        )
+
+    def _on_error(exc):
+        logger.error(f"Re-upload failed for job {job_id}: {exc}", exc_info=True)
+        # Training itself succeeded — keep the job completed, surface the
+        # upload failure separately so the user can retry.
+        job_manager.update_job(job_id, status="completed", upload_error=str(exc))
+
+    position = _dispatch_merge_gated(
+        job_id, job.config,
+        needs_merge=needs_merge,
+        merge=_merge,
+        work=_upload,
+        on_error=_on_error,
+        thread_name=f"UploadThread-{job_id}",
+    )
+
+    if position is not None:
+        logger.info(
+            f"📤 Merge + upload queued for job {job_id} -> {config.output_name} "
+            f"(position {position})"
+        )
+        return JobResponse(
+            job_id=job_id,
+            status="queued",
+            message=(
+                f"Upload queued at position {position} for {config.output_name}. "
+                "The LoRA merge waits for a free training slot, then the merged "
+                "model is pushed to HuggingFace Hub."
+            )
+        )
 
     logger.info(f"📤 Background upload started for job {job_id} -> {config.output_name}")
 
@@ -1592,14 +2198,14 @@ async def upload_job(job_id: str, request: UploadJobRequest):
     )
 
 
-@app.post("/jobs/{job_id}/stop")
+@app.post("/jobs/{job_id}/stop", tags=["Jobs"], summary="Stop or cancel a job")
 async def stop_job(job_id: str):
     """
     Cancel or stop a job.
     - For queued jobs: Removes from queue immediately
     - For running jobs: Graceful stop after current step
     """
-    job = job_manager.get_job(job_id)
+    job = await asyncio.to_thread(job_manager.get_job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
@@ -1629,14 +2235,18 @@ async def stop_job(job_id: str):
     # orchestrator polls stop_requested and tears the instance down.
     stoppable_statuses = [
         "training", "loading_model", "loading_dataset", "initializing",
+        "saving", "stopping",
         "provisioning", "downloading", "merging",
     ]
     if queue_status.get("state") == "running" or job.status in stoppable_statuses:
         success = active_queue.cancel(job_id)  # This will set stop_requested flag
         if not success:
-            # Not tracked by either queue (e.g. server restart) — set the
-            # flag directly; remote orchestrators poll the DB regardless.
-            success = job_manager.request_stop(job_id)
+            # The queue may have lost track of the job (e.g. the API restarted
+            # and the worker was re-adopted by src/worker_reattach.py). The
+            # worker polls the DB flag directly, and any re-attached monitor
+            # escalates SIGTERM→SIGKILL, so setting the flag is enough.
+            # Remote orchestrators poll the same DB flag.
+            success = await asyncio.to_thread(job_manager.request_stop, job_id)
         if success:
             logger.info(f"Stop requested for running job {job_id}")
             return {
@@ -1654,28 +2264,43 @@ async def stop_job(job_id: str):
     }
 
 
-@app.delete("/jobs/{job_id}")
+@app.delete("/jobs/{job_id}", tags=["Jobs"], summary="Delete a job")
 async def delete_job(job_id: str):
     """Delete a specific job and its metrics"""
-    success = job_manager.delete_job(job_id)
+    success = await asyncio.to_thread(job_manager.delete_job, job_id)
     if not success:
         raise HTTPException(status_code=404, detail="Job not found")
+
+    # A deleted job must not still be waiting to run: drop its queue entry so
+    # it stops showing up in queue listings and its config (which can hold an
+    # HF token) is released. A worker that grabbed the entry first sees the
+    # missing record and skips execution.
+    removed_from_queue = job_queue.remove(job_id)
+    if removed_from_queue:
+        logger.info(f"Deleted job {job_id} was queued - removed from queue")
 
     return {
         "status": "success",
         "message": f"Job {job_id} deleted successfully",
-        "job_id": job_id
+        "job_id": job_id,
+        "removed_from_queue": removed_from_queue
     }
 
 
-@app.delete("/jobs")
+@app.delete("/jobs", tags=["Jobs"], summary="Delete all jobs")
 async def clear_all_jobs():
     """Delete all jobs and metrics"""
-    count = job_manager.clear_all_jobs()
+    count = await asyncio.to_thread(job_manager.clear_all_jobs)
+
+    # Same reasoning as the single-job delete: every record is gone, so no
+    # queued job can still run.
+    removed_from_queue = job_queue.remove_all_queued()
+
     return {
         "status": "success",
         "message": f"Cleared all jobs ({count} jobs deleted)",
-        "deleted_count": count
+        "deleted_count": count,
+        "removed_from_queue": removed_from_queue
     }
 
 
@@ -1688,7 +2313,7 @@ async def websocket_endpoint(websocket: WebSocket, job_id: str):
     await websocket_manager.connect(websocket, job_id)
     try:
         # Send initial status
-        job = job_manager.get_job(job_id)
+        job = await asyncio.to_thread(job_manager.get_job, job_id)
         if job:
             await websocket.send_json({
                 "type": "status_update",
@@ -1716,11 +2341,11 @@ async def websocket_endpoint(websocket: WebSocket, job_id: str):
         await websocket_manager.disconnect(websocket, job_id)
 
 
-@app.get("/stats")
+@app.get("/stats", tags=["System"], summary="Database and system statistics")
 async def get_stats():
     """Get database and system statistics"""
     return {
-        "database": job_manager.get_stats(),
+        "database": await asyncio.to_thread(job_manager.get_stats),
         "websockets": {
             "total_connections": websocket_manager.get_connection_count()
         },
@@ -1764,9 +2389,12 @@ def _protected_model_names() -> set:
     return protected
 
 
-@app.get("/disk/analysis")
-async def disk_analysis(keep: int = 1):
+@app.get("/disk/analysis", tags=["Disk & Cleanup"], summary="Analyze disk usage of results and models")
+def disk_analysis(keep: int = 1):
     """Read-only breakdown of results/ and models/ disk usage.
+
+    Sync endpoint on purpose: walking large results/models trees can take
+    seconds to minutes, so it runs in the threadpool, not on the event loop.
 
     ``keep`` controls how many checkpoints per job are treated as keepers when
     computing the reclaimable estimate (default 1 = keep only the latest). Each
@@ -1791,9 +2419,12 @@ class DiskCleanupRequest(BaseModel):
     apply: bool = Field(False, description="Actually delete (False = dry-run preview)")
 
 
-@app.post("/disk/cleanup")
-async def disk_cleanup(req: DiskCleanupRequest):
+@app.post("/disk/cleanup", tags=["Disk & Cleanup"], summary="Prune old checkpoints")
+def disk_cleanup(req: DiskCleanupRequest):
     """Prune old checkpoints. Dry-run unless ``apply=true``.
+
+    Sync endpoint on purpose — deleting multi-GB checkpoints must not block
+    the event loop.
 
     Never touches active jobs. Returns the list of (would-be) deletions and the
     total bytes freed.
@@ -1807,7 +2438,7 @@ async def disk_cleanup(req: DiskCleanupRequest):
     )
 
 
-@app.get("/disk/hf-cache")
+@app.get("/disk/hf-cache", tags=["Disk & Cleanup"], summary="Scan the HuggingFace cache")
 async def disk_hf_cache(stale_days: int = 90):
     """Read-only scan of the HuggingFace cache (~/.cache/huggingface/hub).
 
@@ -1824,7 +2455,7 @@ class HFCacheDeleteRequest(BaseModel):
     apply: bool = Field(False, description="Actually delete (False = dry-run preview)")
 
 
-@app.post("/disk/hf-cache/delete")
+@app.post("/disk/hf-cache/delete", tags=["Disk & Cleanup"], summary="Delete HuggingFace cache repos")
 async def disk_hf_cache_delete(req: HFCacheDeleteRequest):
     """Delete selected HF cache repos via huggingface_hub. Dry-run unless apply.
 
@@ -1839,9 +2470,12 @@ class ModelDeleteRequest(BaseModel):
     apply: bool = Field(False, description="Actually delete (False = dry-run preview)")
 
 
-@app.post("/disk/models/delete")
-async def disk_models_delete(req: ModelDeleteRequest):
+@app.post("/disk/models/delete", tags=["Disk & Cleanup"], summary="Delete saved models")
+def disk_models_delete(req: ModelDeleteRequest):
     """Delete saved models by name. Dry-run unless ``apply``.
+
+    Sync endpoint on purpose — deleting multi-GB model dirs must not block
+    the event loop.
 
     Refuses any model that is an active job's output or currently loaded for
     inference. Deletion is permanent for models that were never pushed to the
@@ -1866,7 +2500,7 @@ def _loaded_gguf_path() -> Optional[str]:
         return None
 
 
-@app.get("/disk/artifacts")
+@app.get("/disk/artifacts", tags=["Disk & Cleanup"], summary="List derived artifacts (GGUF, W&B logs)")
 async def disk_artifacts():
     """Read-only breakdown of derived artifacts: GGUF exports + W&B run logs."""
     wandb_dir = SCRIPT_DIR / "wandb"
@@ -1878,9 +2512,12 @@ class GGUFDeleteRequest(BaseModel):
     apply: bool = Field(False, description="Actually delete (False = dry-run preview)")
 
 
-@app.post("/disk/artifacts/gguf/delete")
-async def disk_gguf_delete(req: GGUFDeleteRequest):
+@app.post("/disk/artifacts/gguf/delete", tags=["Disk & Cleanup"], summary="Delete GGUF exports")
+def disk_gguf_delete(req: GGUFDeleteRequest):
     """Delete GGUF exports by {model, file}. Dry-run unless ``apply``.
+
+    Sync endpoint on purpose — deleting multi-GB GGUF files must not block
+    the event loop.
 
     GGUF is always regenerable from the saved model; refuses one that is
     currently loaded for inference.
@@ -1893,13 +2530,16 @@ class WandbClearRequest(BaseModel):
     apply: bool = Field(False, description="Actually delete (False = dry-run preview)")
 
 
-@app.post("/disk/artifacts/wandb/clear")
-async def disk_wandb_clear(req: WandbClearRequest):
-    """Delete local W&B run logs except the active run. Dry-run unless apply."""
+@app.post("/disk/artifacts/wandb/clear", tags=["Disk & Cleanup"], summary="Clear local W&B run logs")
+def disk_wandb_clear(req: WandbClearRequest):
+    """Delete local W&B run logs except the active run. Dry-run unless apply.
+
+    Sync endpoint on purpose — log-dir deletion must not block the event loop.
+    """
     return clear_wandb_runs(SCRIPT_DIR / "wandb", apply=req.apply)
 
 
-@app.get("/queue/status")
+@app.get("/queue/status", tags=["Queue"], summary="Get queue status and statistics")
 async def get_queue_status():
     """
     Get overall queue status and statistics.
@@ -1921,7 +2561,7 @@ async def get_queue_status():
     }
 
 
-@app.get("/queue/jobs")
+@app.get("/queue/jobs", tags=["Queue"], summary="List queued and running jobs")
 async def list_queue_jobs():
     """
     List all jobs in the queue (queued and running).
@@ -1935,7 +2575,7 @@ async def list_queue_jobs():
 
 
 # GPU management endpoints
-@app.get("/gpu/list")
+@app.get("/gpu/list", tags=["GPU"], summary="List all GPUs")
 async def list_gpus():
     """
     List all available GPUs with detailed information.
@@ -1972,7 +2612,7 @@ async def list_gpus():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/gpu/available")
+@app.get("/gpu/available", tags=["GPU"], summary="List GPUs with sufficient free memory")
 async def get_available_gpus(min_free_memory_mb: int = 4000):
     """
     Get list of available GPUs with sufficient free memory.
@@ -2007,7 +2647,7 @@ async def get_available_gpus(min_free_memory_mb: int = 4000):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/gpu/recommended")
+@app.get("/gpu/recommended", tags=["GPU"], summary="Get the recommended GPU for training")
 async def get_recommended_gpu():
     """
     Get the recommended GPU for training.
@@ -2039,7 +2679,7 @@ async def get_recommended_gpu():
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/gpu/{index}")
+@app.get("/gpu/{index}", tags=["GPU"], summary="Get details for a specific GPU")
 async def get_gpu_info(index: int):
     """
     Get detailed information about a specific GPU.
@@ -2097,9 +2737,14 @@ def _build_additional_loaders(config: DatasetConfig, hf_token=None):
     return extras
 
 
-@app.post("/dataset/preview")
-async def preview_dataset(config: DatasetConfig, offset: int = 0, limit: int = 10):
-    """Preview dataset without formatting"""
+@app.post("/dataset/preview", tags=["Datasets"], summary="Preview raw dataset samples")
+def preview_dataset(config: DatasetConfig, offset: int = 0, limit: int = 10):
+    """Preview dataset without formatting.
+
+    Sync endpoint on purpose: dataset loading can hit the network (HF Hub)
+    and block for a long time, so FastAPI must run it in the threadpool
+    instead of on the event loop.
+    """
     try:
         # Create loader using factory
         try:
@@ -2158,9 +2803,12 @@ async def preview_dataset(config: DatasetConfig, offset: int = 0, limit: int = 1
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/dataset/preview-formatted")
-async def preview_formatted_dataset(config: DatasetConfig, offset: int = 0, limit: int = 5):
-    """Preview dataset with formatting applied"""
+@app.post("/dataset/preview-formatted", tags=["Datasets"], summary="Preview formatted dataset samples")
+def preview_formatted_dataset(config: DatasetConfig, offset: int = 0, limit: int = 5):
+    """Preview dataset with formatting applied.
+
+    Sync endpoint on purpose — see preview_dataset.
+    """
     try:
         # Create loader using factory
         try:
@@ -2189,10 +2837,39 @@ async def preview_formatted_dataset(config: DatasetConfig, offset: int = 0, limi
                     format_type='tokenizer',
                     tokenizer=cached_tokenizer
                 )
+            elif config.model_name:
+                # Load it rather than quietly previewing a different format. Silently substituting
+                # chatml shows the user a preview that does not match what training will build,
+                # and for a tool-calling dataset it fails outright, because rendering a tool call
+                # needs the model's own template. Same cache the preload endpoint fills, so this
+                # costs a download once and is free afterwards.
+                logger.info(f"Loading tokenizer for preview: {config.model_name}")
+                try:
+                    loaded = AutoTokenizer.from_pretrained(
+                        config.model_name, trust_remote_code=True,
+                    )
+                    with _tokenizer_cache_lock:
+                        tokenizer_cache[config.model_name] = loaded
+                    formatter = get_formatter(format_type='tokenizer', tokenizer=loaded)
+                except Exception as exc:
+                    logger.warning(
+                        f"Could not load tokenizer for {config.model_name} ({exc}); "
+                        "previewing with 'chatml' instead."
+                    )
+                    formatter_type = 'chatml'
+                    formatter = get_formatter(
+                        format_type=formatter_type,
+                        custom_templates=config.format.custom_templates,
+                        enable_thinking=config.format.enable_thinking,
+                        auto_detect_thinking=config.format.auto_detect_thinking,
+                    )
             else:
-                # Fall back to chatml
-                logger.warning("Cannot preview with 'tokenizer' format without preloading the model. Using 'chatml' for preview.")
-                logger.info("Tip: Use the 'Validate & Preload Model' button to enable tokenizer format preview.")
+                # No model to load one from -- the substitution is the only option left, but say
+                # so plainly, since the preview will not match training.
+                logger.warning(
+                    "'tokenizer' format requested with no model_name; previewing with 'chatml'. "
+                    "The preview will not match what training builds."
+                )
                 formatter_type = 'chatml'
                 formatter = get_formatter(
                     format_type=formatter_type,
@@ -2239,9 +2916,12 @@ async def preview_formatted_dataset(config: DatasetConfig, offset: int = 0, limi
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/dataset/stats")
-async def get_dataset_stats(config: DatasetConfig):
-    """Compute dataset statistics: row count, avg lengths, token estimates, class balance."""
+@app.post("/dataset/stats", tags=["Datasets"], summary="Compute dataset statistics")
+def get_dataset_stats(config: DatasetConfig):
+    """Compute dataset statistics: row count, avg lengths, token estimates, class balance.
+
+    Sync endpoint on purpose — see preview_dataset.
+    """
     try:
         try:
             loader = create_loader_from_config(
@@ -2285,11 +2965,13 @@ async def get_dataset_stats(config: DatasetConfig):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/dataset/columns")
-async def get_dataset_columns(config: DatasetConfig):
+@app.post("/dataset/columns", tags=["Datasets"], summary="Inspect dataset columns for mapping")
+def get_dataset_columns(config: DatasetConfig):
     """
     Get column names and sample data from dataset for mapping.
     Returns available columns and a few sample rows.
+
+    Sync endpoint on purpose — see preview_dataset.
     """
     try:
         # Create loader using factory
@@ -2326,7 +3008,7 @@ async def get_dataset_columns(config: DatasetConfig):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.post("/dataset/upload")
+@app.post("/dataset/upload", tags=["Datasets"], summary="Upload a dataset (legacy)")
 async def upload_dataset(file: bytes = None, filename: str = None):
     """Upload a dataset file"""
     from fastapi import File, Form, UploadFile
@@ -2339,7 +3021,7 @@ async def upload_dataset(file: bytes = None, filename: str = None):
 # Proper upload endpoint with FastAPI's UploadFile
 from fastapi import File, Form, UploadFile as FastAPIUploadFile
 
-@app.post("/dataset/upload-file")
+@app.post("/dataset/upload-file", tags=["Datasets"], summary="Upload a dataset file")
 async def upload_dataset_file(file: FastAPIUploadFile = File(...)):
     """Upload a dataset file and return dataset ID"""
     try:
@@ -2374,7 +3056,7 @@ async def upload_dataset_file(file: FastAPIUploadFile = File(...)):
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@app.get("/dataset/uploads")
+@app.get("/dataset/uploads", tags=["Datasets"], summary="List uploaded datasets")
 async def list_uploaded_datasets():
     """List all uploaded datasets with TTL information"""
     from datetime import timedelta
@@ -2426,7 +3108,7 @@ class DiffusionGenerateRequest(BaseModel):
     seed: int = Field(0, ge=0)
 
 
-@app.get("/diffusion/loras")
+@app.get("/diffusion/loras", tags=["Diffusion"], summary="List trained diffusion LoRAs")
 async def list_diffusion_loras():
     """List trained LoRAs under ./models/ that look like diffusers checkpoints
     (contain pytorch_lora_weights.safetensors). Powers the playground picker.
@@ -2450,14 +3132,36 @@ async def list_diffusion_loras():
     return {"loras": loras}
 
 
-@app.post("/diffusion/generate")
-async def diffusion_generate(req: DiffusionGenerateRequest):
+# Serializes /diffusion/generate. Generations used to be implicitly
+# serialized by blocking the event loop; now that they run in the
+# threadpool, this lock keeps concurrent requests from fighting for VRAM.
+_diffusion_generate_lock = threading.Lock()
+
+
+@app.post("/diffusion/generate", tags=["Diffusion"], summary="Generate an image with a trained LoRA")
+def diffusion_generate(req: DiffusionGenerateRequest):
     """Run a one-off diffusion inference in a subprocess.
 
     Reuses ``scripts/generate_diffusion_samples.py`` with a single-prompt
     list so the same code path drives both post-training previews and the
     playground. Returns a URL to the generated PNG.
+
+    Sync endpoint on purpose: the subprocess can run for up to 30 minutes,
+    so FastAPI must run this in the threadpool, never on the event loop.
     """
+    if not _diffusion_generate_lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail="Another diffusion generation is already in progress",
+        )
+    try:
+        return _diffusion_generate_locked(req)
+    finally:
+        _diffusion_generate_lock.release()
+
+
+def _diffusion_generate_locked(req: DiffusionGenerateRequest):
+    """Body of /diffusion/generate; caller holds ``_diffusion_generate_lock``."""
     import subprocess
     import sys
     import hashlib
@@ -2508,7 +3212,7 @@ async def diffusion_generate(req: DiffusionGenerateRequest):
     }
 
 
-@app.get("/dataset/preview-images")
+@app.get("/dataset/preview-images", tags=["Datasets"], summary="Preview an image dataset")
 async def preview_image_dataset(
     jsonl_path: str,
     limit: int = 24,
@@ -2601,7 +3305,7 @@ async def preview_image_dataset(
     }
 
 
-@app.get("/dataset/image-content")
+@app.get("/dataset/image-content", tags=["Datasets"], summary="Fetch an image from an image dataset")
 async def dataset_image_content(path: str, jsonl_path: str):
     """Serve a single image file from an image dataset.
 
@@ -2658,7 +3362,7 @@ class SaveJsonlRequest(BaseModel):
     caption_column: Optional[str]    = Field(None, description="Column to write captions to (default 'prompt'; pass 'caption' for VLM-style datasets)")
 
 
-@app.post("/dataset/save-jsonl")
+@app.post("/dataset/save-jsonl", tags=["Datasets"], summary="Save edits to an image-dataset JSONL")
 async def save_jsonl_edits(req: SaveJsonlRequest):
     """Apply caption edits + row deletions to an image-dataset JSONL.
 
@@ -2731,7 +3435,7 @@ async def save_jsonl_edits(req: SaveJsonlRequest):
     }
 
 
-@app.get("/jobs/{job_id}/samples")
+@app.get("/jobs/{job_id}/samples", tags=["Jobs"], summary="Get a diffusion job's sample images")
 async def get_job_samples(job_id: str):
     """Return generated sample images for a diffusion training job.
 
@@ -2748,7 +3452,7 @@ async def get_job_samples(job_id: str):
       - ``steps``: every snapshot grouped by step, ordered oldest → newest,
         with the final batch (when present) appended as ``"final"``.
     """
-    job = job_manager.get_job(job_id)
+    job = await asyncio.to_thread(job_manager.get_job, job_id)
     if not job:
         raise HTTPException(status_code=404, detail=f"job {job_id} not found")
 
@@ -2813,7 +3517,7 @@ async def get_job_samples(job_id: str):
     }
 
 
-@app.post("/dataset/upload-images")
+@app.post("/dataset/upload-images", tags=["Datasets"], summary="Upload an image dataset")
 async def upload_image_dataset(
     files: list[FastAPIUploadFile] = File(...),
     captions: str = Form("{}"),
@@ -2883,7 +3587,7 @@ async def upload_image_dataset(
     }
 
 
-@app.post("/dataset/cleanup")
+@app.post("/dataset/cleanup", tags=["Datasets"], summary="Clean up expired uploaded datasets")
 async def cleanup_expired_uploads():
     """
     Clean up expired uploaded datasets based on TTL.
@@ -2919,7 +3623,7 @@ async def cleanup_expired_uploads():
     }
 
 
-@app.delete("/dataset/uploads/{dataset_id}")
+@app.delete("/dataset/uploads/{dataset_id}", tags=["Datasets"], summary="Delete an uploaded dataset")
 async def delete_uploaded_dataset(dataset_id: str):
     """Delete a specific uploaded dataset"""
     with _uploaded_datasets_lock:
@@ -2938,18 +3642,9 @@ async def delete_uploaded_dataset(dataset_id: str):
     }
 
 
-@app.post("/cleanup/artifacts")
-async def cleanup_failed_job_artifacts(max_age_hours: int = 72):
-    """
-    Clean up training artifacts from failed jobs.
-
-    Args:
-        max_age_hours: Delete artifacts from failed jobs older than this (default: 72 hours)
-
-    This removes:
-    - Results directories for failed/stopped jobs
-    - Incomplete model checkpoints
-    """
+def _cleanup_failed_job_artifacts_sync(max_age_hours: int) -> dict:
+    """Blocking implementation of /cleanup/artifacts — DB reads plus a
+    directory walk + rmtree per job, run off the event loop via to_thread."""
     import shutil
     from datetime import timedelta
 
@@ -2994,12 +3689,24 @@ async def cleanup_failed_job_artifacts(max_age_hours: int = 72):
     }
 
 
-@app.get("/cleanup/status")
-async def get_cleanup_status():
+@app.post("/cleanup/artifacts", tags=["Disk & Cleanup"], summary="Clean up artifacts from failed jobs")
+async def cleanup_failed_job_artifacts(max_age_hours: int = 72):
     """
-    Get information about cleanable resources.
-    Shows expired uploads and failed job artifacts that can be cleaned.
+    Clean up training artifacts from failed jobs.
+
+    Args:
+        max_age_hours: Delete artifacts from failed jobs older than this (default: 72 hours)
+
+    This removes:
+    - Results directories for failed/stopped jobs
+    - Incomplete model checkpoints
     """
+    return await asyncio.to_thread(_cleanup_failed_job_artifacts_sync, max_age_hours)
+
+
+def _get_cleanup_status_sync() -> dict:
+    """Blocking implementation of /cleanup/status — DB reads plus a directory
+    walk per failed/stopped job, run off the event loop via to_thread."""
     from datetime import timedelta
 
     now = datetime.now()
@@ -3053,6 +3760,15 @@ async def get_cleanup_status():
     }
 
 
+@app.get("/cleanup/status", tags=["Disk & Cleanup"], summary="Get cleanable resource summary")
+async def get_cleanup_status():
+    """
+    Get information about cleanable resources.
+    Shows expired uploads and failed job artifacts that can be cleaned.
+    """
+    return await asyncio.to_thread(_get_cleanup_status_sync)
+
+
 # ===== Config Management Endpoints =====
 
 class SaveConfigRequest(BaseModel):
@@ -3072,7 +3788,7 @@ class SaveConfigRequest(BaseModel):
     )
 
 
-@app.post("/configs/save")
+@app.post("/configs/save", tags=["Configs"], summary="Save a training configuration")
 async def save_config(request: SaveConfigRequest):
     """
     Save a training configuration for later reuse.
@@ -3106,7 +3822,7 @@ async def save_config(request: SaveConfigRequest):
         raise HTTPException(status_code=500, detail=f"Failed to save configuration: {str(e)}")
 
 
-@app.get("/configs/list")
+@app.get("/configs/list", tags=["Configs"], summary="List saved configurations")
 async def list_configs(tag: Optional[str] = None):
     """
     List all saved training configurations.
@@ -3127,7 +3843,7 @@ async def list_configs(tag: Optional[str] = None):
         raise HTTPException(status_code=500, detail=f"Failed to list configurations: {str(e)}")
 
 
-@app.get("/configs/{name}")
+@app.get("/configs/{name}", tags=["Configs"], summary="Load a saved configuration")
 async def get_config(name: str, include_metadata: bool = False):
     """
     Load a saved training configuration.
@@ -3154,7 +3870,7 @@ async def get_config(name: str, include_metadata: bool = False):
         raise HTTPException(status_code=500, detail=f"Failed to load configuration: {str(e)}")
 
 
-@app.delete("/configs/{name}")
+@app.delete("/configs/{name}", tags=["Configs"], summary="Delete a saved configuration")
 async def delete_config(name: str):
     """
     Delete a saved training configuration.
@@ -3187,7 +3903,7 @@ class ExportConfigRequest(BaseModel):
     output_path: str = Field(..., description="Path to export the configuration to")
 
 
-@app.post("/configs/export")
+@app.post("/configs/export", tags=["Configs"], summary="Export a configuration to a file")
 async def export_config(request: ExportConfigRequest):
     """
     Export a configuration to a specific file path.
@@ -3216,7 +3932,7 @@ class ImportConfigRequest(BaseModel):
     name: Optional[str] = Field(None, description="Optional name for the imported config")
 
 
-@app.post("/configs/import")
+@app.post("/configs/import", tags=["Configs"], summary="Import a configuration from a file")
 async def import_config(request: ImportConfigRequest):
     """
     Import a configuration from an external file.
@@ -3244,7 +3960,7 @@ async def import_config(request: ImportConfigRequest):
         raise HTTPException(status_code=500, detail=f"Failed to import configuration: {str(e)}")
 
 
-@app.post("/configs/decode-image")
+@app.post("/configs/decode-image", tags=["Configs"], summary="Decode a config from a Merlina config image")
 async def decode_config_image(file: FastAPIUploadFile = File(...)):
     """
     Decode a training config from a Merlina config image (merlina_config.png).
@@ -3281,6 +3997,50 @@ async def decode_config_image(file: FastAPIUploadFile = File(...)):
     return {"status": "success", "config": envelope, "name": name}
 
 
+class DecodeConfigTextRequest(BaseModel):
+    """Request to decode a pasted Merlina config code"""
+    payload: str = Field(
+        ...,
+        description=(
+            "A `merlina-config-v1:` code (as published in a Merlina model "
+            "card or QR code), or raw config-envelope JSON."
+        ),
+    )
+
+
+@app.post("/configs/decode-text", tags=["Configs"], summary="Decode a pasted config code")
+async def decode_config_text(request: DecodeConfigTextRequest):
+    """
+    Decode a training config from a pasted ``merlina-config-v1:`` code.
+
+    This is the text twin of ``POST /configs/decode-image``: model cards
+    published with ``share_config`` carry the whole (secret-stripped) config
+    as one compact line, so reproducing a run is a copy-paste away. Raw
+    envelope JSON is accepted too. Returns the envelope under ``config``,
+    same shape as ``GET /configs/{name}``.
+    """
+    from src.config_image import decode_config_payload
+
+    envelope = decode_config_payload(request.payload)
+    if not envelope:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "That doesn't look like a Merlina config. Paste the "
+                "`merlina-config-v1:...` code from a model card, or the "
+                "config JSON itself."
+            ),
+        )
+
+    name = ""
+    meta = envelope.get("_metadata")
+    if isinstance(meta, dict):
+        name = meta.get("name") or ""
+
+    logger.info(f"Decoded pasted training config (name: {name or 'n/a'})")
+    return {"status": "success", "config": envelope, "name": name}
+
+
 # ===== Model Preload Endpoints =====
 
 class ModelPreloadRequest(BaseModel):
@@ -3294,11 +4054,15 @@ class ModelPreloadRequest(BaseModel):
         return self
 
 
-@app.post("/model/preload")
-async def preload_model_tokenizer(request: ModelPreloadRequest):
+@app.post("/model/preload", tags=["Models"], summary="Preload a model's tokenizer")
+def preload_model_tokenizer(request: ModelPreloadRequest):
     """
     Preload a model's tokenizer for dataset preview.
     This downloads the model files and caches the tokenizer for fast preview.
+
+    Sync endpoint on purpose: the tokenizer download can hang on a slow
+    network, so FastAPI must run it in the threadpool instead of on the
+    event loop (a hung load would otherwise freeze the whole API).
     """
     try:
         model_name = request.model_name
@@ -3349,7 +4113,7 @@ async def preload_model_tokenizer(request: ModelPreloadRequest):
         raise HTTPException(status_code=400, detail=f"Failed to load tokenizer: {str(e)}")
 
 
-@app.get("/model/cached")
+@app.get("/model/cached", tags=["Models"], summary="List cached tokenizers")
 async def list_cached_models():
     """List currently cached model tokenizers"""
     return {
@@ -3358,7 +4122,7 @@ async def list_cached_models():
     }
 
 
-@app.get("/models/local")
+@app.get("/models/local", tags=["Models"], summary="List local base models")
 async def list_local_base_models():
     """
     List base models available locally for offline training.
@@ -3390,11 +4154,15 @@ _layer_cache: Dict[str, dict] = {}
 _layer_cache_lock = threading.Lock()
 
 
-@app.post("/model/layers")
-async def detect_model_layers(request: ModelLayersRequest):
+@app.post("/model/layers", tags=["Models"], summary="Detect LoRA-compatible layers")
+def detect_model_layers(request: ModelLayersRequest):
     """
     Detect LoRA-compatible layers in a model.
     Returns all Linear layer names that can be targeted by LoRA.
+
+    Sync endpoint on purpose: this loads the full model (download + CPU
+    deserialization), which must run in the threadpool, never on the
+    event loop.
     """
     import torch.nn as nn
 
@@ -3528,7 +4296,7 @@ async def detect_model_layers(request: ModelLayersRequest):
 
 # ==================== Inference Endpoints ====================
 
-@app.get("/inference/models")
+@app.get("/inference/models", tags=["Inference"], summary="List models available for inference")
 async def list_inference_models():
     """List locally trained models available for inference"""
     if settings.models_dir.is_absolute():
@@ -3602,9 +4370,27 @@ async def list_inference_models():
     return {"models": local_models}
 
 
-@app.post("/inference/load")
-async def load_inference_model(request: InferenceLoadRequest):
-    """Load a model for inference."""
+@app.post("/inference/load", tags=["Inference"], summary="Load a model for inference")
+def load_inference_model(request: InferenceLoadRequest):
+    """Load a model for inference.
+
+    Sync endpoint on purpose: model loading (download + VRAM transfer) can
+    take minutes or hang entirely, so FastAPI must run it in the threadpool
+    instead of on the event loop.
+    """
+    if not _inference_load_lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail="Another inference model load is already in progress",
+        )
+    try:
+        return _load_inference_model_locked(request)
+    finally:
+        _inference_load_lock.release()
+
+
+def _load_inference_model_locked(request: InferenceLoadRequest):
+    """Body of /inference/load; caller holds ``_inference_load_lock``."""
 
     # Unload any currently-loaded model (either backend).
     _unload_current_inference()
@@ -3801,9 +4587,13 @@ async def load_inference_model(request: InferenceLoadRequest):
         )
 
 
-@app.post("/inference/unload")
-async def unload_inference_model():
-    """Unload the current inference model to free VRAM"""
+@app.post("/inference/unload", tags=["Inference"], summary="Unload the inference model")
+def unload_inference_model():
+    """Unload the current inference model to free VRAM.
+
+    Sync endpoint on purpose: teardown (GC + CUDA cache clear, or stopping a
+    llama-server process) can take a while and must not block the event loop.
+    """
     with _inference_lock:
         has_transformers_model = _inference_state.get("model") is not None
         has_llama_server = _inference_state.get("llama_server") is not None
@@ -3817,7 +4607,7 @@ async def unload_inference_model():
     }
 
 
-@app.get("/inference/status")
+@app.get("/inference/status", tags=["Inference"], summary="Get inference model status")
 async def inference_status():
     """Get the current inference model status"""
     with _inference_lock:
@@ -3853,7 +4643,7 @@ async def inference_status():
         }
 
 
-@app.post("/inference/chat")
+@app.post("/inference/chat", tags=["Inference"], summary="Chat with the loaded model")
 async def inference_chat(request: InferenceChatRequest):
     """Generate a response from the loaded model"""
     with _inference_lock:
@@ -4018,7 +4808,7 @@ def _resolve_is_vlm(model_type: str, base_model: str) -> bool:
     return is_vlm
 
 
-@app.get("/models/{name}/artifacts")
+@app.get("/models/{name}/artifacts", tags=["Models"], summary="List a model's artifacts")
 async def get_model_artifacts(name: str):
     """List categorized artifacts (files + sizes) for a local model."""
     from src.model_artifacts import inventory_model
@@ -4030,7 +4820,7 @@ async def get_model_artifacts(name: str):
     return inv.to_dict()
 
 
-@app.delete("/models/{name}/artifacts")
+@app.delete("/models/{name}/artifacts", tags=["Models"], summary="Delete a model artifact file")
 async def delete_model_artifact(name: str, path: str):
     """
     Delete a single file inside ``./models/{name}/``.
@@ -4072,7 +4862,7 @@ async def delete_model_artifact(name: str, path: str):
     return {"deleted": path, "model": name}
 
 
-@app.get("/models/{name}/upload-state")
+@app.get("/models/{name}/upload-state", tags=["Models"], summary="Get a model's upload history")
 async def get_model_upload_state(name: str):
     """Return upload history + freshness for the Export UI."""
     from src.upload_state import summary_for_api
@@ -4080,7 +4870,7 @@ async def get_model_upload_state(name: str):
     return summary_for_api(model_dir)
 
 
-@app.post("/models/{name}/upload")
+@app.post("/models/{name}/upload", tags=["Models"], summary="Upload a model to HuggingFace Hub")
 async def upload_existing_model(name: str, request: ModelUploadRequest):
     """
     Kick off a post-hoc HuggingFace Hub upload for an existing model dir.
@@ -4089,7 +4879,6 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
     frontend can subscribe to existing WS progress events. Returns
     ``{job_id}`` immediately.
     """
-    from src.training_runner import _run_background_upload, _perform_sync_merge
     from types import SimpleNamespace
     import uuid as _uuid
 
@@ -4121,8 +4910,14 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
             base_model = _infer_base_model(model_dir, None)
         except HTTPException:
             pass
-    is_vlm = _resolve_is_vlm(request.model_type, base_model)
+    # May fetch the base model's config from the Hub — keep it off the
+    # event loop so a slow/hung download can't freeze the API.
+    is_vlm = await asyncio.to_thread(_resolve_is_vlm, request.model_type, base_model)
     repo_id = request.repo_id or name
+    # Reported back to the caller so the UI shows where the model actually
+    # lands (the upload itself re-resolves this the same way).
+    from src.hf_namespaces import resolve_hub_repo_id
+    resolved_repo_id = resolve_hub_repo_id(repo_id, request.hf_namespace)
     commit_message = request.commit_message or f"Upload via Merlina (post-hoc)"
 
     # Build the allow_patterns for upload_folder based on the
@@ -4145,6 +4940,7 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
 
     cfg = SimpleNamespace(
         output_name=repo_id,
+        hf_namespace=request.hf_namespace,
         base_model=base_model,
         hf_token=request.hf_token,
         hf_hub_private=request.private,
@@ -4176,10 +4972,10 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
             logger.debug(f"Could not read adapter_config.json for README enrichment: {exc}")
 
     job_id = f"upload-{_uuid.uuid4().hex[:8]}"
-    job_manager.create_job(job_id, {
+    await asyncio.to_thread(job_manager.create_job, job_id, {
         "type": "post_hoc_upload",
         "model_name": name,
-        "repo_id": repo_id,
+        "repo_id": resolved_repo_id,
         "include_merged": request.include_merged,
         "include_gguf": request.include_gguf,
         "include_adapter": request.include_adapter,
@@ -4192,38 +4988,54 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
     except RuntimeError:
         event_loop = None
 
-    def _runner():
-        merge_artifact = None
-        try:
-            if needs_merge:
-                merge_artifact = _perform_sync_merge(
-                    cfg, str(model_dir), job_id, job_manager,
-                    event_loop=event_loop,
-                    is_vlm=is_vlm,
-                    num_consumers=1,
-                )
-            _run_background_upload(
-                config=cfg,
-                final_output_dir=str(model_dir),
-                training_mode="post_hoc_upload",
-                job_id=job_id,
-                job_manager=job_manager,
-                event_loop=event_loop,
-                is_vlm=is_vlm,
-                merge_artifact=merge_artifact,
-            )
-        except Exception as exc:
-            logger.error(f"Post-hoc upload failed for {name}: {exc}", exc_info=True)
-            job_manager.update_job(job_id, status="failed", upload_error=str(exc))
+    def _merge():
+        # Imported on the worker thread — the heavy training stack must
+        # never be imported on the API event loop.
+        from src.training_runner import _perform_sync_merge
+        return _perform_sync_merge(
+            cfg, str(model_dir), job_id, job_manager,
+            event_loop=event_loop,
+            is_vlm=is_vlm,
+            num_consumers=1,
+        )
 
-    threading.Thread(target=_runner, name=f"PostHocUpload-{job_id}", daemon=False).start()
-    return {"job_id": job_id, "model_name": name, "repo_id": repo_id, "started": True}
+    def _upload(merge_artifact):
+        from src.training_runner import _run_background_upload
+        _run_background_upload(
+            config=cfg,
+            final_output_dir=str(model_dir),
+            training_mode="post_hoc_upload",
+            job_id=job_id,
+            job_manager=job_manager,
+            event_loop=event_loop,
+            is_vlm=is_vlm,
+            merge_artifact=merge_artifact,
+        )
+
+    def _on_error(exc):
+        logger.error(f"Post-hoc upload failed for {name}: {exc}", exc_info=True)
+        job_manager.update_job(job_id, status="failed", upload_error=str(exc))
+
+    position = _dispatch_merge_gated(
+        job_id, cfg,
+        needs_merge=needs_merge,
+        merge=_merge,
+        work=_upload,
+        on_error=_on_error,
+        thread_name=f"PostHocUpload-{job_id}",
+    )
+    return {
+        "job_id": job_id,
+        "model_name": name,
+        "repo_id": resolved_repo_id,
+        "started": True,
+        "queue_position": position,
+    }
 
 
-@app.post("/models/{name}/export-gguf")
+@app.post("/models/{name}/export-gguf", tags=["Models"], summary="Export a model to GGUF")
 async def export_gguf_for_existing_model(name: str, request: ModelGgufExportRequest):
     """Kick off a post-hoc GGUF export for an existing model dir."""
-    from src.training_runner import _run_background_gguf_export, _perform_sync_merge
     from src.llama_cpp_resolver import resolve_llama_cpp
     from types import SimpleNamespace
     import uuid as _uuid
@@ -4236,7 +5048,9 @@ async def export_gguf_for_existing_model(name: str, request: ModelGgufExportRequ
     model_dir = _resolve_model_dir(name)
     has_adapter = (model_dir / "adapter_config.json").is_file()
     base_model = _infer_base_model(model_dir, request.base_model) if has_adapter else (request.base_model or "")
-    is_vlm = _resolve_is_vlm(request.model_type, base_model)
+    # May fetch the base model's config from the Hub — keep it off the
+    # event loop so a slow/hung download can't freeze the API.
+    is_vlm = await asyncio.to_thread(_resolve_is_vlm, request.model_type, base_model)
 
     cfg = SimpleNamespace(
         output_name=name,
@@ -4248,7 +5062,7 @@ async def export_gguf_for_existing_model(name: str, request: ModelGgufExportRequ
     )
 
     job_id = f"gguf-{_uuid.uuid4().hex[:8]}"
-    job_manager.create_job(job_id, {
+    await asyncio.to_thread(job_manager.create_job, job_id, {
         "type": "post_hoc_gguf",
         "model_name": name,
         "quant_types": request.quant_types,
@@ -4260,32 +5074,48 @@ async def export_gguf_for_existing_model(name: str, request: ModelGgufExportRequ
     except RuntimeError:
         event_loop = None
 
-    def _runner():
-        merge_artifact = None
-        try:
-            if has_adapter:
-                merge_artifact = _perform_sync_merge(
-                    cfg, str(model_dir), job_id, job_manager,
-                    event_loop=event_loop,
-                    is_vlm=is_vlm,
-                    num_consumers=1,
-                )
-            _run_background_gguf_export(
-                config=cfg,
-                final_output_dir=str(model_dir),
-                job_id=job_id,
-                job_manager=job_manager,
-                event_loop=event_loop,
-                is_vlm=is_vlm,
-                merge_artifact=merge_artifact,
-            )
-            job_manager.update_job(job_id, status="completed", progress=1.0)
-        except Exception as exc:
-            logger.error(f"Post-hoc GGUF export failed for {name}: {exc}", exc_info=True)
-            job_manager.update_job(job_id, status="failed", gguf_error=str(exc))
+    def _merge():
+        # Imported on the worker thread — the heavy training stack must
+        # never be imported on the API event loop.
+        from src.training_runner import _perform_sync_merge
+        return _perform_sync_merge(
+            cfg, str(model_dir), job_id, job_manager,
+            event_loop=event_loop,
+            is_vlm=is_vlm,
+            num_consumers=1,
+        )
 
-    threading.Thread(target=_runner, name=f"PostHocGguf-{job_id}", daemon=False).start()
-    return {"job_id": job_id, "model_name": name, "started": True}
+    def _export(merge_artifact):
+        from src.training_runner import _run_background_gguf_export
+        _run_background_gguf_export(
+            config=cfg,
+            final_output_dir=str(model_dir),
+            job_id=job_id,
+            job_manager=job_manager,
+            event_loop=event_loop,
+            is_vlm=is_vlm,
+            merge_artifact=merge_artifact,
+        )
+        job_manager.update_job(job_id, status="completed", progress=1.0)
+
+    def _on_error(exc):
+        logger.error(f"Post-hoc GGUF export failed for {name}: {exc}", exc_info=True)
+        job_manager.update_job(job_id, status="failed", gguf_error=str(exc))
+
+    position = _dispatch_merge_gated(
+        job_id, cfg,
+        needs_merge=has_adapter,
+        merge=_merge,
+        work=_export,
+        on_error=_on_error,
+        thread_name=f"PostHocGguf-{job_id}",
+    )
+    return {
+        "job_id": job_id,
+        "model_name": name,
+        "started": True,
+        "queue_position": position,
+    }
 
 
 @app.websocket("/ws-inference")
@@ -4433,7 +5263,7 @@ def main():
     logger.info("Starting Merlina - Magical Model Training")
     logger.info(f"Version: {__version__}")
     logger.info(f"Visit {display_url} to access the interface")
-    logger.info(f"API documentation: {display_url}/api/docs")
+    logger.info(f"API documentation: {display_url}/docs")
     logger.info(f"Health check: {display_url}/health")
     logger.info(f"Frontend directory: {FRONTEND_DIR}")
     logger.info(f"Database: {settings.database_path}")

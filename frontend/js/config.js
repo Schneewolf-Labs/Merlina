@@ -14,6 +14,7 @@ class ConfigManager {
         this.saveModal = new Modal('save-config-modal');
         this.loadModal = new Modal('load-config-modal');
         this.loadFromJobModal = new Modal('load-from-job-modal');
+        this.loadFromCodeModal = new Modal('load-from-code-modal');
         this.manageModal = new Modal('manage-configs-modal');
 
         this.setupEventListeners();
@@ -55,6 +56,18 @@ class ConfigManager {
             });
         }
 
+        // Load from code button — paste the merlina-config-v1: block that
+        // Merlina publishes in a model card's "Reproduce this run" section.
+        const loadFromCodeBtn = document.getElementById('load-from-code-btn');
+        if (loadFromCodeBtn) {
+            loadFromCodeBtn.addEventListener('click', () => this.showLoadFromCodeModal());
+        }
+
+        const loadFromCodeSubmit = document.getElementById('load-config-code-submit');
+        if (loadFromCodeSubmit) {
+            loadFromCodeSubmit.addEventListener('click', () => this.loadConfigFromCode());
+        }
+
         // Manage configs button
         const manageBtn = document.getElementById('manage-configs-btn');
         if (manageBtn) {
@@ -77,6 +90,43 @@ class ConfigManager {
         } catch (error) {
             console.error('Failed to load config from image:', error);
             this.toast.error(`Failed to load config from image: ${error.message}`);
+        }
+    }
+
+    /**
+     * Show the paste-a-config-code modal (cleared each time it opens).
+     */
+    showLoadFromCodeModal() {
+        const input = document.getElementById('load-config-code-input');
+        if (input) input.value = '';
+        this.loadFromCodeModal.show();
+    }
+
+    /**
+     * Decode a pasted `merlina-config-v1:` code (or raw config JSON) and
+     * populate the form with it.
+     */
+    async loadConfigFromCode() {
+        const input = document.getElementById('load-config-code-input');
+        const payload = (input?.value || '').trim();
+
+        if (!payload) {
+            this.toast.error('Paste a config code first!');
+            return;
+        }
+
+        try {
+            const result = await MerlinaAPI.decodeConfigText(payload);
+            const config = result.config;
+
+            this.populateForm(config);
+            this.loadFromCodeModal.hide();
+
+            const name = result.name || config?._metadata?.name || 'pasted config';
+            this.toast.success(`Configuration loaded from '${name}'!`);
+        } catch (error) {
+            console.error('Failed to load config from code:', error);
+            this.toast.error(`Failed to load config from code: ${error.message}`);
         }
     }
 
@@ -579,6 +629,14 @@ class ConfigManager {
             this.setCheckboxValue('merge-lora-before-upload', config.merge_lora_before_upload ?? true);
         }
 
+        // Upload namespace (org or account). The dropdown is only populated
+        // after a "Check Orgs" fetch, so add the saved value as an option.
+        if (config.hf_namespace) {
+            import('./hf_namespaces.js')
+                .then(({ setNamespaceValue }) => setNamespaceValue('hf-namespace', config.hf_namespace))
+                .catch(err => console.warn('Could not restore hf_namespace:', err));
+        }
+
         // Share-config toggle (controls whether the training config is
         // embedded in the model README at upload time).
         if (config.share_config !== undefined) {
@@ -670,8 +728,10 @@ class ConfigManager {
         if (sourceType === 'huggingface') {
             const repoInput = card.querySelector('.ds-repo');
             const splitInput = card.querySelector('.ds-split');
+            const configInput = card.querySelector('.ds-config');
             if (repoInput) repoInput.value = src.repo_id || '';
             if (splitInput) splitInput.value = src.split || 'train';
+            if (configInput) configInput.value = src.config_name || '';
         } else if (sourceType === 'local_file') {
             const pathInput = card.querySelector('.ds-local-path');
             const fmtSelect = card.querySelector('.ds-local-format');

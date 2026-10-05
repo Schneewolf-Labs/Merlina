@@ -283,7 +283,9 @@ def _materialize_image_dataset(config: Any, uploaded_datasets: dict, job_id: str
     if rows is None or len(rows) == 0:
         raise ValueError(
             "No dataset rows resolved for diffusion training. Provide one of: "
-            "dataset_jsonl_path, an uploaded JSONL dataset, or dataset_name."
+            "dataset_jsonl_path (a path on the Merlina server), an uploaded "
+            "JSONL dataset (POST /dataset/upload-images), or dataset_name "
+            "(HF Hub id — works from remote clients)."
         )
 
     # Normalize the 'image' / 'chosen' key
@@ -316,8 +318,14 @@ def run_diffusion_training_sync(
     adapter = None
     trainer = None
 
+    # Unified-memory protection (DGX Spark / Grace-Blackwell) — see the
+    # text runner for the rationale. No-op on discrete-GPU systems.
+    from src.memory_guard import TrainingMemoryGuard
+    memory_guard = TrainingMemoryGuard(job_id)
+
     try:
         job_manager.update_job(job_id, status="initializing", progress=0.0)
+        memory_guard.install()
         send_websocket_update(
             websocket_manager.send_status_update(
                 job_id=job_id, status="initializing", progress=0.0,
@@ -476,6 +484,8 @@ def run_diffusion_training_sync(
             callbacks=callbacks,
         )
 
+        memory_guard.set_trainer(trainer)
+
         # Capture W&B URL after accelerator init
         if config.use_wandb and wandb.run is not None:
             wandb_url = wandb.run.get_url()
@@ -508,6 +518,7 @@ def run_diffusion_training_sync(
 
         # Free VRAM before any post-training upload work
         logger.info("🧹 Cleaning up diffusion training resources...")
+        memory_guard.set_trainer(None)  # drop the guard's reference so del works
         del trainer, adapter
         adapter = None
         trainer = None
@@ -585,6 +596,7 @@ def run_diffusion_training_sync(
         )
         raise
     finally:
+        memory_guard.shutdown()
         # _cleanup_training_resources expects (model, trainer); pass the
         # adapter in the model slot — its parameters are what holds VRAM.
         _cleanup_training_resources(adapter, trainer)
