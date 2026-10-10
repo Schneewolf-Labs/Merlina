@@ -37,6 +37,7 @@ diffusers>=0.34.0   # required by atelier (Qwen-Image pipelines need >=0.34)
 peft>=0.6.0
 bitsandbytes>=0.41.0
 datasets>=2.14.0
+s3fs>=2023.1.0  # internal dataset store (S3/MinIO/R2); lazily imported
 
 # Utilities
 wandb>=0.15.0

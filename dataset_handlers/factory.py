@@ -9,7 +9,14 @@ from typing import Dict, Optional, Tuple, Any
 import logging
 
 from .base import DatasetLoader, DatasetPipeline
-from .loaders import HuggingFaceLoader, StreamingHuggingFaceLoader, LocalFileLoader, UploadedDatasetLoader
+from .loaders import (
+    HuggingFaceLoader,
+    StreamingHuggingFaceLoader,
+    InternalStoreLoader,
+    LocalFileLoader,
+    UploadedDatasetLoader,
+)
+from .internal_store import InternalStore
 from .formatters import get_formatter
 
 logger = logging.getLogger(__name__)
@@ -32,12 +39,15 @@ def create_loader(
     streaming: bool = False,
     streaming_batch_size: int = 10000,
     config_name: Optional[str] = None,
+    uri: Optional[str] = None,
+    store: Optional[InternalStore] = None,
+    max_samples: Optional[int] = None,
 ) -> DatasetLoader:
     """
     Create a dataset loader based on source type.
 
     Args:
-        source_type: Type of source ("huggingface", "local_file", or "upload")
+        source_type: Type of source ("huggingface", "internal", "local_file", or "upload")
         repo_id: HuggingFace repository ID (required for huggingface source)
         split: Dataset split to load (default: "train")
         file_path: Path to local file (required for local_file source)
@@ -48,6 +58,9 @@ def create_loader(
         streaming: Use streaming mode for HuggingFace datasets (for large datasets)
         streaming_batch_size: Batch size for streaming materialization (default: 10000)
         config_name: HuggingFace dataset configuration / subset name (optional)
+        uri: swl:// address (required for internal source)
+        store: Configured InternalStore (required for internal source)
+        max_samples: Optional row cap (used by the internal source)
 
     Returns:
         Configured DatasetLoader instance
@@ -55,6 +68,21 @@ def create_loader(
     Raises:
         LoaderCreationError: If source_type is invalid or required params missing
     """
+    if source_type == "internal":
+        if not uri:
+            raise LoaderCreationError("uri is required for internal source")
+        if store is None:
+            raise LoaderCreationError(
+                "The internal dataset store is not configured "
+                "(set s3_endpoint_url / s3_dataset_bucket / s3_access_key / s3_secret_key)."
+            )
+        return InternalStoreLoader(
+            uri=uri,
+            store=store,
+            split=split,
+            max_samples=max_samples,
+        )
+
     if source_type == "huggingface":
         if not repo_id:
             raise LoaderCreationError("repo_id is required for huggingface source")
@@ -109,7 +137,8 @@ def create_loader(
 def create_loader_from_config(
     source_config: Any,
     uploaded_datasets: Optional[Dict[str, Tuple[bytes, str]]] = None,
-    hf_token: Optional[str] = None
+    hf_token: Optional[str] = None,
+    store: Optional[InternalStore] = None,
 ) -> DatasetLoader:
     """
     Create a dataset loader from a source configuration object.
@@ -147,11 +176,23 @@ def create_loader_from_config(
             'streaming': getattr(source_config, 'streaming', False),
             'streaming_batch_size': getattr(source_config, 'streaming_batch_size', 10000),
             'config_name': getattr(source_config, 'config_name', None),
+            'uri': getattr(source_config, 'uri', None),
+            'max_samples': getattr(source_config, 'max_samples', None),
         }
 
+    # An swl:// repo_id is a convenient shorthand for an internal source, so a
+    # config can point at the store without restating source_type.
+    source_type = config_dict.get('source_type')
+    uri = config_dict.get('uri')
+    repo_id = config_dict.get('repo_id')
+    if not source_type and isinstance(repo_id, str) and repo_id.startswith('swl://'):
+        source_type = 'internal'
+    if source_type == 'internal' and not uri and isinstance(repo_id, str):
+        uri = repo_id
+
     return create_loader(
-        source_type=config_dict.get('source_type'),
-        repo_id=config_dict.get('repo_id'),
+        source_type=source_type,
+        repo_id=repo_id,
         split=config_dict.get('split', 'train'),
         file_path=config_dict.get('file_path'),
         file_format=config_dict.get('file_format'),
@@ -161,6 +202,9 @@ def create_loader_from_config(
         streaming=config_dict.get('streaming', False),
         streaming_batch_size=config_dict.get('streaming_batch_size', 10000),
         config_name=config_dict.get('config_name'),
+        uri=uri,
+        store=store,
+        max_samples=config_dict.get('max_samples'),
     )
 
 

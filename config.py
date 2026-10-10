@@ -56,6 +56,24 @@ class Settings(BaseSettings):
     hf_token: Optional[str] = None
 
     # ==========================================
+    # Internal Dataset Store (S3-compatible)
+    # ==========================================
+    # An S3-API object store (self-hosted MinIO, or Cloudflare R2) that Merlina
+    # can train from without the HuggingFace Hub. Backend-agnostic: only the
+    # endpoint and credentials differ. Leave unset to disable — Merlina then
+    # loads straight from HuggingFace as before. Datasets are addressed with
+    # swl:// URIs (see dataset_handlers/internal_store.py). Credentials belong in
+    # the server's .env, never in code or version control.
+    s3_endpoint_url: Optional[str] = None  # e.g. "http://sabre:9000" (MinIO) or the R2 endpoint
+    s3_dataset_bucket: Optional[str] = None  # e.g. "datasets"
+    s3_access_key: Optional[str] = None
+    s3_secret_key: Optional[str] = None
+    s3_region: str = "auto"
+    # When true, a "huggingface" source is served from the internal store if a
+    # mirror of it exists there (mirror-on-first-use lands in a later phase).
+    prefer_internal: bool = False
+
+    # ==========================================
     # Training Defaults
     # ==========================================
     default_lora_r: int = 64

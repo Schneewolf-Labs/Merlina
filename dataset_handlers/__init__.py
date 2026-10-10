@@ -4,7 +4,8 @@ Modular dataset loading, formatting, and validation for ORPO training
 """
 
 from .base import DatasetLoader, DatasetFormatter, DatasetPipeline
-from .loaders import HuggingFaceLoader, StreamingHuggingFaceLoader, LocalFileLoader, UploadedDatasetLoader
+from .loaders import HuggingFaceLoader, StreamingHuggingFaceLoader, InternalStoreLoader, LocalFileLoader, UploadedDatasetLoader
+from .internal_store import InternalStore, InternalStoreConfig, InternalStoreError, Manifest, parse_swl_uri
 from .formatters import (
     ChatMLFormatter,
     Llama3Formatter,
@@ -37,6 +38,12 @@ __all__ = [
     'DatasetPipeline',
     'HuggingFaceLoader',
     'StreamingHuggingFaceLoader',
+    'InternalStoreLoader',
+    'InternalStore',
+    'InternalStoreConfig',
+    'InternalStoreError',
+    'Manifest',
+    'parse_swl_uri',
     'LocalFileLoader',
     'UploadedDatasetLoader',
     'ChatMLFormatter',
