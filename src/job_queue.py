@@ -1,505 +1,348 @@
 """
-Job Queue Manager
-Manages job queuing, execution, and concurrency control
+Job queue: bounded-concurrency execution of training jobs.
+
+One lock, one condition variable, two dictionaries. Every observable fact
+about the queue (what is waiting, what is running, in which order) lives in
+``_pending`` and ``_running`` and is only ever read or written under
+``_cv``. There is no separate heap to keep in sync, so cancelling or removing
+a job is a plain dictionary delete: nothing is left behind for a worker to
+"skip" later, and nothing keeps the job's config (which can hold API tokens)
+alive.
+
+Lifecycle of a job in this queue::
+
+    submit()  -> DB status "queued"      -> _pending
+    worker    -> DB status "initializing" -> _running -> callback(job_id, config)
+    cancel()  (pending) -> DB status "cancelled", gone from _pending
+    cancel()  (running) -> job_manager.request_stop(); the job's own code
+                           (the training loop / worker monitor) honours it
+    remove()  (pending) -> gone from _pending, DB untouched (caller deleted
+                           the row)
+
+Ordering is by priority (HIGH first), then by submission order.
+
+Persistence is optional: ``job_manager`` may be ``None`` (tests), in which
+case the queue is purely in-memory. When it is set, the "initializing" write
+doubles as the existence check — a job whose record was deleted while it
+waited has no row to update, and ``update_job`` reporting ``False`` is what
+stops it from running.
 """
 
+import itertools
 import logging
 import threading
-import queue
 import time
-from typing import Optional, Dict, Any, List, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from typing import Any, Callable, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+JobCallback = Callable[[str, Any], None]
+
 
 class JobPriority(Enum):
-    """Job priority levels"""
+    """Job priority levels. Higher value runs first."""
     LOW = 1
     NORMAL = 2
     HIGH = 3
 
 
-@dataclass(order=True)
+@dataclass
 class QueuedJob:
-    """Represents a job in the queue"""
-    priority: int = field(compare=True)
-    queued_at: float = field(compare=True)
-    job_id: str = field(compare=False)
-    config: Any = field(compare=False)
-    callback: Callable = field(compare=False)
+    """A job waiting to run."""
+    job_id: str
+    config: Any
+    callback: Optional[JobCallback]
+    priority: JobPriority
+    seq: int
+    queued_at: float = field(default_factory=time.time)
 
-    def __init__(self, job_id: str, config: Any, callback: Callable, priority: JobPriority = JobPriority.NORMAL):
-        # Priority is inverted for priority queue (lower number = higher priority)
-        self.priority = -priority.value
-        self.queued_at = time.time()
-        self.job_id = job_id
-        self.config = config
-        self.callback = callback
+    @property
+    def sort_key(self):
+        # Higher priority first, then FIFO within a priority level.
+        return (-self.priority.value, self.seq)
+
+    def release(self) -> None:
+        """Drop references to the config and callback once the job can no
+        longer run, so secrets in the config don't outlive the queue entry."""
+        self.config = None
+        self.callback = None
 
 
 class JobQueue:
-    """
-    Manages training job queue with configurable concurrency.
+    """Priority queue with ``max_concurrent_jobs`` worker threads."""
 
-    Features:
-    - Priority queue for job ordering
-    - Configurable max concurrent jobs (default: 1)
-    - Thread-safe job management
-    - Automatic worker thread management
-    - Job cancellation support
-    - Queue position tracking
-    """
-
-    def __init__(self, max_concurrent_jobs: int = 1, job_manager=None):
-        """
-        Initialize job queue.
-
-        Args:
-            max_concurrent_jobs: Maximum number of jobs to run concurrently (default: 1)
-            job_manager: JobManager instance for persistence
-        """
-        self.max_concurrent_jobs = max_concurrent_jobs
+    def __init__(self, max_concurrent_jobs: int = 1, job_manager=None, name: str = "jobs"):
+        self.max_concurrent_jobs = max(1, int(max_concurrent_jobs))
         self.job_manager = job_manager
+        self.name = name
 
-        # Priority queue for pending jobs
-        self._queue = queue.PriorityQueue()
-
-        # Track running jobs
-        self._running_jobs: Dict[str, threading.Thread] = {}
-        self._running_lock = threading.Lock()
-
-        # Track all queued job IDs for fast lookup
-        self._queued_jobs: Dict[str, QueuedJob] = {}
-        self._queued_lock = threading.Lock()
-
-        # Cancellation flags
-        self._cancelled_jobs = set()
-        self._cancel_lock = threading.Lock()
-
-        # Worker threads
-        self._workers: List[threading.Thread] = []
+        self._cv = threading.Condition()
+        self._pending: Dict[str, QueuedJob] = {}
+        self._running: Dict[str, threading.Thread] = {}
+        self._seq = itertools.count()
         self._shutdown = False
 
-        # Start workers
-        self._start_workers()
-
-        logger.info(f"Job queue initialized with max_concurrent_jobs={max_concurrent_jobs}")
-
-    def _start_workers(self):
-        """Start worker threads"""
-        for i in range(self.max_concurrent_jobs):
-            worker = threading.Thread(
+        self._workers: List[threading.Thread] = [
+            threading.Thread(
                 target=self._worker_loop,
-                name=f"JobQueueWorker-{i}",
-                daemon=True
+                name=f"JobQueueWorker-{name}-{i}",
+                daemon=True,
             )
+            for i in range(self.max_concurrent_jobs)
+        ]
+        for worker in self._workers:
             worker.start()
-            self._workers.append(worker)
-            logger.debug(f"Started worker thread: {worker.name}")
 
-    def _worker_loop(self):
-        """Worker thread main loop"""
-        logger.debug(f"Worker {threading.current_thread().name} started")
+        logger.info(f"Job queue '{name}' started with max_concurrent_jobs={self.max_concurrent_jobs}")
 
-        while not self._shutdown:
+    # ------------------------------------------------------------------ #
+    # Worker side
+    # ------------------------------------------------------------------ #
+
+    def _worker_loop(self) -> None:
+        me = threading.current_thread()
+        while True:
+            with self._cv:
+                while not self._shutdown and not self._pending:
+                    self._cv.wait()
+                if self._shutdown:
+                    return
+                job = self._pop_next_locked()
+                self._running[job.job_id] = me
+
             try:
-                # Get next job from queue (with timeout to allow shutdown checks)
+                self._execute(job)
+            finally:
+                with self._cv:
+                    self._running.pop(job.job_id, None)
+                    self._cv.notify_all()  # wake wait_for_completion()
+
+    def _pop_next_locked(self) -> QueuedJob:
+        job_id = min(self._pending, key=lambda jid: self._pending[jid].sort_key)
+        return self._pending.pop(job_id)
+
+    def _execute(self, job: QueuedJob) -> None:
+        job_id = job.job_id
+        worker = threading.current_thread().name
+        try:
+            if self.job_manager is not None:
+                # One write, two purposes: flip the status and prove the row
+                # still exists. A job deleted while it waited must not run —
+                # there is nothing left to report status to.
+                if not self.job_manager.update_job(job_id, status="initializing", progress=0.0):
+                    logger.info(f"Job {job_id} no longer exists (deleted while queued) - skipping")
+                    return
+
+            logger.info(f"{worker} executing job {job_id}")
+            job.callback(job_id, job.config)
+            logger.info(f"{worker} finished job {job_id}")
+        except Exception as e:
+            logger.error(f"Job {job_id} execution failed: {e}", exc_info=True)
+            if self.job_manager is not None:
                 try:
-                    queued_job = self._queue.get(timeout=1.0)
-                except queue.Empty:
-                    continue
+                    self.job_manager.update_job(job_id, status="failed", error=str(e))
+                except Exception:
+                    logger.exception(f"Could not mark job {job_id} as failed")
+        finally:
+            job.release()
 
-                job_id = queued_job.job_id
-
-                # Claim the queued entry. remove() races us for it under the
-                # same lock, so whoever pops it wins: a miss (or a cleared
-                # callback) means the job was dropped from the queue while it
-                # was waiting and must not run.
-                with self._queued_lock:
-                    claimed = self._queued_jobs.pop(job_id, None) is not None
-                    callback = queued_job.callback
-                    config = queued_job.config
-
-                if not claimed or callback is None:
-                    logger.info(f"Job {job_id} was removed from the queue before execution - skipping")
-                    with self._cancel_lock:
-                        self._cancelled_jobs.discard(job_id)
-                    self._queue.task_done()
-                    continue
-
-                # A job whose record was deleted while it sat in the queue must
-                # not execute: there is nothing left to report status to, and
-                # its stored config is gone. This also covers deletions that
-                # bypass the queue entirely (e.g. clearing all jobs).
-                if self.job_manager is not None and self.job_manager.get_job(job_id) is None:
-                    logger.info(f"Job {job_id} no longer exists (deleted while queued) - skipping execution")
-                    with self._cancel_lock:
-                        self._cancelled_jobs.discard(job_id)
-                    self._queue.task_done()
-                    continue
-
-                # Check if job was cancelled while in queue
-                with self._cancel_lock:
-                    if job_id in self._cancelled_jobs:
-                        logger.info(f"Job {job_id} was cancelled before execution")
-                        self._cancelled_jobs.remove(job_id)
-                        if self.job_manager:
-                            self.job_manager.update_job(job_id, status="cancelled", progress=0.0)
-                        self._queue.task_done()
-                        continue
-
-                # Mark job as running
-                with self._running_lock:
-                    self._running_jobs[job_id] = threading.current_thread()
-
-                # Update job status to running (from queued)
-                if self.job_manager:
-                    self.job_manager.update_job(job_id, status="initializing", progress=0.0)
-
-                logger.info(f"Worker {threading.current_thread().name} executing job {job_id}")
-
-                # Execute the job callback
-                try:
-                    callback(job_id, config)
-                except Exception as e:
-                    logger.error(f"Job {job_id} execution failed: {e}", exc_info=True)
-                    if self.job_manager:
-                        self.job_manager.update_job(job_id, status="failed", error=str(e))
-                finally:
-                    # Remove from running jobs
-                    with self._running_lock:
-                        self._running_jobs.pop(job_id, None)
-
-                    # Mark queue task as done
-                    self._queue.task_done()
-
-                    logger.info(f"Worker {threading.current_thread().name} completed job {job_id}")
-
-            except Exception as e:
-                logger.error(f"Worker {threading.current_thread().name} error: {e}", exc_info=True)
-
-        logger.debug(f"Worker {threading.current_thread().name} shutting down")
+    # ------------------------------------------------------------------ #
+    # Submission / cancellation
+    # ------------------------------------------------------------------ #
 
     def submit(
         self,
         job_id: str,
         config: Any,
-        callback: Callable,
-        priority: JobPriority = JobPriority.NORMAL
+        callback: JobCallback,
+        priority: JobPriority = JobPriority.NORMAL,
     ) -> int:
         """
-        Submit a job to the queue.
+        Queue a job. Returns its 0-based position (0 = next to run).
 
-        Args:
-            job_id: Unique job identifier
-            config: Job configuration
-            callback: Function to execute (signature: callback(job_id, config))
-            priority: Job priority (LOW, NORMAL, HIGH)
-
-        Returns:
-            Queue position (0-indexed, 0 = next to run)
+        Raises ``ValueError`` if the job id is already queued or running and
+        ``RuntimeError`` if the queue is shutting down. A failed DB write
+        leaves no trace in the queue.
         """
+        with self._cv:
+            self._check_can_submit_locked(job_id)
+
+        # The DB write happens outside the lock so API reads of queue state
+        # never wait on SQLite. Nothing can observe the job until it is in
+        # ``_pending``, so "queued" is guaranteed to land before any worker
+        # can write "initializing".
+        if self.job_manager is not None:
+            self.job_manager.update_job(job_id, status="queued", progress=0.0)
+
+        with self._cv:
+            self._check_can_submit_locked(job_id)  # re-check: lock was dropped
+            self._pending[job_id] = QueuedJob(
+                job_id=job_id,
+                config=config,
+                callback=callback,
+                priority=priority,
+                seq=next(self._seq),
+            )
+            position = self._position_locked(job_id)
+            self._cv.notify()
+
+        logger.info(f"Job {job_id} queued at position {position} ({priority.name})")
+        return position
+
+    def _check_can_submit_locked(self, job_id: str) -> None:
         if self._shutdown:
             raise RuntimeError("Job queue is shutting down")
-
-        # Create queued job
-        queued_job = QueuedJob(job_id, config, callback, priority)
-
-        # Register tracking and persist status BEFORE handing the job to the
-        # queue. Once _queue.put() runs, an idle worker can pick the job up
-        # immediately; if tracking/DB writes happened after (as they used to),
-        # the worker's _queued_jobs.pop() could race the registration (leaking
-        # a stale "queued" entry) and the DB status="queued" write could
-        # overwrite the worker's "initializing".
-        with self._queued_lock:
-            self._queued_jobs[job_id] = queued_job
-
-        try:
-            if self.job_manager:
-                self.job_manager.update_job(job_id, status="queued", progress=0.0)
-
-            # Add to queue (job becomes visible to workers from this point)
-            self._queue.put(queued_job)
-        except BaseException:
-            with self._queued_lock:
-                self._queued_jobs.pop(job_id, None)
-            raise
-
-        # Calculate queue position
-        position = self.get_queue_position(job_id)
-
-        logger.info(f"Job {job_id} submitted to queue at position {position} with priority {priority.name}")
-
-        return position
+        if job_id in self._pending or job_id in self._running:
+            raise ValueError(f"Job {job_id} is already queued or running")
 
     def cancel(self, job_id: str) -> bool:
         """
-        Cancel a job (whether queued or running).
+        Cancel a job.
 
-        For queued jobs: Removes from queue immediately
-        For running jobs: Sets stop_requested flag (graceful stop)
+        Queued: removed immediately and recorded as ``cancelled``.
+        Running: a graceful stop is requested through the job manager; the
+        running code is responsible for honouring it.
 
-        Args:
-            job_id: Job identifier
-
-        Returns:
-            True if job was found and cancellation initiated
+        Returns True if the job was found in the queue.
         """
-        # Check if job is queued
-        with self._queued_lock:
-            if job_id in self._queued_jobs:
-                # Mark as cancelled
-                with self._cancel_lock:
-                    self._cancelled_jobs.add(job_id)
+        with self._cv:
+            job = self._pending.pop(job_id, None)
+            running = job_id in self._running
 
-                logger.info(f"Job {job_id} marked for cancellation (currently queued)")
-                return True
+        if job is not None:
+            job.release()
+            if self.job_manager is not None:
+                self.job_manager.update_job(job_id, status="cancelled", progress=0.0)
+            logger.info(f"Job {job_id} cancelled while queued")
+            return True
 
-        # Check if job is running
-        with self._running_lock:
-            if job_id in self._running_jobs:
-                # For running jobs, use the existing stop mechanism
-                if self.job_manager:
-                    success = self.job_manager.request_stop(job_id)
-                    if success:
-                        logger.info(f"Stop requested for running job {job_id}")
-                        return True
+        if running:
+            if self.job_manager is None:
                 return False
+            if self.job_manager.request_stop(job_id):
+                logger.info(f"Stop requested for running job {job_id}")
+                return True
+            return False
 
-        logger.warning(f"Job {job_id} not found in queue or running jobs")
         return False
 
     def remove(self, job_id: str) -> bool:
         """
-        Drop a queued job from the queue and release its config.
-
-        Used when a job record is deleted: the queue must stop reporting the
-        job as queued, must not hand it to a worker, and must not keep its
-        config (which can hold API tokens) alive.
-
-        Running jobs are untouched - use cancel() to stop those.
-
-        Args:
-            job_id: Job identifier
-
-        Returns:
-            True if a queued entry was removed
+        Drop a queued job without touching its DB record (for use after the
+        record itself was deleted). Running jobs are untouched.
         """
-        with self._queued_lock:
-            queued_job = self._queued_jobs.pop(job_id, None)
-            if queued_job is None:
-                return False
-
-            # The item itself stays in the PriorityQueue (it has no removal
-            # API), so clear what the worker would act on: it sees the empty
-            # callback under _queued_lock and skips the job, and the config
-            # becomes collectable now rather than whenever the worker drains.
-            queued_job.callback = None
-            queued_job.config = None
-
-        with self._cancel_lock:
-            self._cancelled_jobs.discard(job_id)
-
-        logger.info(f"Removed queued job {job_id} from the queue")
+        with self._cv:
+            job = self._pending.pop(job_id, None)
+        if job is None:
+            return False
+        job.release()
+        logger.info(f"Removed queued job {job_id}")
         return True
 
     def remove_all_queued(self) -> int:
-        """
-        Drop every queued job from the queue and release their configs.
+        """Drop every queued job. Running jobs are untouched."""
+        with self._cv:
+            jobs = list(self._pending.values())
+            self._pending.clear()
+        for job in jobs:
+            job.release()
+        if jobs:
+            logger.info(f"Removed {len(jobs)} queued job(s)")
+        return len(jobs)
 
-        Running jobs are untouched.
+    # ------------------------------------------------------------------ #
+    # Introspection
+    # ------------------------------------------------------------------ #
 
-        Returns:
-            Number of queued entries removed
-        """
-        with self._queued_lock:
-            queued_jobs = list(self._queued_jobs.values())
-            self._queued_jobs.clear()
-            for queued_job in queued_jobs:
-                queued_job.callback = None
-                queued_job.config = None
+    def _ordered_pending_locked(self) -> List[QueuedJob]:
+        return sorted(self._pending.values(), key=lambda j: j.sort_key)
 
-        with self._cancel_lock:
-            for queued_job in queued_jobs:
-                self._cancelled_jobs.discard(queued_job.job_id)
-
-        if queued_jobs:
-            logger.info(f"Removed {len(queued_jobs)} queued job(s) from the queue")
-
-        return len(queued_jobs)
+    def _position_locked(self, job_id: str) -> Optional[int]:
+        for i, job in enumerate(self._ordered_pending_locked()):
+            if job.job_id == job_id:
+                return i
+        return None
 
     def get_queue_position(self, job_id: str) -> Optional[int]:
-        """
-        Get position of a job in the queue.
-
-        Args:
-            job_id: Job identifier
-
-        Returns:
-            Queue position (0 = next to run), or None if not in queue
-        """
-        with self._queued_lock:
-            if job_id not in self._queued_jobs:
-                return None
-
-            # Get all queued jobs and sort by priority
-            jobs = list(self._queued_jobs.values())
-            jobs.sort()  # Uses dataclass __lt__ based on priority and time
-
-            # Find position
-            for i, job in enumerate(jobs):
-                if job.job_id == job_id:
-                    return i
-
-            return None
+        with self._cv:
+            return self._position_locked(job_id)
 
     def get_status(self, job_id: str) -> Dict[str, Any]:
-        """
-        Get queue status for a job.
-
-        Returns:
-            Dictionary with queue status information
-        """
-        # Check if queued
-        with self._queued_lock:
-            if job_id in self._queued_jobs:
-                position = self.get_queue_position(job_id)
-                queued_job = self._queued_jobs[job_id]
+        with self._cv:
+            job = self._pending.get(job_id)
+            if job is not None:
                 return {
                     "state": "queued",
-                    "position": position,
-                    "queued_at": datetime.fromtimestamp(queued_job.queued_at).isoformat(),
-                    "priority": JobPriority(-queued_job.priority).name
+                    "position": self._position_locked(job_id),
+                    "queued_at": datetime.fromtimestamp(job.queued_at).isoformat(),
+                    "priority": job.priority.name,
                 }
+            thread = self._running.get(job_id)
+            if thread is not None:
+                return {"state": "running", "position": None, "worker": thread.name}
+        return {"state": "unknown", "position": None}
 
-        # Check if running
-        with self._running_lock:
-            if job_id in self._running_jobs:
-                return {
-                    "state": "running",
-                    "position": None,
-                    "worker": self._running_jobs[job_id].name
-                }
-
-        # Check if cancelled
-        with self._cancel_lock:
-            if job_id in self._cancelled_jobs:
-                return {
-                    "state": "cancelled",
-                    "position": None
-                }
-
-        # Not in queue system
-        return {
-            "state": "unknown",
-            "position": None
-        }
+    def is_tracking(self, job_id: str) -> bool:
+        """True if the job is queued or running here."""
+        with self._cv:
+            return job_id in self._pending or job_id in self._running
 
     def get_queue_stats(self) -> Dict[str, Any]:
-        """
-        Get overall queue statistics.
-
-        Returns:
-            Dictionary with queue stats
-        """
-        with self._queued_lock:
-            queued_count = len(self._queued_jobs)
-
-        with self._running_lock:
-            running_count = len(self._running_jobs)
-
+        with self._cv:
+            queued, running = len(self._pending), len(self._running)
         return {
-            "queued": queued_count,
-            "running": running_count,
+            "queued": queued,
+            "running": running,
             "max_concurrent": self.max_concurrent_jobs,
             "workers": len(self._workers),
-            "available_slots": max(0, self.max_concurrent_jobs - running_count)
+            "available_slots": max(0, self.max_concurrent_jobs - running),
         }
 
     def list_queued_jobs(self) -> List[Dict[str, Any]]:
-        """
-        Get list of all queued jobs in order.
-
-        Returns:
-            List of job info dictionaries
-        """
-        with self._queued_lock:
-            jobs = list(self._queued_jobs.values())
-            jobs.sort()  # Sort by priority and time
-
+        with self._cv:
             return [
                 {
                     "job_id": job.job_id,
                     "position": i,
-                    "priority": JobPriority(-job.priority).name,
-                    "queued_at": datetime.fromtimestamp(job.queued_at).isoformat()
+                    "priority": job.priority.name,
+                    "queued_at": datetime.fromtimestamp(job.queued_at).isoformat(),
                 }
-                for i, job in enumerate(jobs)
+                for i, job in enumerate(self._ordered_pending_locked())
             ]
 
     def list_running_jobs(self) -> List[Dict[str, Any]]:
-        """
-        Get list of all running jobs.
-
-        Returns:
-            List of job info dictionaries
-        """
-        with self._running_lock:
+        with self._cv:
             return [
-                {
-                    "job_id": job_id,
-                    "worker": thread.name
-                }
-                for job_id, thread in self._running_jobs.items()
+                {"job_id": job_id, "worker": thread.name}
+                for job_id, thread in self._running.items()
             ]
 
+    # ------------------------------------------------------------------ #
+    # Lifecycle
+    # ------------------------------------------------------------------ #
+
     def wait_for_completion(self, timeout: Optional[float] = None) -> bool:
+        """Block until nothing is queued or running. Returns False on timeout."""
+        with self._cv:
+            return self._cv.wait_for(
+                lambda: not self._pending and not self._running, timeout=timeout
+            )
+
+    def shutdown(self, wait: bool = True) -> None:
         """
-        Wait for all jobs to complete.
-
-        Args:
-            timeout: Maximum time to wait in seconds (None = wait forever)
-
-        Returns:
-            True if all jobs completed, False if the timeout expired first
+        Stop accepting work. Workers finish their current job and exit;
+        anything still queued stays queued in the DB for the restart
+        reconciler (``src/worker_reattach.py``) to deal with.
         """
-        if timeout is None:
-            self._queue.join()
-            return True
-
-        deadline = time.monotonic() + timeout
-        with self._queue.all_tasks_done:
-            while self._queue.unfinished_tasks:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    return False
-                self._queue.all_tasks_done.wait(remaining)
-        return True
-
-    def shutdown(self, wait: bool = True):
-        """
-        Shutdown the job queue.
-
-        Args:
-            wait: If True, wait for running jobs to complete
-        """
-        logger.info("Shutting down job queue...")
-        self._shutdown = True
-
+        with self._cv:
+            if self._shutdown:
+                return
+            self._shutdown = True
+            self._cv.notify_all()
+        logger.info(f"Job queue '{self.name}' shutting down")
         if wait:
-            # Wait for queue to empty
-            self._queue.join()
-
-            # Wait for workers to finish
             for worker in self._workers:
-                worker.join(timeout=5.0)
-
-        logger.info("Job queue shut down complete")
-
-    def __del__(self):
-        """Cleanup on deletion"""
-        if not self._shutdown:
-            self.shutdown(wait=False)
+                worker.join()

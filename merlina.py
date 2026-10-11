@@ -215,6 +215,8 @@ async def _reconcile_jobs_after_restart():
     as failed instead of leaving them presenting as "training" forever.
     """
     loop = asyncio.get_running_loop()
+    # Worker threads publish WebSocket updates through this loop.
+    websocket_manager.bind_loop(loop)
 
     def _run():
         try:
@@ -240,13 +242,22 @@ async def legacy_redoc_redirect():
 job_manager = JobManager(db_path=settings.database_path)
 
 # Initialize job queue with configurable concurrency
-job_queue = JobQueue(max_concurrent_jobs=settings.max_concurrent_jobs, job_manager=job_manager)
+job_queue = JobQueue(max_concurrent_jobs=settings.max_concurrent_jobs, job_manager=job_manager, name="local")
 
 # Remote jobs run on rented compute, not the local GPU, so they get their
 # own queue and don't block (or get blocked by) local training slots.
 remote_job_queue = JobQueue(
-    max_concurrent_jobs=settings.remote_max_concurrent_jobs, job_manager=job_manager
+    max_concurrent_jobs=settings.remote_max_concurrent_jobs, job_manager=job_manager,
+    name="remote",
 )
+
+
+def _queue_holding(job_id: str):
+    """The queue that currently has this job queued or running, if any."""
+    for queue in (job_queue, remote_job_queue):
+        if queue.is_tracking(job_id):
+            return queue
+    return None
 
 # Initialize config manager
 config_manager = ConfigManager(config_dir=str(settings.data_dir / "configs"))
@@ -2216,19 +2227,10 @@ async def stop_job(job_id: str):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
 
-    # Check queue status — remote jobs live in their own queue
-    active_queue = job_queue
-    queue_status = job_queue.get_status(job_id)
-    if queue_status.get("state") == "unknown":
-        remote_status = remote_job_queue.get_status(job_id)
-        if remote_status.get("state") != "unknown":
-            active_queue = remote_job_queue
-            queue_status = remote_status
-
-    # If job is queued, cancel it from the queue
-    if queue_status.get("state") == "queued":
-        success = active_queue.cancel(job_id)
-        if success:
+    # Queued: the queue drops it and records "cancelled" immediately.
+    active_queue = _queue_holding(job_id)
+    if active_queue is not None and active_queue.get_status(job_id).get("state") == "queued":
+        if active_queue.cancel(job_id):
             logger.info(f"Job {job_id} cancelled from queue")
             return {
                 "status": "success",
@@ -2237,24 +2239,18 @@ async def stop_job(job_id: str):
                 "was_queued": True
             }
 
-    # If job is running, request graceful stop. Remote jobs add their own
-    # lifecycle statuses (provisioning/downloading/merging) — the remote
-    # orchestrator polls stop_requested and tears the instance down.
+    # Running: set the stop flag. Everything that executes a job polls it -
+    # the in-thread trainer callback, the subprocess worker and its monitor
+    # (which escalates SIGTERM -> SIGKILL), a re-attached monitor after an
+    # API restart, and the remote orchestrator (which adds its own
+    # provisioning/downloading/merging statuses).
     stoppable_statuses = [
         "training", "loading_model", "loading_dataset", "initializing",
         "saving", "stopping",
         "provisioning", "downloading", "merging",
     ]
-    if queue_status.get("state") == "running" or job.status in stoppable_statuses:
-        success = active_queue.cancel(job_id)  # This will set stop_requested flag
-        if not success:
-            # The queue may have lost track of the job (e.g. the API restarted
-            # and the worker was re-adopted by src/worker_reattach.py). The
-            # worker polls the DB flag directly, and any re-attached monitor
-            # escalates SIGTERM→SIGKILL, so setting the flag is enough.
-            # Remote orchestrators poll the same DB flag.
-            success = await asyncio.to_thread(job_manager.request_stop, job_id)
-        if success:
+    if active_queue is not None or job.status in stoppable_statuses:
+        if await asyncio.to_thread(job_manager.request_stop, job_id):
             logger.info(f"Stop requested for running job {job_id}")
             return {
                 "status": "success",

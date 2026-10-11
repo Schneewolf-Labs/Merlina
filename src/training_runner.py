@@ -52,6 +52,7 @@ from grimoire.data import tokenize_sft, tokenize_preference, tokenize_kto
 from huggingface_hub import HfApi
 from src.model_card import generate_model_readme, upload_model_readme, generate_wandb_run_name, upload_config_image
 from src.hf_namespaces import resolve_hub_repo_id
+from src.worker_monitor import monitor_worker
 
 from dataset_handlers import (
     DatasetPipeline,
@@ -627,23 +628,11 @@ def _run_background_gguf_export(
 
 
 def send_websocket_update(coro, loop=None):
-    """
-    Helper to properly schedule WebSocket updates from sync context.
+    """Schedule a websocket_manager coroutine from a sync (worker) thread.
 
-    Args:
-        coro: Coroutine to execute
-        loop: Event loop to schedule in (optional, uses global if not provided)
+    Uses ``loop`` when given, else the loop bound at server startup.
     """
-    try:
-        if loop is None:
-            # No loop provided, just close the coroutine to avoid warnings
-            coro.close()
-            return
-
-        # Schedule coroutine in the provided event loop
-        asyncio.run_coroutine_threadsafe(coro, loop)
-    except Exception as e:
-        logger.debug(f"Could not send WebSocket update: {e}")
+    websocket_manager.schedule(coro, loop)
 
 
 class WebSocketCallback(TrainerCallback):
@@ -948,169 +937,6 @@ def _serialize_uploaded_datasets(uploaded_datasets: dict, tmp_dir: str) -> Optio
     return ds_dir
 
 
-def _monitor_distributed_progress(
-    proc: subprocess.Popen,
-    progress_file: str,
-    job_id: str,
-    job_manager: JobManager,
-    event_loop: Optional[asyncio.AbstractEventLoop] = None,
-) -> None:
-    """
-    Monitor a distributed training subprocess by tailing its progress file.
-
-    Forwards updates to the WebSocket manager and job manager.
-    Blocks until the subprocess exits.
-    """
-    last_pos = 0
-    # Track when a stop was first forwarded so we can escalate. The graceful
-    # SIGTERM path depends on the worker's on_step_end callback firing and
-    # grimoire honoring request_stop(); if the loop is between long steps, is
-    # wedged, or the callback isn't reached, SIGTERM alone leaves the run
-    # effectively unstoppable. After a grace window we escalate to SIGKILL so
-    # a stop request is always honored.
-    stop_sigterm_at = None
-    STOP_GRACE_SECONDS = 180
-
-    while proc.poll() is None:
-        # Check for stop requests and forward to subprocess
-        job = job_manager.get_job(job_id)
-        if job and job.stop_requested:
-            try:
-                if stop_sigterm_at is None:
-                    logger.info(f"Forwarding stop (SIGTERM) to subprocess for job {job_id}")
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                    stop_sigterm_at = time.monotonic()
-                elif time.monotonic() - stop_sigterm_at > STOP_GRACE_SECONDS:
-                    logger.warning(
-                        f"Job {job_id} did not exit {STOP_GRACE_SECONDS}s after "
-                        f"SIGTERM — escalating to SIGKILL")
-                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except (ProcessLookupError, OSError):
-                pass
-
-        # Read new progress lines
-        try:
-            if os.path.exists(progress_file):
-                with open(progress_file, "r") as f:
-                    f.seek(last_pos)
-                    for line in f:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        try:
-                            record = json.loads(line)
-                            _handle_progress_record(record, job_id, job_manager, event_loop)
-                        except json.JSONDecodeError:
-                            pass
-                    last_pos = f.tell()
-        except Exception as e:
-            logger.debug(f"Error reading progress file: {e}")
-
-        time.sleep(1.0)
-
-    # Process exited — read remaining lines
-    try:
-        if os.path.exists(progress_file):
-            with open(progress_file, "r") as f:
-                f.seek(last_pos)
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        record = json.loads(line)
-                        _handle_progress_record(record, job_id, job_manager, event_loop)
-                    except json.JSONDecodeError:
-                        pass
-    except Exception:
-        pass
-
-    # Check exit code
-    if proc.returncode != 0:
-        # Check if the job was already marked as failed/completed by the worker
-        job = job_manager.get_job(job_id)
-        if job and job.status not in ("completed", "stopped", "failed", "uploading"):
-            error_msg = f"Distributed training subprocess exited with code {proc.returncode}"
-            logger.error(error_msg)
-            job_manager.update_job(job_id, status="failed", error=error_msg)
-            send_websocket_update(
-                websocket_manager.send_error(job_id=job_id, error=error_msg),
-                event_loop,
-            )
-
-
-def _handle_progress_record(
-    record: dict,
-    job_id: str,
-    job_manager: JobManager,
-    event_loop: Optional[asyncio.AbstractEventLoop],
-) -> None:
-    """Handle a single progress record from the distributed worker."""
-    rec_type = record.get("type", "")
-
-    if rec_type == "metrics":
-        update_data = {}
-        if "loss" in record:
-            update_data["loss"] = record["loss"]
-        if "learning_rate" in record:
-            update_data["learning_rate"] = record["learning_rate"]
-        if "current_step" in record:
-            update_data["current_step"] = record["current_step"]
-        if "total_steps" in record:
-            update_data["total_steps"] = record["total_steps"]
-        if "progress" in record:
-            update_data["progress"] = record["progress"]
-
-        # Send WebSocket update
-        send_websocket_update(
-            websocket_manager.send_status_update(
-                job_id=job_id,
-                status="training",
-                progress=record.get("progress", 0.5),
-                current_step=record.get("current_step"),
-                total_steps=record.get("total_steps"),
-                loss=record.get("loss"),
-                learning_rate=record.get("learning_rate"),
-                gpu_memory=record.get("gpu_memory"),
-            ),
-            event_loop,
-        )
-
-    elif rec_type == "eval":
-        if "eval_loss" in record:
-            send_websocket_update(
-                websocket_manager.send_status_update(
-                    job_id=job_id,
-                    status="training",
-                    eval_loss=record["eval_loss"],
-                ),
-                event_loop,
-            )
-
-    elif rec_type == "completed":
-        output_dir = record.get("output_dir", "")
-        send_websocket_update(
-            websocket_manager.send_completion(job_id=job_id, output_dir=output_dir),
-            event_loop,
-        )
-
-    elif rec_type == "error":
-        send_websocket_update(
-            websocket_manager.send_error(job_id=job_id, error=record.get("error", "Unknown error")),
-            event_loop,
-        )
-
-    elif rec_type == "status":
-        send_websocket_update(
-            websocket_manager.send_status_update(
-                job_id=job_id,
-                status=record.get("status", "training"),
-                message=record.get("message"),
-            ),
-            event_loop,
-        )
-
-
 def run_training_distributed(
     job_id: str,
     config: Any,
@@ -1234,8 +1060,13 @@ def run_training_distributed(
         log_thread = threading.Thread(target=_log_stdout, daemon=True)
         log_thread.start()
 
-        # Monitor progress until subprocess exits
-        _monitor_distributed_progress(proc, progress_file, job_id, job_manager, event_loop)
+        # Relay progress / stop requests until the worker exits, then
+        # reconcile the DB and clean up the run dir (src/worker_monitor.py).
+        monitor_worker(
+            job_id, proc.pid, progress_file, job_manager, event_loop,
+            is_alive=lambda: proc.poll() is None,
+            returncode=lambda: proc.returncode,
+        )
 
         log_thread.join(timeout=5)
 
@@ -1248,25 +1079,24 @@ def run_training_distributed(
         )
 
     finally:
-        # Clean up only when the worker has actually exited. If it is still
-        # alive (e.g. the monitor itself raised), keep the pid record and the
-        # run files: deleting the progress file under a live worker destroys
-        # its only error-reporting channel, and dropping the pid makes the
-        # worker unfindable after the next restart.
-        if proc is None or proc.poll() is not None:
-            try:
-                job_manager.update_job(job_id, worker_pid=None)
-            except Exception:
-                pass
-            try:
-                shutil.rmtree(tmp_dir, ignore_errors=True)
-            except Exception:
-                pass
-        else:
+        if proc is not None and proc.poll() is None:
+            # The monitor itself raised while the worker is still alive. Keep
+            # the pid record and run files: deleting the progress file under
+            # a live worker destroys its only error-reporting channel, and
+            # dropping the pid makes it unfindable after the next restart.
             logger.warning(
                 f"Worker for job {job_id} still running (pid {proc.pid}); "
                 f"leaving run files in place: {tmp_dir}"
             )
+        else:
+            # Normal path: monitor_worker already reconciled the DB and removed
+            # the run dir, so this is a no-op. It matters when the launch
+            # itself failed before a monitor ever ran.
+            try:
+                job_manager.update_job(job_id, worker_pid=None)
+            except Exception:
+                pass
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 async def run_training_async(

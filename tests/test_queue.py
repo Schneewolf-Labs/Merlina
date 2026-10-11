@@ -368,7 +368,7 @@ def test_remove_clears_queued_entry_and_config():
     assert wait_for_job_start(queue), "blocker job never started"
 
     queue.submit("deleted", {"hf_token": "secret"}, task, JobPriority.NORMAL)
-    tracked = queue._queued_jobs["deleted"]
+    tracked = queue._pending["deleted"]
 
     assert queue.remove("deleted") is True, "expected the queued job to be removed"
     assert queue.remove("deleted") is False, "removing twice should report nothing to remove"
@@ -425,6 +425,138 @@ def test_remove_all_queued():
     print("\n✓ Test 11 passed!")
 
 
+def test_cancel_queued_job_is_recorded_immediately():
+    """Cancelling a queued job must flip its DB status right away.
+
+    Previously the queue only flagged the job and left the DB saying
+    "queued" until a worker got around to popping it - behind a multi-hour
+    training run that meant a cancelled job reported as queued for hours.
+    """
+    print("\n" + "="*60)
+    print("TEST 12: cancel() of a queued job updates the DB immediately")
+    print("="*60)
+
+    import os
+    db_path = "/tmp/test_queue_cancel_queued.db"
+    if os.path.exists(db_path):
+        os.remove(db_path)
+    job_manager = JobManager(db_path=db_path)
+    queue = JobQueue(max_concurrent_jobs=1, job_manager=job_manager)
+
+    release, task, executed = _blocking_pair()
+
+    job_manager.create_job("blocker", {})
+    queue.submit("blocker", {}, task, JobPriority.NORMAL)
+    assert wait_for_job_start(queue), "blocker job never started"
+
+    job_manager.create_job("victim", {})
+    queue.submit("victim", {}, task, JobPriority.NORMAL)
+    assert job_manager.get_job("victim").status == "queued"
+
+    assert queue.cancel("victim") is True
+    # The worker is still pinned on "blocker": the status must not depend on it.
+    assert job_manager.get_job("victim").status == "cancelled"
+    assert queue.get_status("victim")["state"] == "unknown"
+    assert queue.get_queue_stats()["queued"] == 0
+
+    release.set()
+    assert queue.wait_for_completion(timeout=30)
+    assert executed == ["blocker"], f"cancelled job ran: {executed}"
+
+    queue.shutdown(wait=True)
+    os.remove(db_path)
+    print("\n✓ Test 12 passed!")
+
+
+def test_cancel_running_job_sets_stop_flag():
+    """cancel() on a running job requests a graceful stop through the DB."""
+    print("\n" + "="*60)
+    print("TEST 13: cancel() of a running job sets stop_requested")
+    print("="*60)
+
+    import os
+    db_path = "/tmp/test_queue_cancel_running.db"
+    if os.path.exists(db_path):
+        os.remove(db_path)
+    job_manager = JobManager(db_path=db_path)
+    queue = JobQueue(max_concurrent_jobs=1, job_manager=job_manager)
+
+    release, task, executed = _blocking_pair()
+    job_manager.create_job("runner", {})
+    queue.submit("runner", {}, task, JobPriority.NORMAL)
+    assert wait_for_job_start(queue), "job never started"
+    assert job_manager.get_job("runner").status == "initializing"
+
+    assert queue.cancel("runner") is True
+    assert job_manager.get_job("runner").stop_requested is True
+    assert queue.get_status("runner")["state"] == "running", "a stop request must not evict a running job"
+
+    release.set()
+    assert queue.wait_for_completion(timeout=30)
+    queue.shutdown(wait=True)
+    os.remove(db_path)
+    print("\n✓ Test 13 passed!")
+
+
+def test_duplicate_submit_is_rejected():
+    """The same job id can't be queued twice (nor queued while running)."""
+    print("\n" + "="*60)
+    print("TEST 14: duplicate submit() raises")
+    print("="*60)
+
+    queue = JobQueue(max_concurrent_jobs=1)
+    release, task, executed = _blocking_pair()
+
+    queue.submit("dup", {}, task, JobPriority.NORMAL)
+    assert wait_for_job_start(queue)
+    try:
+        queue.submit("dup", {}, task, JobPriority.NORMAL)
+        assert False, "expected ValueError for a running job id"
+    except ValueError:
+        pass
+
+    queue.submit("waiting", {}, task, JobPriority.NORMAL)
+    try:
+        queue.submit("waiting", {}, task, JobPriority.HIGH)
+        assert False, "expected ValueError for a queued job id"
+    except ValueError:
+        pass
+    assert queue.get_queue_stats()["queued"] == 1
+
+    release.set()
+    assert queue.wait_for_completion(timeout=30)
+    assert executed == ["dup", "waiting"]
+    queue.shutdown(wait=True)
+    print("\n✓ Test 14 passed!")
+
+
+def test_shutdown_with_pending_jobs_does_not_hang():
+    """shutdown(wait=True) returns once running jobs finish, even with a backlog."""
+    print("\n" + "="*60)
+    print("TEST 15: shutdown() with a backlog")
+    print("="*60)
+
+    queue = JobQueue(max_concurrent_jobs=1)
+    release, task, executed = _blocking_pair()
+
+    queue.submit("current", {}, task, JobPriority.NORMAL)
+    assert wait_for_job_start(queue)
+    queue.submit("never", {}, task, JobPriority.NORMAL)
+
+    done = threading.Event()
+    threading.Thread(target=lambda: (queue.shutdown(wait=True), done.set()), daemon=True).start()
+    release.set()
+    assert done.wait(timeout=10), "shutdown(wait=True) hung behind the backlog"
+    assert executed == ["current"], f"backlog ran after shutdown: {executed}"
+
+    try:
+        queue.submit("late", {}, task, JobPriority.NORMAL)
+        assert False, "expected RuntimeError after shutdown"
+    except RuntimeError:
+        pass
+    print("\n✓ Test 15 passed!")
+
+
 def run_all_tests():
     """Run all tests"""
     print("\n" + "🧪 "*20)
@@ -443,6 +575,10 @@ def run_all_tests():
         test_deleted_job_is_not_executed()
         test_remove_clears_queued_entry_and_config()
         test_remove_all_queued()
+        test_cancel_queued_job_is_recorded_immediately()
+        test_cancel_running_job_sets_stop_flag()
+        test_duplicate_submit_is_rejected()
+        test_shutdown_with_pending_jobs_does_not_hang()
 
         print("\n" + "✅ "*20)
         print("ALL TESTS PASSED!")
