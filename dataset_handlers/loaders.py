@@ -3,6 +3,7 @@ Dataset loader implementations for different sources.
 
 This module provides concrete implementations of DatasetLoader for:
 - HuggingFace Hub datasets
+- The internal dataset store (S3-compatible: MinIO/R2), via swl:// addresses
 - Local files (JSON, JSONL, CSV, Parquet)
 - Uploaded file content (from web UI)
 """
@@ -17,6 +18,7 @@ import logging
 from datasets import load_dataset, Dataset
 import pyarrow as pa
 from .base import DatasetLoader
+from .internal_store import InternalStore, parse_swl_uri
 
 logger = logging.getLogger(__name__)
 
@@ -223,6 +225,83 @@ class StreamingHuggingFaceLoader(DatasetLoader):
             "streaming": True,
             "max_samples": self.max_samples,
             "batch_size": self.batch_size,
+        }
+
+
+class InternalStoreLoader(DatasetLoader):
+    """
+    Load a dataset from the internal store (MinIO/R2) by its ``swl://`` address.
+
+    The store resolves the address to a manifest, and the manifest's parquet
+    shards are read directly from the S3 backend by ``datasets`` — no HuggingFace
+    Hub involved. Because a revision is pinned (``latest`` is resolved to a
+    concrete revision at load time and recorded in the source info), two runs of
+    the same config train on byte-identical data.
+
+    Example:
+        >>> store = InternalStore(config)
+        >>> loader = InternalStoreLoader("swl://athanorlite-dpo", store)
+        >>> dataset = loader.load()
+    """
+
+    def __init__(
+        self,
+        uri: str,
+        store: InternalStore,
+        split: str = "train",
+        max_samples: Optional[int] = None,
+    ) -> None:
+        """
+        Args:
+            uri: An ``swl://name`` or ``swl://name@rev`` address.
+            store: A configured :class:`InternalStore`.
+            split: Split to load (default "train").
+            max_samples: Optional cap on rows (applied after load).
+        """
+        self.uri = uri
+        self.store = store
+        self.split = split
+        self.max_samples = max_samples
+        self.name, self.rev = parse_swl_uri(uri)
+        # Resolved lazily in load(); captured for provenance in get_source_info().
+        self._resolved_rev: Optional[str] = None
+        self._hf_revision: Optional[str] = None
+
+    def load(self) -> Dataset:
+        logger.info(f"Loading dataset from internal store: {self.uri} (split: {self.split})")
+        try:
+            manifest = self.store.get_manifest(self.name, self.rev)
+            self._resolved_rev = manifest.rev
+            self._hf_revision = manifest.hf_revision
+
+            dataset = load_dataset(
+                manifest.format,
+                data_files=manifest.data_files,
+                split=self.split,
+                storage_options=self.store.storage_options(),
+            )
+
+            if self.max_samples is not None and len(dataset) > self.max_samples:
+                dataset = dataset.select(range(self.max_samples))
+
+            logger.info(
+                f"Successfully loaded {len(dataset)} samples from "
+                f"swl://{self.name}@{manifest.rev}"
+            )
+            return dataset
+        except Exception as e:
+            logger.error(f"Failed to load dataset from internal store: {e}")
+            raise ValueError(f"Failed to load dataset '{self.uri}': {str(e)}")
+
+    def get_source_info(self) -> dict:
+        """Source info, including the concrete revision actually loaded."""
+        return {
+            "source_type": "internal",
+            "uri": self.uri,
+            "name": self.name,
+            "rev": self._resolved_rev or self.rev,
+            "split": self.split,
+            "hf_revision": self._hf_revision,
         }
 
 
