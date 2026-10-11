@@ -13,6 +13,7 @@ from .loaders import (
     HuggingFaceLoader,
     StreamingHuggingFaceLoader,
     InternalStoreLoader,
+    MirroredHuggingFaceLoader,
     LocalFileLoader,
     UploadedDatasetLoader,
 )
@@ -46,6 +47,16 @@ def default_internal_store() -> Optional[InternalStore]:
     return _DEFAULT_STORE or None
 
 
+def default_prefer_internal() -> bool:
+    """Whether huggingface sources should be served through the internal-store
+    mirror by default (``prefer_internal`` in app settings). False if unset."""
+    try:
+        from config import settings  # lazy: app config, not a package dep
+        return bool(getattr(settings, "prefer_internal", False))
+    except Exception:  # pragma: no cover - defensive
+        return False
+
+
 class LoaderCreationError(Exception):
     """Raised when loader creation fails."""
     pass
@@ -66,6 +77,7 @@ def create_loader(
     uri: Optional[str] = None,
     store: Optional[InternalStore] = None,
     max_samples: Optional[int] = None,
+    prefer_internal: bool = False,
 ) -> DatasetLoader:
     """
     Create a dataset loader based on source type.
@@ -110,6 +122,18 @@ def create_loader(
     if source_type == "huggingface":
         if not repo_id:
             raise LoaderCreationError("repo_id is required for huggingface source")
+        # Mirror-on-first-use: serve HF through the internal store when preferred
+        # and a store is available. Streaming sources are left direct — a mirror
+        # materializes the split, which a streaming loader is specifically avoiding.
+        if prefer_internal and store is not None and not streaming:
+            return MirroredHuggingFaceLoader(
+                repo_id=repo_id,
+                store=store,
+                split=split,
+                config_name=config_name,
+                token=hf_token,
+                max_samples=max_samples,
+            )
         if streaming:
             return StreamingHuggingFaceLoader(
                 repo_id=repo_id,
@@ -219,6 +243,12 @@ def create_loader_from_config(
     if source_type == 'internal' and store is None:
         store = default_internal_store()
 
+    # For huggingface sources, honor the mirror-on-first-use preference: when
+    # enabled and a store is available, serve (and cache) through the store.
+    prefer_internal = bool(config_dict.get('prefer_internal')) or default_prefer_internal()
+    if source_type == 'huggingface' and prefer_internal and store is None:
+        store = default_internal_store()
+
     return create_loader(
         source_type=source_type,
         repo_id=repo_id,
@@ -234,6 +264,7 @@ def create_loader_from_config(
         uri=uri,
         store=store,
         max_samples=config_dict.get('max_samples'),
+        prefer_internal=prefer_internal,
     )
 
 

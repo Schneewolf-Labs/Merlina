@@ -250,3 +250,25 @@ class InternalStore:
             return True
         except InternalStoreError:
             return False
+
+    # ── writes (mirror path) ────────────────────────────────────────────────
+    def data_uri(self, name: str, rev: str, filename: str) -> str:
+        """The fully-qualified ``s3://`` URI of a shard, for a manifest's data_files."""
+        return f"s3://{self._rev_prefix(name, rev)}/{filename}"
+
+    def upload_file(self, local_path: str, name: str, rev: str, filename: str) -> str:
+        """Upload a local file as a shard of a revision; returns its s3:// URI."""
+        key = f"{self._rev_prefix(name, rev)}/{filename}"
+        self.fs.put(local_path, key)
+        return f"s3://{key}"
+
+    def put_manifest(self, manifest: Manifest) -> None:
+        """Write a revision's manifest.json."""
+        key = self._manifest_key(manifest.name, manifest.rev)
+        with self.fs.open(key, "w") as f:
+            json.dump(manifest.to_json(), f)
+
+    def set_latest(self, name: str, rev: str) -> None:
+        """Point the dataset's ``latest`` at a concrete revision."""
+        with self.fs.open(self._latest_pointer_key(name), "w") as f:
+            f.write(rev)
