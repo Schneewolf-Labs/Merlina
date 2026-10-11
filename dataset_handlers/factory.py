@@ -16,10 +16,34 @@ from .loaders import (
     LocalFileLoader,
     UploadedDatasetLoader,
 )
-from .internal_store import InternalStore
+from .internal_store import InternalStore, InternalStoreConfig
 from .formatters import get_formatter
 
 logger = logging.getLogger(__name__)
+
+# Cache of the default store built from app settings. ``False`` means "built and
+# found unconfigured" (distinct from ``None`` = "not built yet"), so an
+# unconfigured store is not re-probed on every load.
+_DEFAULT_STORE: "InternalStore | bool | None" = None
+
+
+def default_internal_store() -> Optional[InternalStore]:
+    """
+    Build an InternalStore from the app settings, or return None when the store
+    is not configured. Cached. The import of ``config`` is lazy so that
+    dataset_handlers stays importable without the application config present
+    (e.g. in isolated unit tests).
+    """
+    global _DEFAULT_STORE
+    if _DEFAULT_STORE is None:
+        try:
+            from config import settings  # lazy: app config, not a package dep
+            cfg = InternalStoreConfig.from_settings(settings)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"Internal store not available: {e}")
+            cfg = None
+        _DEFAULT_STORE = InternalStore(cfg) if cfg else False
+    return _DEFAULT_STORE or None
 
 
 class LoaderCreationError(Exception):
@@ -189,6 +213,11 @@ def create_loader_from_config(
         source_type = 'internal'
     if source_type == 'internal' and not uri and isinstance(repo_id, str):
         uri = repo_id
+
+    # Fall back to the store configured in app settings so callers that don't
+    # thread one through still resolve internal sources.
+    if source_type == 'internal' and store is None:
+        store = default_internal_store()
 
     return create_loader(
         source_type=source_type,

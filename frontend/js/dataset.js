@@ -135,6 +135,7 @@ class DatasetManager {
                     <label>Source Type</label>
                     <select class="magic-select ds-source-type">
                         <option value="huggingface">HuggingFace Dataset</option>
+                        <option value="internal">Internal Store (swl://)</option>
                         <option value="upload">Upload File</option>
                         <option value="local_file">Local File Path</option>
                     </select>
@@ -154,6 +155,20 @@ class DatasetManager {
                         <div class="form-group" style="flex: 1;">
                             <label>Split</label>
                             <input type="text" class="magic-input ds-split" value="train">
+                        </div>
+                    </div>
+                </div>
+
+                <div class="ds-internal-config" style="display: none;">
+                    <div class="form-row">
+                        <div class="form-group" style="flex: 2;">
+                            <label>Internal Store Address</label>
+                            <input type="text" class="magic-input ds-uri" placeholder="swl://athanorlite-dpo">
+                            <small style="color: #888; font-size: 0.85em;">swl://name or swl://name@revision — served from the internal dataset store (MinIO/R2), no HuggingFace needed</small>
+                        </div>
+                        <div class="form-group" style="flex: 1;">
+                            <label>Split</label>
+                            <input type="text" class="magic-input ds-internal-split" value="train">
                         </div>
                     </div>
                 </div>
@@ -274,6 +289,7 @@ class DatasetManager {
     updateCardSourceVisibility(card) {
         const t = card.querySelector('.ds-source-type').value;
         card.querySelector('.ds-hf-config').style.display = t === 'huggingface' ? 'block' : 'none';
+        card.querySelector('.ds-internal-config').style.display = t === 'internal' ? 'block' : 'none';
         card.querySelector('.ds-upload-config').style.display = t === 'upload' ? 'block' : 'none';
         card.querySelector('.ds-local-config').style.display = t === 'local_file' ? 'block' : 'none';
     }
@@ -397,6 +413,11 @@ class DatasetManager {
             source.split = card.querySelector('.ds-split').value.trim() || 'train';
             const configName = card.querySelector('.ds-config')?.value.trim();
             if (configName) source.config_name = configName;
+        } else if (sourceType === 'internal') {
+            const uri = card.querySelector('.ds-uri').value.trim();
+            if (!uri) throw new Error('Internal store address is required');
+            source.uri = uri;
+            source.split = card.querySelector('.ds-internal-split')?.value.trim() || 'train';
         } else if (sourceType === 'local_file') {
             const filePath = card.querySelector('.ds-local-path').value.trim();
             if (!filePath) throw new Error('File path is required');

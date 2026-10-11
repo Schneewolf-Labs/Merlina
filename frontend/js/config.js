@@ -732,6 +732,11 @@ class ConfigManager {
             if (repoInput) repoInput.value = src.repo_id || '';
             if (splitInput) splitInput.value = src.split || 'train';
             if (configInput) configInput.value = src.config_name || '';
+        } else if (sourceType === 'internal') {
+            const uriInput = card.querySelector('.ds-uri');
+            const splitInput = card.querySelector('.ds-internal-split');
+            if (uriInput) uriInput.value = src.uri || '';
+            if (splitInput) splitInput.value = src.split || 'train';
         } else if (sourceType === 'local_file') {
             const pathInput = card.querySelector('.ds-local-path');
             const fmtSelect = card.querySelector('.ds-local-format');
