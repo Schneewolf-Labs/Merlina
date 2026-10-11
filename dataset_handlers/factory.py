@@ -22,29 +22,55 @@ from .formatters import get_formatter
 
 logger = logging.getLogger(__name__)
 
-# Cache of the default store built from app settings. ``False`` means "built and
-# found unconfigured" (distinct from ``None`` = "not built yet"), so an
-# unconfigured store is not re-probed on every load.
-_DEFAULT_STORE: "InternalStore | bool | None" = None
+# Which backend each store name reads its settings from.
+_STORE_PREFIX = {"internal": "s3", "external": "r2"}
+
+# Per-backend cache. ``False`` means "built and found unconfigured" (distinct
+# from a missing key = "not built yet"), so an unconfigured backend is not
+# re-probed on every load. Keyed by store name ("internal" / "external").
+_STORE_CACHE: "dict[str, InternalStore | bool]" = {}
+
+
+def _reset_store_cache() -> None:
+    """Clear the per-backend store cache (used by tests)."""
+    _STORE_CACHE.clear()
+
+
+def get_store(which: str) -> Optional[InternalStore]:
+    """
+    Build the named store backend ("internal" = MinIO, "external" = R2) from app
+    settings, or return None when that backend is not configured. Cached. The
+    import of ``config`` is lazy so dataset_handlers stays importable without the
+    application config present (e.g. in isolated unit tests).
+    """
+    which = (which or "internal").lower()
+    if which not in _STORE_CACHE:
+        prefix = _STORE_PREFIX.get(which, "s3")
+        try:
+            from config import settings  # lazy: app config, not a package dep
+            cfg = InternalStoreConfig.from_settings(settings, prefix=prefix)
+        except Exception as e:  # pragma: no cover - defensive
+            logger.debug(f"'{which}' dataset store not available: {e}")
+            cfg = None
+        _STORE_CACHE[which] = InternalStore(cfg) if cfg else False
+    return _STORE_CACHE[which] or None
+
+
+def active_store_name() -> str:
+    """The store this process resolves swl:// against (``DATASET_STORE``)."""
+    try:
+        from config import settings  # lazy: app config, not a package dep
+        return str(getattr(settings, "dataset_store", "internal") or "internal").lower()
+    except Exception:  # pragma: no cover - defensive
+        return "internal"
 
 
 def default_internal_store() -> Optional[InternalStore]:
     """
-    Build an InternalStore from the app settings, or return None when the store
-    is not configured. Cached. The import of ``config`` is lazy so that
-    dataset_handlers stays importable without the application config present
-    (e.g. in isolated unit tests).
+    The store for the active backend (``DATASET_STORE``: "internal" by default,
+    "external" on a rented GPU box), or None when it isn't configured.
     """
-    global _DEFAULT_STORE
-    if _DEFAULT_STORE is None:
-        try:
-            from config import settings  # lazy: app config, not a package dep
-            cfg = InternalStoreConfig.from_settings(settings)
-        except Exception as e:  # pragma: no cover - defensive
-            logger.debug(f"Internal store not available: {e}")
-            cfg = None
-        _DEFAULT_STORE = InternalStore(cfg) if cfg else False
-    return _DEFAULT_STORE or None
+    return get_store(active_store_name())
 
 
 def default_prefer_internal() -> bool:

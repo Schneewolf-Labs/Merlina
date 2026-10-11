@@ -5,8 +5,16 @@ Modular dataset loading, formatting, and validation for ORPO training
 
 from .base import DatasetLoader, DatasetFormatter, DatasetPipeline
 from .loaders import HuggingFaceLoader, StreamingHuggingFaceLoader, InternalStoreLoader, MirroredHuggingFaceLoader, LocalFileLoader, UploadedDatasetLoader
-from .internal_store import InternalStore, InternalStoreConfig, InternalStoreError, Manifest, parse_swl_uri
+from .internal_store import (
+    InternalStore,
+    InternalStoreConfig,
+    InternalStoreError,
+    Manifest,
+    parse_swl_uri,
+    is_private_name,
+)
 from .mirror import ensure_mirror, mirror_name, resolve_hf_revision
+from .promote import promote, PromotePlan
 from .formatters import (
     ChatMLFormatter,
     Llama3Formatter,
@@ -49,6 +57,9 @@ __all__ = [
     'InternalStoreError',
     'Manifest',
     'parse_swl_uri',
+    'is_private_name',
+    'promote',
+    'PromotePlan',
     'LocalFileLoader',
     'UploadedDatasetLoader',
     'ChatMLFormatter',
