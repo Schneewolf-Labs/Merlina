@@ -40,6 +40,26 @@ logger = logging.getLogger(__name__)
 SWL_SCHEME = "swl://"
 LATEST = "latest"
 
+# Substrings that mark a dataset name as private — never to be promoted to the
+# external tier, regardless of its manifest flag. A belt-and-braces net for
+# sensitive material (the west VPS incident / IR data) even if someone forgets
+# to set ``private`` on the manifest. Matched case-insensitively against the
+# dataset name.
+PRIVATE_NAME_MARKERS = (
+    "vps-incident",
+    "schneewolf-west",
+    "west1",
+    "incident",
+    "/private/",
+    "private/",
+)
+
+
+def is_private_name(name: str) -> bool:
+    """True if a dataset name matches a private marker and must stay internal."""
+    low = name.lower()
+    return any(marker in low for marker in PRIVATE_NAME_MARKERS)
+
 
 class InternalStoreError(Exception):
     """Raised when the internal store is misconfigured or a lookup fails."""
@@ -78,11 +98,17 @@ class Manifest:
     num_rows: Optional[int] = None
     source: dict[str, Any] = field(default_factory=dict)  # provenance (hf repo+revision, etc.)
     created_at: Optional[str] = None
+    private: bool = False  # if True, never promote to the external tier
 
     @property
     def hf_revision(self) -> Optional[str]:
         """The upstream HF commit hash this was mirrored from, if any."""
         return self.source.get("hf_revision")
+
+    def is_private(self) -> bool:
+        """True if this revision must stay in the internal store — either its
+        manifest is flagged private or its name matches a private marker."""
+        return self.private or is_private_name(self.name)
 
     @classmethod
     def from_json(cls, name: str, rev: str, doc: dict[str, Any]) -> "Manifest":
@@ -102,6 +128,7 @@ class Manifest:
             num_rows=doc.get("num_rows"),
             source=doc.get("source", {}) or {},
             created_at=doc.get("created_at"),
+            private=bool(doc.get("private", False)),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -117,6 +144,8 @@ class Manifest:
             doc["source"] = self.source
         if self.created_at is not None:
             doc["created_at"] = self.created_at
+        if self.private:
+            doc["private"] = True
         return doc
 
 
@@ -131,16 +160,22 @@ class InternalStoreConfig:
     region: str = "auto"
 
     @classmethod
-    def from_settings(cls, settings: Any) -> Optional["InternalStoreConfig"]:
+    def from_settings(
+        cls, settings: Any, prefix: str = "s3"
+    ) -> Optional["InternalStoreConfig"]:
         """
         Build a config from :class:`config.Settings`, or return ``None`` when the
         store is not configured. A missing store is not an error — Merlina simply
         falls back to loading straight from HuggingFace.
+
+        ``prefix`` selects which backend's settings to read: ``"s3"`` for the
+        internal MinIO store (the default) or ``"r2"`` for the external tier.
+        Both have the same field shape, so one builder serves both.
         """
-        endpoint = getattr(settings, "s3_endpoint_url", None)
-        bucket = getattr(settings, "s3_dataset_bucket", None)
-        access = getattr(settings, "s3_access_key", None)
-        secret = getattr(settings, "s3_secret_key", None)
+        endpoint = getattr(settings, f"{prefix}_endpoint_url", None)
+        bucket = getattr(settings, f"{prefix}_dataset_bucket", None)
+        access = getattr(settings, f"{prefix}_access_key", None)
+        secret = getattr(settings, f"{prefix}_secret_key", None)
         if not (endpoint and bucket and access and secret):
             return None
         return cls(
@@ -148,7 +183,7 @@ class InternalStoreConfig:
             bucket=str(bucket),
             access_key=str(access),
             secret_key=str(secret),
-            region=str(getattr(settings, "s3_region", "auto") or "auto"),
+            region=str(getattr(settings, f"{prefix}_region", "auto") or "auto"),
         )
 
 
@@ -261,6 +296,24 @@ class InternalStore:
         key = f"{self._rev_prefix(name, rev)}/{filename}"
         self.fs.put(local_path, key)
         return f"s3://{key}"
+
+    def download_file(self, data_uri: str, local_path: str) -> None:
+        """Download a shard (an ``s3://`` URI from a manifest) to a local file.
+
+        The ``s3://`` scheme is stripped to the fsspec key (``bucket/key``),
+        mirroring how :meth:`upload_file` writes it.
+        """
+        key = data_uri[len("s3://"):] if data_uri.startswith("s3://") else data_uri
+        self.fs.get(key, local_path)
+
+    def file_size(self, data_uri: str) -> Optional[int]:
+        """Size in bytes of a shard, or ``None`` if it can't be determined
+        (used for dry-run cost estimates, so a miss is non-fatal)."""
+        key = data_uri[len("s3://"):] if data_uri.startswith("s3://") else data_uri
+        try:
+            return int(self.fs.size(key))
+        except Exception:  # pragma: no cover - best-effort
+            return None
 
     def put_manifest(self, manifest: Manifest) -> None:
         """Write a revision's manifest.json."""

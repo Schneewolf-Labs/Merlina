@@ -82,6 +82,44 @@ S3_REGION=auto
 
 Leave unset to disable — Merlina then loads straight from HuggingFace as before.
 
+### External tier (R2)
+
+The internal MinIO store is LAN-only, so a rented GPU box (RunPod) can't reach
+it. The **external tier** is a second S3 backend — same code, same `swl://`
+names — reachable off-LAN. It's configured with an `R2_*` block mirroring the
+`S3_*` one, and a per-process selector:
+
+```
+R2_ENDPOINT_URL=https://<acct>.r2.cloudflarestorage.com
+R2_DATASET_BUCKET=merlina-datasets
+R2_ACCESS_KEY=...
+R2_SECRET_KEY=...
+R2_REGION=auto
+
+# which backend THIS process resolves swl:// against: internal (default) | external
+DATASET_STORE=internal
+```
+
+On sabre everything stays `internal` (MinIO). A rented GPU box sets
+`DATASET_STORE=external` and supplies the `R2_*` vars; the loaders, mirror, and
+`swl://` names are unchanged — only the backend differs.
+
+Data reaches the external tier **only** via an explicit promote:
+
+```bash
+merlina datasets promote swl://hf/org/ds/train --to external --dry-run  # cost estimate, writes nothing
+merlina datasets promote swl://hf/org/ds/train --to external            # actually copy
+merlina datasets info swl://hf/org/ds/train --store external            # verify
+```
+
+Promotion is one-way (internal is the source of truth), content-addressed (so a
+copy is byte-identical and re-promoting a present rev is a no-op unless
+`--overwrite`), and **refuses private data**: any revision whose manifest is
+flagged `private: true`, or whose name matches a private marker
+(`vps-incident`, `schneewolf-west`, `incident`, `private/`, …), is blocked.
+West/IR data never leaves the internal store. `--allow-private` exists as a
+deliberate override but is not for that data.
+
 ## Status / roadmap
 
 - **Phase 1 (this PR): read path.** `swl://` addressing, manifests, the loader,
@@ -91,6 +129,10 @@ Leave unset to disable — Merlina then loads straight from HuggingFace as befor
   `prefer_internal` is served from the store if mirrored; on a miss, pulled from
   HF once, snapshotted as parquet, and a sha-pinned manifest written. Streaming
   sources are left direct. See `dataset_handlers/mirror.py`.
+- **Phase 3.5 (this PR): external tier + promote.** A second `R2_*` backend
+  selected by `DATASET_STORE`, a one-way `merlina datasets promote` (with
+  `--dry-run` cost estimate) to copy revisions internal→external, and a private
+  guard so west/IR data can't be promoted. See `dataset_handlers/promote.py`.
 - **Phase 4: migrate** the datasets we actually train on and cut configs over.
 
 ## Phase 2 — standing up MinIO on sabre (operator steps)

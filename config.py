@@ -73,6 +73,25 @@ class Settings(BaseSettings):
     # mirror of it exists there (mirror-on-first-use lands in a later phase).
     prefer_internal: bool = False
 
+    # ------------------------------------------------------------------
+    # External tier (Cloudflare R2, or any S3 API reachable off-LAN).
+    # ------------------------------------------------------------------
+    # The internal MinIO store (s3_* above) is LAN-only, so a rented GPU box
+    # (e.g. RunPod) can't reach it. The external tier is a second S3 backend —
+    # same swl:// names, same code — that such a box CAN reach. Data gets there
+    # only via an explicit `merlina datasets promote`, which refuses anything
+    # marked private (west/IR data never leaves the private store).
+    r2_endpoint_url: Optional[str] = None  # e.g. "https://<acct>.r2.cloudflarestorage.com"
+    r2_dataset_bucket: Optional[str] = None
+    r2_access_key: Optional[str] = None
+    r2_secret_key: Optional[str] = None
+    r2_region: str = "auto"
+    # Which backend THIS process resolves swl:// against: "internal" (MinIO, the
+    # private primary) or "external" (R2). A rented GPU box sets
+    # DATASET_STORE=external and supplies the r2_* vars; everything else — the
+    # swl:// names, mirror-on-first-use, the loaders — is unchanged.
+    dataset_store: str = "internal"
+
     # ==========================================
     # Training Defaults
     # ==========================================

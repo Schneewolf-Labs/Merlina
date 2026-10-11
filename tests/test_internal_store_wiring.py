@@ -65,9 +65,9 @@ def test_training_config_internal_vs_dataset_name_is_ambiguous():
 # ── default_internal_store() from settings ───────────────────────────────────
 @pytest.fixture(autouse=True)
 def _reset_store_cache():
-    factory._DEFAULT_STORE = None
+    factory._reset_store_cache()
     yield
-    factory._DEFAULT_STORE = None
+    factory._reset_store_cache()
 
 
 def test_default_store_none_when_unconfigured(monkeypatch):
