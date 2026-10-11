@@ -304,6 +304,12 @@ class TestWorkerReattach:
             [sys.executable, "-c", "import sys, time; time.sleep(30)", "--job-id", job_id]
         )
         try:
+            # Popen returns after fork but before the child has finished exec'ing,
+            # so /proc/<pid>/cmdline is briefly empty. Wait for it to reflect the
+            # real argv before asserting, otherwise the check races the exec.
+            deadline = time.monotonic() + 5.0
+            while not _is_our_worker(proc.pid, job_id) and time.monotonic() < deadline:
+                time.sleep(0.02)
             assert _is_our_worker(proc.pid, job_id)
             assert not _is_our_worker(proc.pid, "job_some_other")
         finally:
