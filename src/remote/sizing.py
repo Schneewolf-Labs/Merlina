@@ -318,6 +318,8 @@ def pick_instance(
         if not offer.available:
             continue
         price = offer.price_per_hr(cloud_type)
+        if price is None:
+            continue  # not sold on this cloud type
         for count in range(1, max(offer.max_gpu_count, 1) + 1):
             if usable(offer, count) < vram_required_gb:
                 continue

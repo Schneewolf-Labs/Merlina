@@ -23,9 +23,11 @@ class GpuOffer:
     available: bool = True
 
     def price_per_hr(self, cloud_type: str = "secure") -> Optional[float]:
-        if cloud_type == "community":
-            return self.price_per_hr_community or self.price_per_hr_secure
-        return self.price_per_hr_secure or self.price_per_hr_community
+        # No fallback to the other cloud's price: a GPU with no secure price isn't sold on
+        # secure cloud, and borrowing the community price let sizing pick an instance that
+        # provisioning could never get.
+        price = self.price_per_hr_community if cloud_type == "community" else self.price_per_hr_secure
+        return price or None
 
 
 @dataclass

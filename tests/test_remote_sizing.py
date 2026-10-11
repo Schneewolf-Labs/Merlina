@@ -192,3 +192,16 @@ class TestPickInstance:
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+def test_skips_gpus_not_sold_on_the_requested_cloud():
+    from src.remote.spec import GpuOffer
+    from src.remote.sizing import pick_instance
+    offers = [
+        GpuOffer("community-only", "community-only", vram_gb=24, price_per_hr_secure=None,
+                 price_per_hr_community=0.10),
+        GpuOffer("secure-ok", "secure-ok", vram_gb=24, price_per_hr_secure=0.30,
+                 price_per_hr_community=0.20),
+    ]
+    assert pick_instance(8, 10, offers, cloud_type="secure").gpu_type_id == "secure-ok"
+    assert pick_instance(8, 10, offers, cloud_type="community").gpu_type_id == "community-only"

@@ -19,6 +19,12 @@ from .base import ComputeProvider, ProviderError
 logger = logging.getLogger(__name__)
 
 API_BASE = "https://rest.runpod.io/v1"
+# GPU types and live prices are only in the GraphQL API: REST v1 has no GPU-type endpoint.
+GRAPHQL_URL = "https://api.runpod.io/graphql"
+_GPU_TYPES_QUERY = (
+    "{ gpuTypes { id displayName memoryInGb maxGpuCount securePrice communityPrice "
+    "lowestPrice(input: {gpuCount: 1}) { stockStatus uninterruptablePrice } } }"
+)
 REQUEST_TIMEOUT = 30  # seconds
 
 _STATUS_MAP = {
@@ -60,6 +66,23 @@ class RunPodProvider(ComputeProvider):
             return resp.json()
         except ValueError as e:
             raise ProviderError(f"RunPod API returned non-JSON on {method} {path}") from e
+
+    def _graphql(self, query: str) -> Dict[str, Any]:
+        try:
+            resp = self._session.request(
+                "POST", GRAPHQL_URL, json={"query": query}, timeout=REQUEST_TIMEOUT,
+            )
+        except requests.RequestException as e:
+            raise ProviderError(f"RunPod GraphQL request failed: {e}") from e
+        if not resp.ok:
+            raise ProviderError(f"RunPod GraphQL error {resp.status_code}: {resp.text[:500]}")
+        try:
+            body = resp.json()
+        except ValueError as e:
+            raise ProviderError("RunPod GraphQL returned non-JSON") from e
+        if body.get("errors"):
+            raise ProviderError(f"RunPod GraphQL errors: {str(body['errors'])[:500]}")
+        return body.get("data") or {}
 
     # ---- ComputeProvider -----------------------------------------------
 
@@ -105,22 +128,25 @@ class RunPodProvider(ComputeProvider):
             logger.warning("Terminate of pod %s reported: %s", instance_id, e)
 
     def list_gpu_offers(self) -> List[GpuOffer]:
-        data = self._request("GET", "/gputypes")
-        if isinstance(data, dict):  # tolerate a wrapped list
-            data = data.get("gpuTypes") or data.get("data") or []
+        data = self._graphql(_GPU_TYPES_QUERY)
         offers: List[GpuOffer] = []
-        for item in data or []:
+        for item in (data or {}).get("gpuTypes") or []:
             gpu_id = item.get("id")
             if not gpu_id:
                 continue
+            lowest = item.get("lowestPrice") or {}
+            # A type with no stock status has nothing rentable right now; its listed
+            # community price is then a placeholder (seen: an H200 NVL at $0.50).
+            available = bool(lowest.get("stockStatus"))
             offers.append(GpuOffer(
                 gpu_type_id=gpu_id,
                 display_name=item.get("displayName", gpu_id),
                 vram_gb=float(item.get("memoryInGb") or 0),
                 price_per_hr_secure=item.get("securePrice"),
-                price_per_hr_community=item.get("communityPrice"),
+                price_per_hr_community=(lowest.get("uninterruptablePrice") if available
+                                        else item.get("communityPrice")),
                 max_gpu_count=int(item.get("maxGpuCount") or 8),
-                available=bool(item.get("secureCloud") or item.get("communityCloud") or True),
+                available=available,
             ))
         return offers
 
