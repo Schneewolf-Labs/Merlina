@@ -305,6 +305,74 @@ class InternalStoreLoader(DatasetLoader):
         }
 
 
+class MirroredHuggingFaceLoader(DatasetLoader):
+    """
+    Load a HuggingFace dataset through the internal store, mirroring it on first
+    use. Subsequent loads come from the store, pinned to the upstream commit sha.
+
+    Behaves like a HuggingFaceLoader from the caller's point of view — same
+    repo_id/split/config — but the data is served from (and cached in) the store.
+
+    Example:
+        >>> loader = MirroredHuggingFaceLoader("schneewolflabs/Athanorlite-DPO", store)
+        >>> dataset = loader.load()   # pulls from HF once, then from the store
+    """
+
+    def __init__(
+        self,
+        repo_id: str,
+        store: "InternalStore",
+        split: str = "train",
+        config_name: Optional[str] = None,
+        token: Optional[str] = None,
+        revision: Optional[str] = None,
+        max_samples: Optional[int] = None,
+    ) -> None:
+        self.repo_id = repo_id
+        self.store = store
+        self.split = split
+        self.config_name = config_name
+        self.token = token
+        self.revision = revision
+        self.max_samples = max_samples
+        self._name: Optional[str] = None
+        self._rev: Optional[str] = None
+
+    def load(self) -> Dataset:
+        from .mirror import ensure_mirror
+
+        logger.info(f"Loading {self.repo_id} via internal-store mirror (split: {self.split})")
+        try:
+            name, rev = ensure_mirror(
+                self.store,
+                self.repo_id,
+                split=self.split,
+                config_name=self.config_name,
+                token=self.token,
+                revision=self.revision,
+            )
+            self._name, self._rev = name, rev
+            inner = InternalStoreLoader(
+                f"swl://{name}@{rev}", self.store, split=self.split, max_samples=self.max_samples
+            )
+            return inner.load()
+        except Exception as e:
+            logger.error(f"Failed to load mirrored dataset '{self.repo_id}': {e}")
+            raise ValueError(f"Failed to mirror/load '{self.repo_id}': {str(e)}")
+
+    def get_source_info(self) -> dict:
+        return {
+            "source_type": "huggingface",
+            "mirrored": True,
+            "repo_id": self.repo_id,
+            "split": self.split,
+            "config_name": self.config_name,
+            "name": self._name,
+            "rev": self._rev,
+            "hf_revision": self._rev,
+        }
+
+
 class LocalFileLoader(DatasetLoader):
     """
     Load dataset from local file.

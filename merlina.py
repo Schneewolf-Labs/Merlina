@@ -291,11 +291,18 @@ if not FRONTEND_DIR.exists():
 # Pydantic models for dataset configuration
 class DatasetSource(BaseModel):
     """Configuration for dataset source"""
-    source_type: str = Field(..., description="Type of dataset source: huggingface, local_file, upload")
+    source_type: str = Field(..., description="Type of dataset source: huggingface, internal, local_file, upload")
 
     # For HuggingFace datasets
     repo_id: Optional[str] = Field(None, description="HuggingFace repository ID")
     split: str = Field("train", description="Dataset split to use")
+
+    # For the internal dataset store (S3/MinIO/R2)
+    uri: Optional[str] = Field(
+        None,
+        description="Internal store address, e.g. 'swl://athanorlite-dpo' or "
+                    "'swl://athanorlite-dpo@2026-10-08'. Used when source_type='internal'."
+    )
     config_name: Optional[str] = Field(
         None,
         description="HuggingFace dataset configuration / subset name (the `name` "
@@ -904,7 +911,7 @@ class TrainingConfig(BaseModel):
             return self
 
         src = self.dataset.source
-        src_specified = bool(src.repo_id or src.file_path or src.dataset_id)
+        src_specified = bool(src.repo_id or src.file_path or src.dataset_id or src.uri)
         if not src_specified:
             self.dataset.source = DatasetSource(
                 source_type="huggingface",
@@ -918,7 +925,7 @@ class TrainingConfig(BaseModel):
                 and (not self.dataset_split or self.dataset_split == src.split)
             )
             if not matches:
-                described = src.repo_id or src.file_path or src.dataset_id
+                described = src.repo_id or src.file_path or src.dataset_id or src.uri
                 raise ValueError(
                     f"dataset_name ('{self.dataset_name}') and dataset.source "
                     f"({src.source_type}: '{described}') disagree — it is ambiguous "

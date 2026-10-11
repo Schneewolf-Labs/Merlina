@@ -87,9 +87,10 @@ Leave unset to disable — Merlina then loads straight from HuggingFace as befor
 - **Phase 1 (this PR): read path.** `swl://` addressing, manifests, the loader,
   factory dispatch, config. Reads revisions that already exist in the store.
 - **Phase 2: stand up MinIO on sabre** (see below).
-- **Phase 3: mirror-on-first-use.** An `huggingface` source with `prefer_internal`
-  is served from the store if mirrored; on a miss, pulled from HF once, snapshotted
-  as parquet, and a revision-pinned manifest written.
+- **Phase 3 (done): mirror-on-first-use.** An `huggingface` source with
+  `prefer_internal` is served from the store if mirrored; on a miss, pulled from
+  HF once, snapshotted as parquet, and a sha-pinned manifest written. Streaming
+  sources are left direct. See `dataset_handlers/mirror.py`.
 - **Phase 4: migrate** the datasets we actually train on and cut configs over.
 
 ## Phase 2 — standing up MinIO on sabre (operator steps)
