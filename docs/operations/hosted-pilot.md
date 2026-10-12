@@ -6,6 +6,13 @@ on its public origin; do not proxy the self-hosted API, MCP server or worker por
 through that origin. TLS is mandatory. The hosted studio is served at `/` and
 static assets at `/hosted-static`; all customer API requests use `/api/hosted`.
 
+The sign-in throttle is per client IP. `X-Forwarded-For` is honored only when the
+direct peer is listed in `MERLINA_HOSTED_TRUSTED_PROXIES` (empty by default).
+Behind the local TLS reverse proxy, set `MERLINA_HOSTED_TRUSTED_PROXIES=127.0.0.1`
+(or the proxy's address), and make the proxy overwrite rather than append to
+client-supplied `X-Forwarded-For`. Without it every client shares the proxy's
+throttle bucket, so one attacker can lock everyone out of sign-in.
+
 ## Launch gate
 
 Before enabling paid execution, record the operator, environment, image digest,
