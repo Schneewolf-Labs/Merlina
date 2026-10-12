@@ -1,5 +1,9 @@
 # Custom Dataset Implementation Summary
 
+## Document Status
+
+This file is a historical implementation summary. The project has since moved to a modular frontend structure under `frontend/js/`; references to a single `frontend/script.js` file have been updated accordingly.
+
 ## Overview
 
 Successfully implemented a modular, extensible dataset handling system for Merlina, enabling users to:
@@ -91,16 +95,13 @@ New dataset configuration section with:
   - Max samples limit for testing
   - Column mapping (future enhancement)
 
-#### JavaScript: `frontend/script.js` (~180 lines added)
+#### JavaScript: `frontend/js/dataset.js` and related modules
 
 New functions:
-- `handleDatasetUpload()` - Upload file to server
-- `handleDatasetPreview()` - Fetch and display raw preview (3 samples)
-- `handleFormattedPreview()` - Fetch and display formatted preview (1 sample)
-- `getDatasetConfig()` - Build dataset config from form
-- Dynamic UI updates for source/format changes
-- Updated `handleSubmit()` to include dataset config
-- Preview toggle (shows one type at a time)
+- `frontend/js/dataset.js` now owns dataset upload + preview interactions.
+- `frontend/js/config.js` and `frontend/js/app.js` coordinate dataset config submission.
+- UI state updates are split across focused modules under `frontend/js/`.
+- Preview behavior and rendering are handled through the modular frontend architecture (not a single `script.js` file).
 
 ## Design Patterns Used
 
@@ -153,7 +154,7 @@ All tests pass successfully:
 **Files Modified:** 3
 - `merlina.py` (~200 lines added/changed)
 - `frontend/index.html` (~140 lines added)
-- `frontend/script.js` (~180 lines added)
+- `frontend/js/` modules (dataset/config/app updates)
 - `README.md` (updated features section)
 
 **Total Lines of Code:** ~1,500 new lines
