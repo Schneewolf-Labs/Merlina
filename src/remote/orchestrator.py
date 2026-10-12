@@ -161,8 +161,9 @@ def run_training_remote(
             _update(job_manager, event_loop, job_id, status="merging", progress=0.94,
                     message=f"Merging adapter ({merge_stage.target})")
             if merge_stage.target == "local":
-                merged_dir = _run_local_merge(config, output_dir)
-                store.push_dir(merged_dir, "merged")
+                # The merged model is already on local disk; re-uploading it
+                # to the run store would only add cost and failure modes.
+                _run_local_merge(config, output_dir)
             elif merge_stage.target == "remote":
                 _run_remote_stage(
                     stage=merge_stage,

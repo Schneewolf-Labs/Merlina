@@ -17,8 +17,9 @@ model creation with AI agents on SWL.ai: managed rented compute, user-funded
 execution, and durable S3/R2 storage for datasets, checkpoints, and models.
 The friendly wizard personality stays; the infrastructure becomes easier to use.
 
-The hosted experience at `merlina.swl.ai` is planned. Accounts, billing, the
-built-in advisor, and S3/R2 model artifact storage are not available yet.
+The hosted experience at `merlina.swl.ai` is planned. Accounts, billing, and
+the built-in advisor are not available yet. Self-hosted S3/R2 artifact handoff
+is available; see [durable remote artifacts](docs/dev/artifact-storage.md).
 See the [Merlina 3 plan](docs/dev/merlina-3.md) for the current baseline,
 implementation sequence, and acceptance criteria.
 

@@ -35,8 +35,9 @@ need a scoped capability broker before launching untrusted workers.
 
 S3 handoff does not require an HF token or output repo. A gated HF input model
 may still need a token. `push_to_hub` remains a separate optional publishing
-step; merged artifacts are committed to durable storage before remote HF
-publishing. Local merge also commits its result.
+step. A remote merge publishes the merged model to exactly one place: the HF
+target repo when `push_to_hub` is set, otherwise the artifact store. A local
+merge keeps its result on the control plane's disk and does not re-upload it.
 
 ## Publication and integrity contract
 
@@ -72,11 +73,14 @@ Only rank zero uploads. The existing `save_steps` policy controls cadence;
 `save_steps=0` disables periodic saves. Local/HF training behavior is unchanged.
 
 Publication uses an isolated child process with a 120-second timeout, configurable
-with `MERLINA_CHECKPOINT_TIMEOUT_SECONDS` (clamped to 1–900 seconds). Training
+with `MERLINA_CHECKPOINT_TIMEOUT_SECONDS` (clamped to 1–900 seconds; the control
+plane forwards its value to S3 workers). Training
 pauses for that bounded interval; slow/failed publication records a warning and
 continues, preserving previous committed generations. The status API mirrors
 `checkpoint_publication` into control-plane job metrics, including the last
-committed step. A failed/timed-out attempt is never reported as durable. Final
+committed step. A failed/timed-out attempt is never reported as durable; after
+one, the worker rereads the committed manifest (bounded) so `last_committed_step`
+still matches the store if the manifest PUT landed before the failure. Final
 adapter publication proceeds independently and still fails the job if it cannot
 commit. Include periodic upload/download verification costs in budgets.
 

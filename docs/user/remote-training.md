@@ -2,8 +2,9 @@
 
 > This guide describes the current self-hosted workflow. The planned
 > [Merlina 3 hosted experience](../dev/merlina-3.md) will manage provider
-> setup and charge users for execution through Merlina. Hosted billing and
-> S3/R2 model artifact storage are not implemented yet.
+> setup and charge users for execution through Merlina. Self-hosted S3/R2
+> artifact handoff is available (see [durable remote artifacts](../dev/artifact-storage.md));
+> only the hosted service and billing remain planned.
 
 Train models bigger than your GPUs. Remote mode turns your local Merlina
 into a control plane: give it your RunPod API key and it provisions a GPU

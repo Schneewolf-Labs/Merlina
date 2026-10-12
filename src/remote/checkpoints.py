@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 from .artifacts import store_from_description
@@ -22,13 +23,14 @@ DEFAULT_TIMEOUT_SECONDS = 120
 
 
 class DurableCheckpointCallback:
-    def __init__(self, job_id, job_manager, description, metadata=None, *, timeout=DEFAULT_TIMEOUT_SECONDS, runner=None):
+    def __init__(self, job_id, job_manager, description, metadata=None, *, timeout=DEFAULT_TIMEOUT_SECONDS, runner=None, store=None):
         self.job_id, self.job_manager = job_id, job_manager
         self.description, self.metadata = description, metadata or {}
         self.timeout = max(1, min(float(timeout), 900))
         self.runner = runner or subprocess.run
+        self.store = store
 
-    def _record(self, state, step, error=None):
+    def _record(self, state, step, error=None, committed_step=None):
         if self.job_manager is None:
             return
         job = self.job_manager.get_job(self.job_id)
@@ -37,6 +39,8 @@ class DurableCheckpointCallback:
         record = {"state": state, "step": step, "artifact": "checkpoint"}
         if state == "committed":
             record["last_committed_step"] = step
+        elif committed_step is not None:
+            record["last_committed_step"] = committed_step
         elif "last_committed_step" in previous:
             record["last_committed_step"] = previous["last_committed_step"]
         if error:
@@ -79,10 +83,32 @@ class DurableCheckpointCallback:
         finally:
             accelerator.wait_for_everyone()
 
+    def _store_committed_step(self):
+        """Best-effort, bounded read of the step the store's manifest commits.
+
+        A child killed after its manifest PUT landed (or a failed status write)
+        must not leave last_committed_step pointing at an older checkpoint.
+        """
+        found = []
+
+        def read():
+            try:
+                store = self.store or store_from_description(self.description, token=os.environ.get("HF_TOKEN"))
+                step = store._manifest("checkpoint")["metadata"]["checkpoint"]["step"]
+                if type(step) is int:
+                    found.append(step)
+            except Exception:
+                pass
+
+        reader = threading.Thread(target=read, daemon=True)
+        reader.start()
+        reader.join(min(self.timeout, 30))
+        return found[0] if found else None
+
     def _failure(self, step, message):
         logger.warning("Job %s: %s", self.job_id, message)
         try:
-            self._record("failed", step, message)
+            self._record("failed", step, message, committed_step=self._store_committed_step())
         except Exception:
             logger.warning("Could not persist checkpoint publication status for %s", self.job_id)
 

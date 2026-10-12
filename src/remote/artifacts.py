@@ -204,14 +204,19 @@ def artifact_worker_env(description: dict) -> dict:
 
     Operators must scope these credentials to the selected job prefix. AWS
     ambient credentials are deliberately never copied to rented workers.
+    The checkpoint timeout is read on the worker, so it travels here too.
     """
-    if description.get("kind") != "s3" or description.get("credential_transport") == "broker":
+    if description.get("kind") != "s3":
         return {}
     from config import settings
-    return {name.upper(): value for name in (
+    env = {"MERLINA_CHECKPOINT_TIMEOUT_SECONDS": str(settings.merlina_checkpoint_timeout_seconds)}
+    if description.get("credential_transport") == "broker":
+        return env
+    env.update({name.upper(): value for name in (
         "merlina_artifact_access_key", "merlina_artifact_secret_key",
         "merlina_artifact_session_token",
-    ) if (value := getattr(settings, name))}
+    ) if (value := getattr(settings, name))})
+    return env
 
 
 def __getattr__(name):

@@ -335,7 +335,8 @@ class TestMergeStage:
         cfg = make_config(remote=make_remote_cfg(merge_strategy="local"))
         run(cfg, job_manager)
         assert merged == [Path("models/my-model")]
-        assert (Path("store/merged") / "weights").read_text() == "merged"
+        # Local merges stay on local disk; they are not re-uploaded.
+        assert not Path("store/merged").exists()
         assert job_manager.get_job("job_1").status == "completed"
 
     def test_remote_merge_provisions_second_instance(self, job_manager):

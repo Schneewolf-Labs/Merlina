@@ -171,7 +171,20 @@ def test_broker_never_receives_static_credentials(monkeypatch):
     from config import settings
     monkeypatch.setattr(settings, "merlina_artifact_access_key", "broad-key")
     monkeypatch.setattr(settings, "merlina_artifact_secret_key", "broad-secret")
-    assert artifact_worker_env({"kind": "s3", "credential_transport": "broker"}) == {}
+    env = artifact_worker_env({"kind": "s3", "credential_transport": "broker"})
+    assert "broad" not in json.dumps(env)
+    assert set(env) == {"MERLINA_CHECKPOINT_TIMEOUT_SECONDS"}
+
+
+def test_checkpoint_timeout_reaches_s3_workers(monkeypatch):
+    from config import Settings, settings
+    monkeypatch.setattr(settings, "merlina_checkpoint_timeout_seconds", 300)
+    env = artifact_worker_env({"kind": "s3"})
+    assert env["MERLINA_CHECKPOINT_TIMEOUT_SECONDS"] == "300"
+    assert artifact_worker_env({"kind": "hf_hub"}) == {}
+    # The worker's own settings pick the forwarded value up from its env.
+    monkeypatch.setenv("MERLINA_CHECKPOINT_TIMEOUT_SECONDS", env["MERLINA_CHECKPOINT_TIMEOUT_SECONDS"])
+    assert Settings(_env_file=None).merlina_checkpoint_timeout_seconds == 300
 
 
 def test_empty_and_invalid_manifests_never_count_as_committed(setup):

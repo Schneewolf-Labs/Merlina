@@ -274,11 +274,9 @@ def run_merge_stage(payload: Dict[str, Any], job_manager: JobManager,
     )
 
     state.set_state(STATE_PUSHING)
-    for artifact in payload.get("artifacts_out") or ["merged"]:
-        store.push_dir(merged_dir, artifact)
-        state.add_artifact(artifact)
     if config_dict.get("push_to_hub"):
-        # Publishing is optional; the durable store remains the source of truth.
+        # Publish straight to the user's target repo — re-shipping a merged
+        # model through the artifact store would double the upload.
         from huggingface_hub import HfApi
         token = config_dict.get("hf_token") or os.environ.get("HF_TOKEN")
         api = HfApi(token=token)
@@ -288,6 +286,10 @@ def run_merge_stage(payload: Dict[str, Any], job_manager: JobManager,
         api.upload_folder(folder_path=str(merged_dir), repo_id=repo_id,
                           commit_message="Upload from Merlina remote run")
         state.add_artifact(f"hub:{repo_id}")
+    else:
+        for artifact in payload.get("artifacts_out") or ["merged"]:
+            store.push_dir(merged_dir, artifact)
+            state.add_artifact(artifact)
 
     job_manager.update_job(job_id, status="completed", progress=1.0,
                            output_dir=str(merged_dir))

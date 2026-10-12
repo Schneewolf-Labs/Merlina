@@ -52,7 +52,7 @@ def test_completed_save_publishes_and_restores_verified_checkpoint(fixture, tmp_
 def test_failed_checkpoint_visible_and_final_adapter_still_succeeds(fixture):
     manager, fs, store, checkpoint, trainer, barriers = fixture
     publish_checkpoint({"step": 4, "path": str(checkpoint)}, store=store)
-    callback = DurableCheckpointCallback("job", manager, store.describe())
+    callback = DurableCheckpointCallback("job", manager, store.describe(), store=store)
     callback._record("committed", 4)
     fs.fail_upload = True
 
@@ -77,12 +77,30 @@ def test_timeout_does_not_stop_training_or_claim_commit(fixture):
     def runner(command, **kwargs):
         raise subprocess.TimeoutExpired(command, kwargs["timeout"])
 
-    callback = DurableCheckpointCallback("job", manager, store.describe(), timeout=1, runner=runner)
+    callback = DurableCheckpointCallback("job", manager, store.describe(), timeout=1, runner=runner, store=store)
     callback.on_save(trainer, checkpoint)
     status = manager.get_job("job").metrics["checkpoint_publication"]
     assert status["state"] == "failed" and "timed out" in status["error"]
     assert "last_committed_step" not in status
     assert barriers == ["barrier", "barrier"]
+
+
+def test_child_killed_after_manifest_put_reports_store_step(fixture):
+    manager, fs, store, checkpoint, trainer, barriers = fixture
+    publish_checkpoint({"step": 4, "path": str(checkpoint)}, store=store)
+    callback = DurableCheckpointCallback("job", manager, store.describe(), store=store)
+    callback._record("committed", 4)
+
+    def runner(command, **kwargs):
+        # The manifest PUT lands, then the child is killed before exiting.
+        publish_checkpoint(json.loads(Path(command[-1]).read_text()), store=store)
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    callback.runner = runner
+    callback.on_save(trainer, checkpoint)
+    status = manager.get_job("job").metrics["checkpoint_publication"]
+    assert status["state"] == "failed"
+    assert status["last_committed_step"] == 5
 
 
 def test_non_main_rank_joins_both_barriers_without_upload(fixture):
