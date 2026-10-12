@@ -25,6 +25,7 @@ import json
 import logging
 import secrets
 import time
+import threading
 from pathlib import Path
 from typing import Any, Callable, List, Optional
 
@@ -32,6 +33,7 @@ from src.job_manager import JobManager
 from src.websocket_manager import websocket_manager
 
 from .artifacts import ArtifactStore, artifact_worker_env, store_for_job
+from .lifecycle import RemoteLifecycle, RemoteAlreadyClaimed, terminate_confirmed
 from .plan import RemotePlanError, build_remote_plan
 from .providers import ComputeProvider, ProviderError, get_provider
 from .spec import InstanceSpec, RemotePlan, StagePlan
@@ -81,6 +83,8 @@ def run_training_remote(
     worker_client_factory: Optional[Callable[[str, str], WorkerClient]] = None,
     poll_interval_s: Optional[float] = None,
     boot_timeout_min: Optional[float] = None,
+    lifecycle: Optional[RemoteLifecycle] = None,
+    execution_guard: Any = None,
 ) -> None:
     """
     Execute a remote training run end to end. Mirrors the local runners'
@@ -95,6 +99,25 @@ def run_training_remote(
     poll_interval_s = poll_interval_s or getattr(settings, "remote_poll_interval_seconds", DEFAULT_POLL_INTERVAL_S)
     boot_timeout_min = boot_timeout_min or getattr(settings, "remote_boot_timeout_minutes", DEFAULT_BOOT_TIMEOUT_MIN)
     remote_cfg = config.remote
+    lifecycle = lifecycle or RemoteLifecycle(job_manager.db_path)
+    try:
+        owner = lifecycle.claim(job_id, remote_cfg.max_runtime_hours)
+    except RemoteAlreadyClaimed:
+        logger.warning("Ignoring duplicate remote dispatch for %s", job_id)
+        return
+    heartbeat_stop = threading.Event()
+
+    def heartbeat():
+        while not heartbeat_stop.wait(min(20.0, lifecycle.lease_seconds / 3)):
+            try:
+                lifecycle.heartbeat(job_id, owner)
+            except Exception:
+                logger.exception("Remote execution heartbeat failed for %s", job_id)
+                return
+
+    heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
+    heartbeat_thread.start()
+    final_state, final_error = "failed", None
 
     try:
         _update(job_manager, event_loop, job_id, status="provisioning", progress=0.0,
@@ -144,6 +167,7 @@ def run_training_remote(
             poll_interval_s=poll_interval_s,
             boot_timeout_min=boot_timeout_min,
             mirror_job_fields=True,
+            lifecycle=lifecycle, owner=owner, execution_guard=execution_guard,
         )
 
         # ---- Pull the adapter home ----
@@ -176,6 +200,7 @@ def run_training_remote(
                     poll_interval_s=poll_interval_s,
                     boot_timeout_min=boot_timeout_min,
                     mirror_job_fields=False,
+                    lifecycle=lifecycle, owner=owner, execution_guard=execution_guard,
                 )
         elif config.push_to_hub:
             # Adapter-only publish: the artifact we pulled is small.
@@ -188,12 +213,15 @@ def run_training_remote(
                 private=getattr(config, "hf_hub_private", True),
             )
 
+        _check_run(lifecycle, job_id, owner, job_manager)
+        final_state = "completed"
         _update(job_manager, event_loop, job_id, status="completed", progress=1.0)
         _send_ws(event_loop, websocket_manager.send_completion(
             job_id=job_id, output_dir=str(output_dir)))
         logger.info("Remote training job %s completed", job_id)
 
     except RemoteStopped:
+        final_state = "stopped"
         logger.info("Remote training job %s stopped by user", job_id)
         job_manager.update_job(job_id, status="stopped")
         job = job_manager.get_job(job_id)
@@ -201,9 +229,25 @@ def run_training_remote(
             job_id=job_id, status="stopped",
             progress=job.progress if job else 0.0))
     except Exception as e:
+        final_error = str(e)
         logger.error("Remote training job %s failed: %s", job_id, e, exc_info=True)
         job_manager.update_job(job_id, status="failed", error=str(e))
         _send_ws(event_loop, websocket_manager.send_error(job_id=job_id, error=str(e)))
+    finally:
+        heartbeat_stop.set()
+        heartbeat_thread.join(timeout=1)
+        lifecycle.finish(job_id, owner, final_state, final_error)
+        resources = lifecycle.resources(job_id)
+        job = job_manager.get_job(job_id)
+        job_manager.update_job(job_id, metrics={**(job.metrics or {}), "remote_resources": resources} if job else {})
+        if execution_guard is not None:
+            # An ambiguous create can still appear in provider inventory later.
+            attempts = [a for a in lifecycle.attempts() if a["job_id"] == job_id]
+            if all(a["state"] not in ("provisioning", "provisioning_unknown") for a in attempts):
+                try:
+                    execution_guard.settle(job_id, resources)
+                except Exception:
+                    logger.exception("Settlement pending for remote job %s", job_id)
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +267,9 @@ def _run_remote_stage(
     poll_interval_s: float,
     boot_timeout_min: float,
     mirror_job_fields: bool,
+    lifecycle: RemoteLifecycle,
+    owner: str,
+    execution_guard: Any = None,
 ) -> None:
     """
     Provision an instance, drive one worker stage to completion on it, and
@@ -230,64 +277,72 @@ def _run_remote_stage(
     """
     remote_cfg = config.remote
     token = spec.env.get(TOKEN_ENV_VAR, "")
-    deadline = time.monotonic() + remote_cfg.max_runtime_hours * 3600
-
-    instance = provider.provision(spec)
-    logger.info("Stage %r for job %s on %s instance %s",
-                stage.name, job_id, provider.name, instance.instance_id)
+    _check_run(lifecycle, job_id, owner, job_manager)
+    if execution_guard is not None:
+        execution_guard.before_provision(job_id, stage.name, spec)
+    label = lifecycle.intent(job_id, owner, stage.name, provider.name)
+    spec.name = label
+    deadline = time.monotonic() + max(0, lifecycle.run(job_id)["deadline"] - time.time())
+    instance = None
     failed = False
+
+    def tick():
+        _check_run(lifecycle, job_id, owner, job_manager, check_stop=False)
+        if execution_guard is not None:
+            execution_guard.usage(job_id, lifecycle.resources(job_id))
+
     try:
+        instance = provider.provision(spec)
+        lifecycle.record_instance(job_id, stage.name, label, instance)
+        lifecycle.stage_state(job_id, stage.name, "running")
+        tick()
         url = provider.proxy_url(instance, WORKER_PORT)
         if not url:
-            raise RemoteStageError(
-                f"Provider {provider.name} returned no proxy URL for instance "
-                f"{instance.instance_id} — cannot reach the worker."
-            )
+            raise RemoteStageError(f"Provider {provider.name} returned no worker proxy URL")
         client = client_factory(url, token)
-
         _wait_for_worker(
             client, instance, provider, job_id, job_manager,
-            boot_timeout_s=boot_timeout_min * 60,
-            poll_interval_s=poll_interval_s,
-            deadline=deadline,
+            boot_timeout_s=boot_timeout_min * 60, poll_interval_s=poll_interval_s,
+            deadline=deadline, tick=tick,
         )
-
-        _poll_stage_to_completion(
-            client=client,
-            stage=stage,
-            job_id=job_id,
-            job_manager=job_manager,
-            event_loop=event_loop,
-            poll_interval_s=poll_interval_s,
-            deadline=deadline,
-            mirror_job_fields=mirror_job_fields,
+        artifacts = _poll_stage_to_completion(
+            client=client, stage=stage, job_id=job_id, job_manager=job_manager,
+            event_loop=event_loop, poll_interval_s=poll_interval_s,
+            deadline=deadline, mirror_job_fields=mirror_job_fields, tick=tick,
         )
-    except BaseException:
+        lifecycle.stage_state(job_id, stage.name, "completed", artifacts=artifacts)
+    except BaseException as exc:
         failed = True
+        lifecycle.stage_state(job_id, stage.name,
+                              "failed" if instance else "provisioning_unknown",
+                              error=type(exc).__name__)
         raise
     finally:
-        if failed and remote_cfg.keep_instance_on_failure:
-            logger.warning(
-                "Keeping instance %s alive for debugging (keep_instance_on_failure) — "
-                "REMEMBER TO TERMINATE IT, it is still billing.",
-                instance.instance_id,
-            )
-        else:
-            try:
-                provider.terminate(instance.instance_id)
-            except Exception as e:
-                logger.error(
-                    "FAILED TO TERMINATE instance %s — terminate it manually in the "
-                    "%s console to stop billing: %s",
-                    instance.instance_id, provider.name, e,
-                )
+        if instance is not None:
+            if failed and remote_cfg.keep_instance_on_failure and execution_guard is None:
+                lifecycle.cleanup_result(provider.name, instance.instance_id, retained=True,
+                                         error="Retained for debugging until total job deadline")
+            else:
+                terminate_confirmed(lifecycle, provider, instance.instance_id)
+
+
+def _check_run(lifecycle, job_id, owner, job_manager, *, check_stop=True):
+    run = lifecycle.run(job_id)
+    if time.time() >= run["deadline"]:
+        raise RemoteBudgetExceeded("max_runtime_hours reached across the entire remote job")
+    lifecycle.heartbeat(job_id, owner)
+    job = job_manager.get_job(job_id)
+    if job is None or (check_stop and job.stop_requested):
+        raise RemoteStopped()
 
 
 def _wait_for_worker(client, instance, provider, job_id, job_manager,
-                     *, boot_timeout_s, poll_interval_s, deadline) -> None:
+                     *, boot_timeout_s, poll_interval_s, deadline, tick=lambda: None) -> None:
     """Wait for the worker HTTP server to come up on a fresh instance."""
     boot_deadline = time.monotonic() + boot_timeout_s
+    tick()
     while not client.health():
+        tick()
         now = time.monotonic()
         if now > boot_deadline:
             raise RemoteStageError(
@@ -309,7 +364,7 @@ def _wait_for_worker(client, instance, provider, job_id, job_manager,
 
 
 def _poll_stage_to_completion(*, client, stage, job_id, job_manager, event_loop,
-                              poll_interval_s, deadline, mirror_job_fields) -> None:
+                              poll_interval_s, deadline, mirror_job_fields, tick=lambda: None):
     """Poll worker status until a terminal state, mirroring progress home."""
     from config import settings
     stop_grace_s = getattr(settings, "remote_stop_grace_minutes", DEFAULT_STOP_GRACE_MIN) * 60
@@ -318,6 +373,7 @@ def _poll_stage_to_completion(*, client, stage, job_id, job_manager, event_loop,
     stop_sent_at: Optional[float] = None
 
     while True:
+        tick()
         status = client.status(since_step=since_step)
 
         if mirror_job_fields:
@@ -328,7 +384,10 @@ def _poll_stage_to_completion(*, client, stage, job_id, job_manager, event_loop,
                 f"Stage {stage.name!r} failed on the worker: {status.error or 'unknown error'}"
             )
         if status.is_terminal:
-            return
+            job = job_manager.get_job(job_id)
+            if (job and job.stop_requested) or status.job.get("status") == "stopped":
+                raise RemoteStopped()
+            return status.artifacts
 
         now = time.monotonic()
         if now > deadline:

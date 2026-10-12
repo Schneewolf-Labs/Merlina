@@ -288,7 +288,7 @@ class TestFailure:
         assert "healthy" in job.error
         assert provider.terminated == ["inst_1"]
 
-    def test_runtime_cap_terminates(self, job_manager):
+    def test_expired_runtime_prevents_provisioning(self, job_manager):
         worker = ScriptedWorker([WorkerStatus(state=STATE_RUNNING)] * 2)
         provider = FakeProvider()
         cfg = make_config(remote=make_remote_cfg(max_runtime_hours=1e-7))
@@ -296,7 +296,7 @@ class TestFailure:
         job = job_manager.get_job("job_1")
         assert job.status == "failed"
         assert "max_runtime_hours" in job.error
-        assert provider.terminated == ["inst_1"]
+        assert provider.provisioned == []
 
 
 class TestStop:
@@ -318,9 +318,9 @@ class TestStop:
             boot_timeout_min=0.01,
         )
 
-        assert running_forever.stop_requests >= 1
+        assert running_forever.stop_requests == 0
         assert job_manager.get_job("job_1").status == "stopped"
-        assert provider.terminated == ["inst_1"]
+        assert provider.provisioned == []
 
 
 class TestMergeStage:
