@@ -318,3 +318,52 @@ def test_definitively_failed_provision_settles_without_charge(execution):
     assert e.billing.balance(e.job['account_id'])['available_minor']==1000
     assert e.store.require_job(e.job['account_id'],e.job['project_id'],jid)['status']=='failed'
     assert e.provider.starts==0
+
+
+def test_launch_pause_holds_new_work_but_keeps_cancel(execution):
+    from src.hosted.runtime import gate_launches
+    e=execution
+    gate_launches(e.service,e.app.state.settings)
+    approve(e)
+    e.app.state.settings.launches_paused=True
+    for action,body in (('quote',None),('approve',{'quote_id':'anything'})):
+        response=e.client.post(endpoint(e,action),json=body)
+        assert response.status_code==503 and 'paused' in response.json()['detail']
+    e.service.tick()
+    assert e.provider.starts==0
+    assert e.billing.run(e.job['id'])['state']=='approved'
+    assert e.client.post(endpoint(e,'cancel')).status_code==200
+    e.service.tick()
+    assert e.provider.starts==0
+    assert e.billing.run(e.job['id'])['state']=='settled'
+    assert e.billing.balance(e.job['account_id'])['reserved_minor']==0
+
+
+def test_launch_pause_still_reconciles_and_settles_running_work(execution,monkeypatch):
+    from src.hosted.runtime import gate_launches
+    e=execution
+    gate_launches(e.service,e.app.state.settings)
+    original=e.provider.provision
+    def lost_response(spec):
+        original(spec)
+        raise TimeoutError('Provider accepted create but response was lost')
+    monkeypatch.setattr(e.provider,'provision',lost_response)
+    approve(e)
+    e.service.tick()
+    deadline=time.monotonic()+5
+    while e.runtime.active and time.monotonic()<deadline:
+        time.sleep(.01)
+    assert e.billing.run(e.job['id'])['state']=='dispatching'
+    e.app.state.settings.launches_paused=True
+    e.service.tick()
+    assert e.billing.run(e.job['id'])['state']=='settled'
+    assert e.provider.instances['instance'].status=='terminated'
+    assert e.provider.starts==1
+
+
+def test_launch_pause_setting_parses_strictly(monkeypatch):
+    monkeypatch.setenv('MERLINA_HOSTED_LAUNCHES_PAUSED','true')
+    assert HostedSettings.from_env().launches_paused is True
+    monkeypatch.setenv('MERLINA_HOSTED_LAUNCHES_PAUSED','yes')
+    with pytest.raises(ValueError):
+        HostedSettings.from_env()

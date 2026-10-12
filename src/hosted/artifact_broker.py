@@ -100,11 +100,15 @@ def artifact_capability(body: CapabilityRequest, request: Request):
     header = request.headers.get('authorization', '')
     if not header.startswith('Bearer ') or len(header) > 512:
         raise HTTPException(403, 'Artifact access denied')
-    grants = request.app.state.artifact_grants
+    grants = getattr(request.app.state, 'artifact_grants', None)
+    signer = getattr(request.app.state, 'artifact_signer', None)
+    if grants is None or signer is None:
+        # Mounted always; configured only by the paid runtime.
+        raise HTTPException(503, 'Artifact broker is not configured')
     expires = grants.authorize(header[7:], body.key, body.operation, body.size)
     try:
         kwargs = {'ContentLength': body.size} if body.operation == 'put' else {}
-        url = request.app.state.artifact_signer.sign(
+        url = signer.sign(
             body.key, expiration=expires,
             client_method='put_object' if body.operation == 'put' else 'get_object', **kwargs)
         parsed = urlsplit(url)

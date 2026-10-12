@@ -32,6 +32,7 @@ The factory reads `HostedSettings.from_env()`. Settings use the
 `TRUSTED_PROXIES` (comma-separated peer addresses whose `X-Forwarded-For` is
 honoured; empty by default, so the TCP peer address is used),
 `PAID_EXECUTION_ENABLED` (strict `true` or `false`, default false),
+`LAUNCHES_PAUSED` (strict `true` or `false`, default false; see the pilot runbook),
 `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `CHECKOUT_SUCCESS_URL`,
 `CHECKOUT_CANCEL_URL`, `BILLING_CURRENCY` (USD only), `BILLING_POLICY_VERSION`,
 `BILLING_FAILURE_POLICY`, and `BILLING_OVERAGE_POLICY`. The database defaults

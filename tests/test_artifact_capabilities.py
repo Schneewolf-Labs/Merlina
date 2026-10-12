@@ -116,3 +116,14 @@ def test_scoped_store_description_excludes_token(tmp_path):
     with pytest.raises(ValueError):
         build_scoped_store(underlying, db_path=tmp_path/'db', public_url='http://merlina.example',
                            account_id='a', project_id='p', job_id='j', expires_at=10**12, max_bytes=100)
+
+
+def test_unconfigured_broker_returns_503_not_500(tmp_path):
+    from src.hosted.app import create_hosted_app
+    from src.hosted.settings import HostedSettings
+    client = TestClient(create_hosted_app(HostedSettings(data_dir=tmp_path)))
+    body = {'key': 'bucket/jobs/j1/a', 'operation': 'get'}
+    response = client.post('/api/hosted/worker-artifacts/capability', json=body,
+                           headers={'Authorization': 'Bearer token'})
+    assert response.status_code == 503
+    assert client.post('/api/hosted/worker-artifacts/capability', json=body).status_code == 403
