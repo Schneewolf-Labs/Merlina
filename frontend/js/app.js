@@ -11,6 +11,7 @@ import { ThemeManager } from './theme.js';
 import { InferenceManager } from './inference.js';
 import { ExportManager } from './export.js';
 import { DiskManager } from './disk.js';
+import { StorageManager } from './storage.js';
 import { buildTrainingConfig } from './form_config.js';
 import { initDiffusionDropzone, initDiffusionPlayground } from './diffusion.js';
 import { Studio } from './studio.js';
@@ -48,6 +49,7 @@ class MerlinaApp {
         this.inferenceManager = new InferenceManager();
         this.exportManager = new ExportManager();
         this.diskManager = new DiskManager();
+        this.storageManager = new StorageManager();
 
         this.toast = new Toast();
 
@@ -61,6 +63,7 @@ class MerlinaApp {
         window.inferenceManager = this.inferenceManager;
         window.exportManager = this.exportManager;
         window.diskManager = this.diskManager;
+        window.storageManager = this.storageManager;
 
         // Initialize the app
         this.init();
@@ -128,6 +131,9 @@ class MerlinaApp {
 
         // Initialize the Cleanup section (disk analysis + checkpoint pruning)
         this.diskManager.init();
+
+        // Initialize the Object storage section (tier browse / sync / delete)
+        this.storageManager.init();
 
         // Initialize the diffusion image-dataset drag-drop UI.
         // Safe no-op when the diffusion fields aren't on this page.
@@ -771,6 +777,11 @@ class MerlinaApp {
         if (sectionId === 'cleanup-section' && this.diskManager && !this._cleanupLoaded) {
             this._cleanupLoaded = true;
             this.diskManager.loadAnalysis();
+        }
+
+        // Lazy-load storage tiers the first time the Object storage section opens.
+        if (sectionId === 'storage-section' && this.storageManager) {
+            this.storageManager.load();
         }
 
         // Scroll to top
