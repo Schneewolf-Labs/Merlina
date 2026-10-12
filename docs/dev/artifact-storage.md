@@ -8,20 +8,30 @@ paid remote training run.
 
 ## Self-hosted configuration
 
-Set these on the control plane:
+Point artifacts at a storage tier on the control plane. The tier's endpoint
+and keys are reused (see [Storage tiers](../storage-tiers.md)):
 
 ```dotenv
-MERLINA_ARTIFACT_STORE=s3
-MERLINA_ARTIFACT_S3_BUCKET=your-bucket
-MERLINA_ARTIFACT_S3_PREFIX=merlina/runs
-# Omit endpoint for AWS; for R2 use your account's HTTPS endpoint.
-MERLINA_ARTIFACT_S3_ENDPOINT=https://ACCOUNT.r2.cloudflarestorage.com
-MERLINA_ARTIFACT_S3_REGION=auto
-MERLINA_ARTIFACT_ACCESS_KEY=YOUR_SCOPED_KEY
-MERLINA_ARTIFACT_SECRET_KEY=YOUR_SCOPED_SECRET
-# Optional for temporary credentials:
-MERLINA_ARTIFACT_SESSION_TOKEN=YOUR_SESSION_TOKEN
+STORAGE_EXTERNAL_ENDPOINT=https://ACCOUNT.r2.cloudflarestorage.com   # omit for AWS
+STORAGE_EXTERNAL_BUCKET=your-bucket
+STORAGE_EXTERNAL_ACCESS_KEY=YOUR_KEY
+STORAGE_EXTERNAL_SECRET_KEY=YOUR_SECRET
+ARTIFACT_STORE=external
+ARTIFACT_PREFIX=merlina/runs
+# ARTIFACT_BUCKET=other-bucket   # optional; a different bucket on the same endpoint
 ```
+
+Remote workers must reach the store, so remote runs need `ARTIFACT_STORE=external`.
+`internal` (a LAN-only tier) is refused at plan and preflight time.
+
+For **dedicated, prefix-scoped worker credentials** that differ from the tier's,
+for example with temporary credentials and a session token, the legacy custom
+location still works:
+`MERLINA_ARTIFACT_STORE=s3`, `MERLINA_ARTIFACT_S3_BUCKET`, `_S3_ENDPOINT`,
+`_S3_REGION`, `MERLINA_ARTIFACT_ACCESS_KEY`, `_SECRET_KEY`, `_SESSION_TOKEN`.
+These names are also the worker wire format: the control plane always forwards
+the artifact keys to workers as `MERLINA_ARTIFACT_ACCESS_KEY`, `_SECRET_KEY` and
+`_SESSION_TOKEN`.
 
 Each job is stored below `<prefix>/<job_id>/`. Store descriptions and history
 contain only the bucket, prefix, endpoint and region. Dedicated credentials

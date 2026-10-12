@@ -22,8 +22,8 @@ from .formatters import get_formatter
 
 logger = logging.getLogger(__name__)
 
-# Which backend each store name reads its settings from.
-_STORE_PREFIX = {"internal": "s3", "external": "r2"}
+# Which tier each store name reads its settings from.
+_STORE_PREFIX = {"internal": "internal", "external": "external"}
 
 # Per-backend cache. ``False`` means "built and found unconfigured" (distinct
 # from a missing key = "not built yet"), so an unconfigured backend is not
@@ -57,17 +57,18 @@ def get_store(which: str) -> Optional[InternalStore]:
 
 
 def active_store_name() -> str:
-    """The store this process resolves swl:// against (``DATASET_STORE``)."""
+    """The store this process resolves swl:// against (``DATASET_TIER``)."""
     try:
         from config import settings  # lazy: app config, not a package dep
-        return str(getattr(settings, "dataset_store", "internal") or "internal").lower()
+        return str(getattr(settings, "dataset_tier", None)
+                   or getattr(settings, "dataset_store", None) or "internal").lower()
     except Exception:  # pragma: no cover - defensive
         return "internal"
 
 
 def default_internal_store() -> Optional[InternalStore]:
     """
-    The store for the active backend (``DATASET_STORE``: "internal" by default,
+    The store for the active backend (``DATASET_TIER``: "internal" by default,
     "external" on a rented GPU box), or None when it isn't configured.
     """
     return get_store(active_store_name())
@@ -75,10 +76,13 @@ def default_internal_store() -> Optional[InternalStore]:
 
 def default_prefer_internal() -> bool:
     """Whether huggingface sources should be served through the internal-store
-    mirror by default (``prefer_internal`` in app settings). False if unset."""
+    mirror by default (``DATASET_MIRROR`` in app settings). False if unset."""
     try:
         from config import settings  # lazy: app config, not a package dep
-        return bool(getattr(settings, "prefer_internal", False))
+        value = getattr(settings, "dataset_mirror", None)
+        if value is None:
+            value = getattr(settings, "prefer_internal", None)
+        return bool(value)
     except Exception:  # pragma: no cover - defensive
         return False
 
@@ -136,7 +140,7 @@ def create_loader(
         if store is None:
             raise LoaderCreationError(
                 "The internal dataset store is not configured "
-                "(set s3_endpoint_url / s3_dataset_bucket / s3_access_key / s3_secret_key)."
+                "(set STORAGE_INTERNAL_ENDPOINT / _BUCKET / _ACCESS_KEY / _SECRET_KEY)."
             )
         return InternalStoreLoader(
             uri=uri,

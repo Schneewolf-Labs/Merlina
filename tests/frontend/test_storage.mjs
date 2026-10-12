@@ -30,7 +30,7 @@ globalThis.document = {
 
 const { MerlinaAPI } = await import('../../frontend/js/api.js');
 const {
-    StorageManager, breadcrumbs, parentPrefix, humanBytes, humanCount, esc, isGuarded, validateBucketName, renderPreview,
+    StorageManager, breadcrumbs, parentPrefix, humanBytes, humanCount, esc, isGuarded, validateBucketName, renderPreview, startPrefix,
 } = await import('../../frontend/js/storage.js');
 
 const TIERS = [
@@ -106,6 +106,16 @@ describe('storage helpers', () => {
     it('isGuarded only for private -> shared', () => {
         assert.equal(isGuarded(TIERS[0], TIERS[1]), true);
         assert.equal(isGuarded(TIERS[1], TIERS[0]), false);
+    });
+});
+
+describe('startPrefix', () => {
+    it('opens the artifact prefix of the bucket that hosts runs', () => {
+        const t = { bucket: 'shared', hint_prefix: 'runs/', bucket_hints: { artifacts: 'merlina/runs/' } };
+        assert.equal(startPrefix(t, 'shared'), 'runs/');
+        assert.equal(startPrefix(t, 'artifacts'), 'merlina/runs/');
+        assert.equal(startPrefix(t, 'other'), '');
+        assert.equal(startPrefix(null, 'x'), '');
     });
 });
 

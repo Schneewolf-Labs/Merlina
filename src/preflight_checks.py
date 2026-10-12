@@ -203,8 +203,11 @@ class PreflightValidator:
         for problem in check_remote_compatible(config):
             self.errors.append(problem)
 
-        artifact_kind = getattr(settings, "merlina_artifact_store", "hf_hub")
-        if artifact_kind == "s3":
+        from src.remote.plan import remote_artifact_location
+        location = remote_artifact_location(settings)
+        if location.error:
+            self.errors.append(location.error)
+        elif location.kind == "s3":
             # This branch only constructs a store; it never contacts storage or
             # calls the Hub. Reuse address validation without requiring HF auth.
             from src.remote.artifacts import ArtifactStoreError, store_for_job
@@ -212,14 +215,12 @@ class PreflightValidator:
                 store_for_job(config, "preflight")
             except ArtifactStoreError as error:
                 self.errors.append(str(error))
-        elif artifact_kind == "hf_hub":
+        elif location.kind == "hf_hub":
             if not config.hf_token and not config.remote.artifact_repo:
                 self.errors.append(
-                    "Configure S3 artifacts or provide an HF token / "
+                    "Configure ARTIFACT_STORE=external or provide an HF token / "
                     "remote.artifact_repo for the private HuggingFace artifact store."
                 )
-        else:
-            self.errors.append("MERLINA_ARTIFACT_STORE must be s3 or hf_hub")
 
         if is_local_model_path(config.base_model):
             self.errors.append(

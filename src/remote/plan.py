@@ -38,6 +38,15 @@ class RemotePlanError(ValueError):
     """The requested remote run cannot be planned."""
 
 
+def remote_artifact_location(settings):
+    """The resolved artifact location, or ``None`` for a bare settings object."""
+    resolve = getattr(settings, "artifact_location", None)
+    if callable(resolve):
+        return resolve()
+    from config import resolve_artifact_location
+    return resolve_artifact_location(settings)
+
+
 def check_remote_compatible(config: Any) -> List[str]:
     """
     Return blocking problems that make a config unrunnable remotely.
@@ -86,9 +95,13 @@ def check_remote_compatible(config: Any) -> List[str]:
                     problems.append(str(error))
         elif kind != "huggingface":
             problems.append("Unsupported remote dataset source type.")
+    location = remote_artifact_location(settings)
+    if location is not None and location.tier == "internal":
+        problems.append("ARTIFACT_STORE=internal is LAN-only, so remote workers cannot reach "
+                        "it. Remote runs need ARTIFACT_STORE=external (or hf_hub).")
     if any(getattr(src, "source_type", "huggingface") != "huggingface" for src in sources):
         try:
-            require_operator_store(getattr(settings, "merlina_artifact_store", "hf_hub"))
+            require_operator_store(location if location is not None else "hf_hub")
         except RemoteInputError as error:
             problems.append(str(error))
     mode = (getattr(config, "training_mode", "") or "").lower()

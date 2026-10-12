@@ -28,18 +28,21 @@ def configure_runtime(app):
     if (origin.scheme != 'https' or not origin.hostname or origin.username or origin.password
             or origin.path not in ('', '/') or origin.query or origin.fragment):
         raise BillingUnavailable('Configure MERLINA_HOSTED_PUBLIC_URL as an HTTPS origin')
-    if server.merlina_artifact_store != 's3' or not server.merlina_artifact_s3_bucket:
+    location = server.artifact_location()
+    if location.kind != 's3' or location.error or not location.bucket:
         raise BillingUnavailable('Hosted execution requires configured S3 artifact storage')
-    if server.merlina_artifact_s3_endpoint and not server.merlina_artifact_s3_endpoint.startswith('https://'):
+    if location.tier == 'internal':
+        raise BillingUnavailable('Hosted execution needs ARTIFACT_STORE=external (the internal tier is LAN-only)')
+    if location.endpoint_url and not location.endpoint_url.startswith('https://'):
         raise BillingUnavailable('Hosted S3 artifact endpoint requires HTTPS')
 
     def raw_store(job=None):
-        prefix = server.merlina_artifact_s3_prefix
+        prefix = location.prefix
         if job is not None:
             prefix = '/'.join((prefix, job['account_id'], job['project_id'], job['id']))
-        return S3ArtifactStore(server.merlina_artifact_s3_bucket, prefix,
-            endpoint_url=server.merlina_artifact_s3_endpoint,
-            region_name=server.merlina_artifact_s3_region,
+        return S3ArtifactStore(location.bucket, prefix,
+            endpoint_url=location.endpoint_url,
+            region_name=location.region,
             metadata=artifact_metadata(job['config']) if job else {})
 
     class LazySigner:

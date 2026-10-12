@@ -1,26 +1,116 @@
 # Storage tiers
 
-Merlina can talk to up to three S3-compatible object stores. The storage-tiers
-feature lets you manage them from one place, through the `merlina storage` CLI,
-the `/storage/*` API or the web UI's **Object storage** section. You can list,
-create and delete buckets, browse and preview their contents, check usage, copy
-or move prefixes between tiers and buckets, and delete prefixes.
+Merlina talks to up to two S3-compatible object stores, the **internal** and
+**external** tiers. The storage-tiers feature lets you manage them from one
+place, through the `merlina storage` CLI, the `/storage/*` API or the web UI's
+**Object storage** section. You can list, create and delete buckets, browse and
+preview their contents, check usage, copy or move prefixes between tiers and
+buckets, and delete prefixes.
 
-| Tier        | Settings              | Privacy | Typical backend          | Holds                                    |
-|-------------|-----------------------|---------|--------------------------|------------------------------------------|
-| `internal`  | `S3_*`                | private | self-hosted MinIO (LAN)  | datasets (`datasets/<name>/<rev>/...`)   |
-| `external`  | `R2_*`                | shared  | Cloudflare R2, any S3    | promoted datasets, remote-run artifacts  |
-| `artifacts` | `MERLINA_ARTIFACT_*`  | shared  | any S3                   | `runs/<job_id>/...` adapters and merged models |
+| Tier       | Settings              | Privacy | Typical backend          | Holds                                   |
+|------------|-----------------------|---------|--------------------------|-----------------------------------------|
+| `internal` | `STORAGE_INTERNAL_*`  | private | self-hosted MinIO (LAN)  | datasets (`datasets/<name>/<rev>/...`)  |
+| `external` | `STORAGE_EXTERNAL_*`  | shared  | Cloudflare R2, any S3    | promoted datasets, remote-run artifacts |
 
-`artifacts` shows up only when it is configured **and** points at a different
-endpoint or bucket than `external`. When both use the same bucket (a common
-setup), `external` already covers the artifact prefix and the UI opens it there.
+Remote-run artifacts live **in a tier** (`ARTIFACT_STORE=external`). They sit
+under `ARTIFACT_PREFIX` in the tier's bucket, or in `ARTIFACT_BUCKET` on the
+same endpoint, which then shows up as a protected default bucket of that tier.
+The UI opens the artifact prefix directly. Only a legacy custom artifact
+location (see below) still appears as a separate `artifacts` tier.
 
-The tiers reuse the variables described in
-[internal-dataset-store.md](internal-dataset-store.md) and
-[dev/artifact-storage.md](dev/artifact-storage.md). The only new settings are
-the optional admin keys described under [Buckets](#buckets). Credentials are
-never returned by the API or printed by the CLI.
+## Configuration
+
+Both tiers have the same shape:
+
+```dotenv
+STORAGE_INTERNAL_ENDPOINT=http://minio.lan:9000
+STORAGE_INTERNAL_BUCKET=datasets
+STORAGE_INTERNAL_ACCESS_KEY=...
+STORAGE_INTERNAL_SECRET_KEY=...
+STORAGE_INTERNAL_REGION=auto                  # optional, default auto
+STORAGE_INTERNAL_ADMIN_ACCESS_KEY=...         # optional, bucket operations only
+STORAGE_INTERNAL_ADMIN_SECRET_KEY=...
+
+STORAGE_EXTERNAL_ENDPOINT=https://<account>.r2.cloudflarestorage.com
+STORAGE_EXTERNAL_BUCKET=merlina-shared
+STORAGE_EXTERNAL_ACCESS_KEY=...
+STORAGE_EXTERNAL_SECRET_KEY=...
+# ...same optional _REGION / _ADMIN_* keys
+
+DATASET_TIER=internal        # which tier this process resolves swl:// against
+DATASET_MIRROR=false         # mirror HF datasets into the internal tier on first use
+
+ARTIFACT_STORE=external      # hf_hub (default) | external | internal
+ARTIFACT_BUCKET=             # optional; defaults to the tier's bucket
+ARTIFACT_PREFIX=merlina/runs
+```
+
+A tier name in `ARTIFACT_STORE` reuses that tier's endpoint and keys, so
+credentials are never duplicated. `ARTIFACT_STORE=internal` is fine for local
+use. Remote (RunPod) runs are refused at plan and preflight time with it,
+because remote workers can't reach a LAN-only tier; they need `external`.
+
+Remote workers still receive the artifact keys under the original names
+`MERLINA_ARTIFACT_ACCESS_KEY`, `MERLINA_ARTIFACT_SECRET_KEY` and
+`MERLINA_ARTIFACT_SESSION_TOKEN`, built from the new settings. That is the
+worker wire format, so already-deployed worker images keep working.
+
+### Renamed settings
+
+The old names still work as deprecated aliases. Merlina logs one warning
+listing any that are set (names only, never values). When both an old and a
+new name are set, the new one wins. `merlina config migrate-env` renames them
+in a `.env` file.
+
+| Old | New |
+|-----|-----|
+| `S3_ENDPOINT_URL` | `STORAGE_INTERNAL_ENDPOINT` |
+| `S3_DATASET_BUCKET` | `STORAGE_INTERNAL_BUCKET` |
+| `S3_ACCESS_KEY` / `S3_SECRET_KEY` | `STORAGE_INTERNAL_ACCESS_KEY` / `STORAGE_INTERNAL_SECRET_KEY` |
+| `S3_REGION` | `STORAGE_INTERNAL_REGION` |
+| `R2_ENDPOINT_URL` | `STORAGE_EXTERNAL_ENDPOINT` |
+| `R2_DATASET_BUCKET` | `STORAGE_EXTERNAL_BUCKET` |
+| `R2_ACCESS_KEY` / `R2_SECRET_KEY` | `STORAGE_EXTERNAL_ACCESS_KEY` / `STORAGE_EXTERNAL_SECRET_KEY` |
+| `R2_REGION` | `STORAGE_EXTERNAL_REGION` |
+| `DATASET_STORE` | `DATASET_TIER` |
+| `PREFER_INTERNAL` | `DATASET_MIRROR` |
+| `MERLINA_ARTIFACT_STORE=hf_hub` | `ARTIFACT_STORE=hf_hub` |
+| `MERLINA_ARTIFACT_STORE=s3` + `_S3_ENDPOINT` / `_S3_BUCKET` / `_S3_REGION` / `_ACCESS_KEY` / `_SECRET_KEY` | `ARTIFACT_STORE=<tier>` (+ `ARTIFACT_BUCKET` if the bucket differs). This applies when the endpoint and keys match that tier's; otherwise see "Custom artifact location" below |
+| `MERLINA_ARTIFACT_S3_PREFIX` | `ARTIFACT_PREFIX` |
+
+`MERLINA_CHECKPOINT_TIMEOUT_SECONDS` is unchanged.
+
+### Migrating a .env
+
+```bash
+merlina config migrate-env            # dry run on ./.env: prints planned key changes only
+merlina config migrate-env path/.env --write
+```
+
+- **Dry run:** lists renames, removals and replacements by **key name only**
+  and flags conflicts, for example an old and a new name both set with
+  different values. A conflicting pair is left in place for you to resolve.
+  Values are compared in memory and never printed.
+- **Duplicate artifact settings:** a `MERLINA_ARTIFACT_*` block whose endpoint
+  and keys equal a tier's collapses to `ARTIFACT_STORE=<tier>`, and the
+  duplicate keys are removed.
+- **`--write`:**
+  - saves a timestamped backup next to the file (`.env.bak-YYYYmmdd-HHMMSS`,
+    mode 600);
+  - rewrites the file in place, keeping comments, ordering and unrelated lines
+    byte-for-byte;
+  - leaves the file at mode 600.
+
+  Running it again reports nothing to do.
+
+### Custom artifact location (legacy)
+
+A `MERLINA_ARTIFACT_STORE=s3` block can't be collapsed onto a tier when its
+keys differ from every tier's, for example dedicated keys scoped to the job
+prefix, or a session token. It is then kept as a custom artifact location, and
+those keys are what workers receive. This is the only remaining use of the
+`MERLINA_ARTIFACT_*` operator settings. The migration tool leaves such a block
+untouched.
 
 A tier is one endpoint plus one **default bucket** (its configured dataset or
 artifact bucket). Every command, route and UI action can also target **any
@@ -169,9 +259,8 @@ fallback when no admin key is set.
 
 | Tier | Settings |
 |------|----------|
-| `internal` | `S3_ADMIN_ACCESS_KEY`, `S3_ADMIN_SECRET_KEY` |
-| `external` | `R2_ADMIN_ACCESS_KEY`, `R2_ADMIN_SECRET_KEY` |
-| `artifacts` | `MERLINA_ARTIFACT_ADMIN_ACCESS_KEY`, `MERLINA_ARTIFACT_ADMIN_SECRET_KEY` |
+| `internal` | `STORAGE_INTERNAL_ADMIN_ACCESS_KEY`, `STORAGE_INTERNAL_ADMIN_SECRET_KEY` |
+| `external` | `STORAGE_EXTERNAL_ADMIN_ACCESS_KEY`, `STORAGE_EXTERNAL_ADMIN_SECRET_KEY` |
 
 What each key needs:
 

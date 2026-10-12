@@ -161,21 +161,29 @@ class InternalStoreConfig:
 
     @classmethod
     def from_settings(
-        cls, settings: Any, prefix: str = "s3"
+        cls, settings: Any, prefix: str = "internal"
     ) -> Optional["InternalStoreConfig"]:
         """
         Build a config from :class:`config.Settings`, or return ``None`` when the
         store is not configured. A missing store is not an error — Merlina simply
         falls back to loading straight from HuggingFace.
 
-        ``prefix`` selects which backend's settings to read: ``"s3"`` for the
-        internal MinIO store (the default) or ``"r2"`` for the external tier.
-        Both have the same field shape, so one builder serves both.
+        ``prefix`` selects the tier: ``"internal"`` (default) or ``"external"``
+        (the legacy ``"s3"`` / ``"r2"`` spellings are accepted). Settings are
+        read from the role-named ``storage_<tier>_*`` attributes, falling back
+        to the deprecated ``s3_*`` / ``r2_*`` ones on plain settings objects.
         """
-        endpoint = getattr(settings, f"{prefix}_endpoint_url", None)
-        bucket = getattr(settings, f"{prefix}_dataset_bucket", None)
-        access = getattr(settings, f"{prefix}_access_key", None)
-        secret = getattr(settings, f"{prefix}_secret_key", None)
+        tier = {"s3": "internal", "r2": "external"}.get(prefix, prefix)
+        legacy = {"internal": "s3", "external": "r2"}.get(tier, prefix)
+
+        def pick(new: str, old: str):
+            value = getattr(settings, f"storage_{tier}_{new}", None)
+            return value if value is not None else getattr(settings, f"{legacy}_{old}", None)
+
+        endpoint = pick("endpoint", "endpoint_url")
+        bucket = pick("bucket", "dataset_bucket")
+        access = pick("access_key", "access_key")
+        secret = pick("secret_key", "secret_key")
         if not (endpoint and bucket and access and secret):
             return None
         return cls(
@@ -183,7 +191,7 @@ class InternalStoreConfig:
             bucket=str(bucket),
             access_key=str(access),
             secret_key=str(secret),
-            region=str(getattr(settings, f"{prefix}_region", "auto") or "auto"),
+            region=str(pick("region", "region") or "auto"),
         )
 
 

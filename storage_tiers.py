@@ -4,12 +4,13 @@ Storage tiers — browse, measure, sync and prune Merlina's S3-compatible bucket
 Merlina talks to up to three S3-API object stores, each configured in the
 server's ``.env``:
 
-``internal``  (``S3_*``)                the private, LAN-only dataset store (e.g. MinIO)
-``external``  (``R2_*``)                the shared tier a rented GPU box can reach (e.g. R2)
-``artifacts`` (``MERLINA_ARTIFACT_*``)  where remote runs publish adapters/merged
-                                        models — listed only when it is a *different*
-                                        endpoint+bucket than ``external`` (when it is the
-                                        same, ``external`` already covers its prefix)
+``internal``  (``STORAGE_INTERNAL_*``)  the private, LAN-only store (e.g. MinIO)
+``external``  (``STORAGE_EXTERNAL_*``)  the shared tier a rented GPU box can reach (e.g. R2)
+
+Remote-run artifacts (``ARTIFACT_STORE=<tier>``) live in one of those tiers —
+under ``ARTIFACT_PREFIX`` in its bucket, or in ``ARTIFACT_BUCKET`` on the same
+endpoint. Only a legacy custom location (``MERLINA_ARTIFACT_*`` with its own
+endpoint/keys) appears as a separate ``artifacts`` tier.
 
 This module is the backend-agnostic core used by ``merlina storage`` (CLI),
 the ``/storage/*`` API and the web UI's Storage section. It deliberately stays
@@ -150,6 +151,7 @@ class Tier:
     hint_prefix: str = ""  # where interesting things live (e.g. the artifact prefix)
     env_prefix: str = ""   # settings prefix ("S3", "R2", ...) — for hints only
     default_buckets: tuple = ()  # configured buckets on this endpoint (never deleted)
+    bucket_hints: dict = field(default_factory=dict)  # bucket -> where to start browsing
     access_key: Optional[str] = field(default=None, repr=False)
     secret_key: Optional[str] = field(default=None, repr=False)
     session_token: Optional[str] = field(default=None, repr=False)
@@ -195,6 +197,7 @@ class Tier:
             "description": self.description,
             "hint_prefix": self.hint_prefix,
             "default_buckets": list(self.default_buckets),
+            "bucket_hints": dict(self.bucket_hints),
             "admin_configured": self.admin_configured,
             "env_prefix": self.env_prefix,
         }
@@ -279,57 +282,57 @@ def _norm_endpoint(url: Optional[str]) -> str:
 def build_tiers(settings: Any, *, fs_overrides: Optional[dict] = None) -> dict[str, Tier]:
     """Build the tier registry from :class:`config.Settings`.
 
-    ``internal`` and ``external`` are always present (``configured`` says if
-    they are usable); ``artifacts`` is added only when it is configured AND not
-    the same endpoint+bucket as ``external``.
+    ``internal`` and ``external`` (``STORAGE_INTERNAL_*`` / ``STORAGE_EXTERNAL_*``)
+    are always present (``configured`` says if they are usable). The artifact
+    store (``ARTIFACT_STORE=<tier>``) is folded into its tier: its prefix is
+    that tier's browse hint and, when ``ARTIFACT_BUCKET`` differs, that bucket
+    is listed as a protected default bucket of the tier. Only a legacy custom
+    artifact location (``MERLINA_ARTIFACT_*`` with its own endpoint/keys) is
+    shown as a separate ``artifacts`` tier.
     """
+    from config import resolve_artifact_location, tier_settings  # lazy: app config
     fs_overrides = fs_overrides or {}
-    g = lambda attr, default=None: getattr(settings, attr, default)  # noqa: E731
 
     tiers: dict[str, Tier] = {}
-    tiers["internal"] = Tier(
-        name="internal", bucket=g("s3_dataset_bucket"), endpoint_url=g("s3_endpoint_url"),
-        region=str(g("s3_region", "auto") or "auto"), private=True,
-        description="Private store (LAN). Source of truth; private data never leaves it.",
-        access_key=g("s3_access_key"), secret_key=g("s3_secret_key"), env_prefix="S3",
-        admin_access_key=g("s3_admin_access_key"), admin_secret_key=g("s3_admin_secret_key"),
-        fs_override=fs_overrides.get("internal"),
-        admin_fs_override=fs_overrides.get("internal_admin"),
-    )
-    tiers["external"] = Tier(
-        name="external", bucket=g("r2_dataset_bucket"), endpoint_url=g("r2_endpoint_url"),
-        region=str(g("r2_region", "auto") or "auto"), private=False,
-        description="Shared store reachable from rented GPU boxes.",
-        access_key=g("r2_access_key"), secret_key=g("r2_secret_key"), env_prefix="R2",
-        admin_access_key=g("r2_admin_access_key"), admin_secret_key=g("r2_admin_secret_key"),
-        fs_override=fs_overrides.get("external"),
-        admin_fs_override=fs_overrides.get("external_admin"),
-    )
-    artifact_prefix = str(g("merlina_artifact_s3_prefix", "") or "").strip("/")
-    artifacts = Tier(
-        name="artifacts", bucket=g("merlina_artifact_s3_bucket"),
-        endpoint_url=g("merlina_artifact_s3_endpoint"),
-        region=str(g("merlina_artifact_s3_region", "") or "auto"), private=False,
-        description="Remote-training artifacts (adapters, merged models).",
-        hint_prefix=f"{artifact_prefix}/" if artifact_prefix else "",
-        access_key=g("merlina_artifact_access_key"), secret_key=g("merlina_artifact_secret_key"),
-        session_token=g("merlina_artifact_session_token"), env_prefix="MERLINA_ARTIFACT",
-        admin_access_key=g("merlina_artifact_admin_access_key"),
-        admin_secret_key=g("merlina_artifact_admin_secret_key"),
-        fs_override=fs_overrides.get("artifacts"),
-        admin_fs_override=fs_overrides.get("artifacts_admin"),
-    )
-    if artifacts.bucket:
-        if tiers["external"].bucket and artifacts.same_location(tiers["external"]):
-            # Same bucket: point external at where runs land so it's discoverable.
-            if artifacts.hint_prefix and not tiers["external"].hint_prefix:
-                tiers["external"].hint_prefix = artifacts.hint_prefix
+    descriptions = {
+        "internal": ("Private store (LAN). Source of truth; private data never leaves it.", True),
+        "external": ("Shared store reachable from rented GPU boxes.", False),
+    }
+    for name, (description, private) in descriptions.items():
+        t = tier_settings(settings, name)
+        tiers[name] = Tier(
+            name=name, bucket=t["bucket"], endpoint_url=t["endpoint"], region=t["region"],
+            private=private, description=description, env_prefix=f"STORAGE_{name.upper()}",
+            access_key=t["access_key"], secret_key=t["secret_key"],
+            admin_access_key=t["admin_access_key"], admin_secret_key=t["admin_secret_key"],
+            fs_override=fs_overrides.get(name), admin_fs_override=fs_overrides.get(f"{name}_admin"),
+        )
+
+    extra: list[Tier] = []  # configured locations that count as default buckets
+    loc = resolve_artifact_location(settings)
+    if loc.kind == "s3" and not loc.error and loc.bucket:
+        hint = f"{loc.prefix.strip('/')}/" if loc.prefix.strip("/") else ""
+        if loc.tier in tiers:
+            home = tiers[loc.tier]
+            if loc.bucket == home.bucket:
+                home.hint_prefix = home.hint_prefix or hint
+            else:
+                home.bucket_hints[loc.bucket] = hint
+                extra.append(Tier(name=home.name, bucket=loc.bucket, endpoint_url=home.endpoint_url,
+                                  private=home.private))
         else:
+            artifacts = Tier(
+                name="artifacts", bucket=loc.bucket, endpoint_url=loc.endpoint_url,
+                region=str(loc.region or "auto"), private=False,
+                description="Custom artifact location (legacy MERLINA_ARTIFACT_* settings).",
+                hint_prefix=hint, env_prefix="MERLINA_ARTIFACT",
+                access_key=loc.access_key, secret_key=loc.secret_key, session_token=loc.session_token,
+                fs_override=fs_overrides.get("artifacts"),
+            )
             tiers["artifacts"] = artifacts
     # Every configured bucket is a "default" (protected from deletion) for each
-    # tier on the same endpoint — e.g. the artifact bucket shows up starred on
-    # the external tier when both live on the same account.
-    configured = [t for t in (*tiers.values(), artifacts) if t.bucket and t.endpoint_url]
+    # tier on the same endpoint.
+    configured = [t for t in (*tiers.values(), *extra) if t.bucket and t.endpoint_url]
     for t in tiers.values():
         same = {c.bucket for c in configured if _norm_endpoint(c.endpoint_url) == _norm_endpoint(t.endpoint_url)}
         if t.bucket:
@@ -490,13 +493,15 @@ def admin_hint(tier: Tier, action: str) -> str:
     if tier.admin_configured:
         return (f"The admin key ({p}_ADMIN_ACCESS_KEY) is configured but was refused — "
                 f"grant it permission to {action}. See docs/storage-tiers.md.")
-    if p == "R2":
+    host = (tier.endpoint_host or "").lower()
+    if host.endswith("r2.cloudflarestorage.com"):
         need = "an R2 account API token with Admin Read & Write"
-    elif p == "S3":
-        need = ("a MinIO service account whose policy allows s3:ListAllMyBuckets, "
-                "s3:CreateBucket, s3:DeleteBucket and s3:GetBucketLocation")
+    elif host.endswith("amazonaws.com"):
+        need = ("an IAM key allowing s3:ListAllMyBuckets, s3:CreateBucket, "
+                "s3:DeleteBucket and s3:GetBucketLocation")
     else:
-        need = "a key with bucket-level permissions"
+        need = ("e.g. a MinIO service account whose policy allows s3:ListAllMyBuckets, "
+                "s3:CreateBucket, s3:DeleteBucket and s3:GetBucketLocation")
     return (f"Set {p}_ADMIN_ACCESS_KEY / {p}_ADMIN_SECRET_KEY to a key that may {action} "
             f"({need}). See docs/storage-tiers.md.")
 

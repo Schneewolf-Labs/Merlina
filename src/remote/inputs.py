@@ -61,9 +61,11 @@ def _format(source: dict, filename: str) -> str:
 
 
 def require_operator_store(kind) -> None:
+    """``kind`` is an :class:`config.ArtifactLocation` (or a legacy kind string)."""
+    kind = getattr(kind, "kind", kind)
     if kind not in OPERATOR_STORE_KINDS:
         raise RemoteInputError("Uploaded, local and internal datasets can only be staged to an "
-                               "operator-controlled S3/R2 artifact store (MERLINA_ARTIFACT_STORE=s3).")
+                               "operator-controlled S3 artifact store (ARTIFACT_STORE=external).")
 
 
 def local_data_roots() -> list[Path]:
