@@ -53,6 +53,13 @@ export function breadcrumbs(prefix) {
     return crumbs;
 }
 
+/** The folder above ``prefix`` ("a/b/" -> "a/", "a/" -> ""). */
+export function parentPrefix(prefix) {
+    const parts = String(prefix || '').split('/').filter(Boolean);
+    parts.pop();
+    return parts.length ? `${parts.join('/')}/` : '';
+}
+
 /** True when copying from `src` to `dst` crosses from private to shared. */
 export function isGuarded(src, dst) {
     return !!(src && dst && src.private && !dst.private);
@@ -92,6 +99,7 @@ export class StorageManager {
         this.bucket = null;      // bucket being browsed
         this.prefix = '';        // prefix being browsed
         this.selected = '';      // prefix/key the actions apply to
+        this.history = [];       // previous {tier, bucket, prefix} locations, for Back
         this.view = { search: '', sort: 'name', order: 'asc', offset: 0 };
         this.listing = null;
         this.plan = null;        // last dry-run plan {request, plan}
@@ -367,9 +375,13 @@ export class StorageManager {
     }
 
     /** Browse one level of a bucket (resets search/paging when moving). */
-    async browse(tier, bucket, prefix = '', { keepView = false } = {}) {
+    async browse(tier, bucket, prefix = '', { keepView = false, fromHistory = false } = {}) {
         bucket = bucket || this._tier(tier)?.bucket;
         const moved = tier !== this.tier || bucket !== this.bucket || prefix !== this.prefix;
+        if (moved && !fromHistory && this.tier) {
+            this.history.push({ tier: this.tier, bucket: this.bucket, prefix: this.prefix });
+            if (this.history.length > 100) this.history.shift();
+        }
         this.tier = tier;
         this.bucket = bucket;
         this.prefix = prefix;
@@ -409,7 +421,23 @@ export class StorageManager {
                 ? `<strong>${label}</strong>`
                 : `<button type="button" class="link-button" data-action="crumb" data-prefix="${esc(c.prefix)}">${label}</button>`;
         });
-        el.innerHTML = crumbs.join(' <span aria-hidden="true">/</span> ');
+        const nav = `<button type="button" class="link-button" data-action="back" title="Back to the previous folder" ${this.history.length ? '' : 'disabled'}>← Back</button>
+            <button type="button" class="link-button" data-action="up" title="Up one folder" ${this.prefix ? '' : 'disabled'}>⬆ Up</button>
+            <span style="margin: 0 6px; color: var(--text-muted);">|</span> `;
+        el.innerHTML = nav + crumbs.join(' <span aria-hidden="true">/</span> ');
+    }
+
+    /** Go back to the previously browsed location. */
+    back() {
+        const prev = this.history.pop();
+        if (!prev) return undefined;
+        return this.browse(prev.tier, prev.bucket, prev.prefix, { fromHistory: true });
+    }
+
+    /** Go up one folder in the current bucket. */
+    up() {
+        if (!this.prefix) return undefined;
+        return this.browse(this.tier, this.bucket, parentPrefix(this.prefix));
     }
 
     _renderToolbar() {
@@ -444,6 +472,11 @@ export class StorageManager {
             this._setBrowser(`<p style="color: var(--text-muted);">${data.search ? 'Nothing matches the filter.' : 'Empty.'}</p>`);
             return;
         }
+        const upRow = this.prefix && !data.offset ? `<tr>
+            <td style="padding: 6px 10px;" colspan="4">
+                <button type="button" class="link-button" data-action="up" title="Up one folder">📁 ..</button>
+            </td>
+        </tr>` : '';
         const dirRows = dirs.map(d => `<tr${d.prefix === this.selected ? ' class="selected"' : ''}>
             <td style="padding: 6px 10px;">
                 <button type="button" class="link-button" data-action="open" data-prefix="${esc(d.prefix)}">📁 ${esc(d.name)}</button>
@@ -471,7 +504,7 @@ export class StorageManager {
                 <th style="padding: 6px 10px;">Modified</th>
                 <th style="padding: 6px 10px;"></th>
             </tr></thead>
-            <tbody>${dirRows}${objRows}</tbody>
+            <tbody>${upRow}${dirRows}${objRows}</tbody>
         </table>`);
     }
 
@@ -616,6 +649,8 @@ export class StorageManager {
             case 'panel-close': this.bucketDelete = null; return this._setBucketPanel('');
             case 'open':
             case 'crumb': return this.browse(this.tier, this.bucket, d.prefix || '');
+            case 'back': return this.back();
+            case 'up': return this.up();
             case 'object': return this.openObject(d.key);
             case 'object-close': return this._setObject('');
             case 'select': this.selected = d.prefix || ''; this.plan = null; return this._renderActions();

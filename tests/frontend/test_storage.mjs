@@ -30,7 +30,7 @@ globalThis.document = {
 
 const { MerlinaAPI } = await import('../../frontend/js/api.js');
 const {
-    StorageManager, breadcrumbs, humanBytes, humanCount, esc, isGuarded, validateBucketName, renderPreview,
+    StorageManager, breadcrumbs, parentPrefix, humanBytes, humanCount, esc, isGuarded, validateBucketName, renderPreview,
 } = await import('../../frontend/js/storage.js');
 
 const TIERS = [
@@ -84,6 +84,12 @@ describe('storage helpers', () => {
             { label: 'adapter', prefix: 'runs/job/adapter/' },
         ]);
         assert.deepEqual(breadcrumbs(''), [{ label: '/', prefix: '' }]);
+    });
+
+    it('parentPrefix goes up one folder', () => {
+        assert.equal(parentPrefix('runs/job/adapter/'), 'runs/job/');
+        assert.equal(parentPrefix('runs/'), '');
+        assert.equal(parentPrefix(''), '');
     });
 
     it('humanBytes formats sizes', () => {
@@ -316,5 +322,43 @@ describe('StorageManager', () => {
         m.prefix = '';
         m._renderActions();
         assert.doesNotMatch(el('storage-actions').innerHTML, /delete-open/);
+    });
+});
+
+describe('folder navigation', () => {
+    it('Up goes to the parent, Back retraces visited folders', async () => {
+        const m = manager();
+        const calls = [];
+        const orig = MerlinaAPI.storageLs;
+        MerlinaAPI.storageLs = async (q) => { calls.push(`${q.bucket}:${q.prefix}`); return { dirs: [], objects: [], total: 0, offset: 0 }; };
+        try {
+            await m.browse('internal', 'datasets', 'runs/job/adapter/');
+            assert.match(el('storage-crumbs').innerHTML, /data-action="back"[^>]*>/);
+            assert.doesNotMatch(el('storage-crumbs').innerHTML, /data-action="up"[^>]*disabled/);
+            await m.up();
+            assert.equal(m.prefix, 'runs/job/');
+            await m.back();
+            assert.equal(m.prefix, 'runs/job/adapter/');
+            await m.back();
+            assert.equal(m.prefix, 'datasets/');  // where manager() started
+            assert.equal(m.history.length, 0);
+            assert.equal(m.back(), undefined);    // nothing left
+            await m.browse('internal', 'datasets', '');
+            assert.match(el('storage-crumbs').innerHTML, /data-action="up"[^>]*disabled/);
+            assert.equal(m.up(), undefined);
+            assert.deepEqual(calls, ['datasets:runs/job/adapter/', 'datasets:runs/job/',
+                'datasets:runs/job/adapter/', 'datasets:datasets/', 'datasets:']);
+        } finally {
+            MerlinaAPI.storageLs = orig;
+        }
+    });
+
+    it('listing shows a ".." row below the root only', () => {
+        const m = manager();
+        m._renderListing({ dirs: [{ prefix: 'datasets/a/', name: 'a/' }], objects: [], total: 1, offset: 0 });
+        assert.match(el('storage-browser').innerHTML, /data-action="up"/);
+        m.prefix = '';
+        m._renderListing({ dirs: [{ prefix: 'a/', name: 'a/' }], objects: [], total: 1, offset: 0 });
+        assert.doesNotMatch(el('storage-browser').innerHTML, /data-action="up"/);
     });
 });
