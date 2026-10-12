@@ -34,6 +34,16 @@ class RemoteLifecycle:
         with self.connect() as db:
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS remote_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS remote_cleanup_alerts (
+                    alert_key TEXT PRIMARY KEY, message TEXT NOT NULL, updated_at REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS remote_cancellations (
+                    job_id TEXT PRIMARY KEY, requested_at REAL NOT NULL,
+                    cleanup_after REAL NOT NULL, emergency INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS remote_absences (
+                    label TEXT PRIMARY KEY, first_absent_at REAL NOT NULL, scans INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS remote_manual_resolutions (
+                    label TEXT NOT NULL, job_id TEXT NOT NULL, resolved_as TEXT NOT NULL,
+                    resolved_by TEXT NOT NULL, resolved_at REAL NOT NULL, note TEXT);
                 CREATE TABLE IF NOT EXISTS remote_runs (
                     job_id TEXT PRIMARY KEY, owner TEXT NOT NULL, state TEXT NOT NULL,
                     started_at REAL NOT NULL, deadline REAL NOT NULL, lease_until REAL NOT NULL,
@@ -139,9 +149,105 @@ class RemoteLifecycle:
         with self.connect() as db:
             db.execute("""UPDATE remote_resources SET cleanup_status=?, cleanup_attempts=cleanup_attempts+1,
                 last_error=?, terminated_at=CASE WHEN ? THEN COALESCE(terminated_at, ?) ELSE terminated_at END
-                WHERE provider=? AND instance_id=?""",
+                WHERE provider=? AND instance_id=? AND terminated_at IS NULL""",
                 ('terminated' if confirmed else 'retained' if retained else 'pending', error, confirmed,
                  self.clock(), provider, instance_id))
+
+    def request_cancel(self, job_id, grace_seconds, *, emergency=False):
+        """Persist a grace deadline once; later observers cannot extend it."""
+        now = self.clock()
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            run = db.execute("SELECT deadline FROM remote_runs WHERE job_id=?", (job_id,)).fetchone()
+            cleanup_after = min(run[0], now + max(0, grace_seconds)) if run else now
+            if emergency:
+                cleanup_after = now
+            db.execute("""INSERT INTO remote_cancellations VALUES (?, ?, ?, ?)
+                ON CONFLICT(job_id) DO UPDATE SET cleanup_after=MIN(cleanup_after, excluded.cleanup_after),
+                emergency=MAX(emergency, excluded.emergency)""", (job_id, now, cleanup_after, emergency))
+            return db.execute("SELECT cleanup_after FROM remote_cancellations WHERE job_id=?", (job_id,)).fetchone()[0]
+
+    def alert(self, key, message):
+        with self.connect() as db:
+            if message is None:
+                db.execute("DELETE FROM remote_cleanup_alerts WHERE alert_key=?", (key,))
+            else:
+                db.execute("INSERT OR REPLACE INTO remote_cleanup_alerts VALUES (?, ?, ?)",
+                           (key, message, self.clock()))
+
+    def alerts(self):
+        with self.connect() as db:
+            return [dict(row) for row in db.execute("SELECT * FROM remote_cleanup_alerts")]
+
+    def outstanding(self):
+        """True while anything may still bill or await reconciliation."""
+        with self.connect() as db:
+            return bool(db.execute("""SELECT
+                EXISTS(SELECT 1 FROM remote_runs WHERE state='running')
+                OR EXISTS(SELECT 1 FROM remote_resources WHERE cleanup_status!='terminated')
+                OR EXISTS(SELECT 1 FROM remote_attempts WHERE state IN ('provisioning', 'provisioning_unknown'))
+                """).fetchone()[0])
+
+    def note_absent(self, label):
+        """Record one successful inventory scan without ``label``; returns (scans, first_absent_at)."""
+        now = self.clock()
+        with self.connect() as db:
+            db.execute("""INSERT INTO remote_absences VALUES (?, ?, 1)
+                ON CONFLICT(label) DO UPDATE SET scans=scans+1""", (label, now))
+            row = db.execute("SELECT scans, first_absent_at FROM remote_absences WHERE label=?", (label,)).fetchone()
+            return row[0], row[1]
+
+    def note_present(self, label):
+        with self.connect() as db:
+            db.execute("DELETE FROM remote_absences WHERE label=?", (label,))
+
+    def resolve_manually(self, target, resolved_as, resolved_by, note=None):
+        """Operator escape hatch for an attempt reconciliation cannot settle.
+
+        ``target`` is an attempt label or a job ID (all its attempts).
+        ``failed``: nothing was created. ``terminated``: the operator confirmed
+        the provider resources for the attempt are gone. Refuses live runs.
+        """
+        if resolved_as not in ("failed", "terminated"):
+            raise ValueError("resolved_as must be 'failed' or 'terminated'")
+        now = self.clock()
+        resolved = []
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            attempts = db.execute("SELECT * FROM remote_attempts WHERE label=? OR job_id=?",
+                                  (target, target)).fetchall()
+            if not attempts:
+                raise ValueError(f"No remote attempt or job matches {target!r}")
+            for attempt in attempts:
+                run = db.execute("SELECT state FROM remote_runs WHERE job_id=?", (attempt["job_id"],)).fetchone()
+                if run and run["state"] == "running":
+                    raise ValueError(f"Remote job {attempt['job_id']} is still owned by a live controller")
+            reason = f"Manually resolved as {resolved_as} by {resolved_by}"
+            for attempt in attempts:
+                label, changed = attempt["label"], False
+                if attempt["state"] in ("provisioning", "provisioning_unknown"):
+                    db.execute("UPDATE remote_attempts SET state='failed', error=? WHERE label=?", (reason, label))
+                    changed = True
+                if resolved_as == "terminated":
+                    result = db.execute("""UPDATE remote_resources SET cleanup_status='terminated',
+                        terminated_at=COALESCE(terminated_at, ?), last_error=?
+                        WHERE label=? AND cleanup_status!='terminated'""", (now, reason, label))
+                    changed = changed or bool(result.rowcount)
+                if changed:
+                    db.execute("INSERT INTO remote_manual_resolutions VALUES (?, ?, ?, ?, ?, ?)",
+                               (label, attempt["job_id"], resolved_as, resolved_by, now, note))
+                    db.execute("DELETE FROM remote_cleanup_alerts WHERE alert_key=?", (f"ambiguous:{label}",))
+                    resolved.append(label)
+        return resolved
+
+    def manual_resolutions(self):
+        with self.connect() as db:
+            return [dict(row) for row in db.execute("SELECT * FROM remote_manual_resolutions")]
+
+    def fail_run(self, job_id, reason):
+        with self.connect() as db:
+            db.execute("UPDATE remote_runs SET state='failed', error=? WHERE job_id=? AND state='running'",
+                       (reason, job_id))
 
     def expire_runs(self):
         now = self.clock()
@@ -164,10 +270,13 @@ def terminate_confirmed(lifecycle, provider, instance_id):
         error = None if confirmed else 'Provider has not confirmed termination; resource may still be billing'
     except Exception as exc:
         confirmed, error = False, f'{type(exc).__name__}: termination confirmation failed'
-    if not confirmed:
+    lifecycle.cleanup_result(provider.name, instance_id, confirmed=confirmed, error=error)
+    recorded = any(r["instance_id"] == instance_id and r["provider"] == provider.name
+                   and r["cleanup_status"] == "terminated" for r in lifecycle.resources())
+    # A concurrent reconciler may already have confirmed it; don't cry wolf.
+    if not confirmed and not recorded:
         # Billing-critical: keep this loud even though the record retries it.
         logger.error("FAILED TO TERMINATE %s instance %s (%s) — it may still be billing; "
                      "terminate it manually in the provider console if cleanup does not confirm it",
                      provider.name, instance_id, error)
-    lifecycle.cleanup_result(provider.name, instance_id, confirmed=confirmed, error=error)
-    return confirmed
+    return recorded

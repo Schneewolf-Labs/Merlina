@@ -562,3 +562,115 @@ class TestUploadedDatasetStaging:
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+class TestDurableExecution:
+    def test_duplicate_dispatch_preserves_result_without_paid_retry(self, job_manager):
+        provider, store, worker = run(make_config(), job_manager)
+        run_training_remote('job_1', make_config(), job_manager, {}, provider=provider,
+                            store=store, worker_client_factory=lambda *_: worker)
+        assert len(provider.provisioned) == 1
+        assert job_manager.get_job('job_1').status == 'completed'
+
+    def test_ambiguous_provider_failure_retains_intent_and_skips_settlement(self, job_manager):
+        from src.remote.lifecycle import RemoteLifecycle
+        from src.remote.providers.base import ProviderError
+        settlements = []
+        class Ambiguous(FakeProvider):
+            def provision(self, spec):
+                assert RemoteLifecycle(job_manager.db_path).attempts()[0]['label'] == spec.name
+                super().provision(spec)
+                raise ProviderError('creation outcome unknown')
+        class Guard:
+            def before_provision(self, *args): pass
+            def usage(self, *args): pass
+            def settle(self, *args): settlements.append(args)
+        provider = Ambiguous()
+        job_manager.create_job('job', {})
+        run_training_remote('job', make_config(), job_manager, {}, provider=provider,
+                            store=LocalArtifactStore(Path('store')), execution_guard=Guard())
+        assert job_manager.get_job('job').status == 'failed'
+        assert RemoteLifecycle(job_manager.db_path).attempts()[0]['state'] == 'provisioning_unknown'
+        assert settlements == []
+        run_training_remote('job', make_config(), job_manager, {}, provider=provider,
+                            store=LocalArtifactStore(Path('store')), execution_guard=Guard())
+        assert len(provider.provisioned) == 1
+
+    def test_budget_guard_exhaustion_terminates_even_debug_retention(self, job_manager):
+        class Guard:
+            def before_provision(self, *args): pass
+            def usage(self, *args): raise RuntimeError('approved budget exhausted')
+            def settle(self, *args): pass
+        job_manager.create_job('job', {})
+        provider = FakeProvider()
+        run_training_remote('job', make_config(remote=make_remote_cfg(keep_instance_on_failure=True)),
+                            job_manager, {}, provider=provider, execution_guard=Guard(),
+                            store=LocalArtifactStore(Path('store')))
+        assert provider.terminated == ['inst_1']
+        assert 'budget exhausted' in job_manager.get_job('job').error
+
+    def test_cancel_after_worker_start_remains_stopped(self, job_manager):
+        provider = FakeProvider()
+        worker = ScriptedWorker([WorkerStatus(state=STATE_DONE, job={'status': 'stopped'})],
+                                on_done=lambda: job_manager.request_stop('job_1'))
+        run(make_config(), job_manager, provider=provider, worker=worker)
+        assert job_manager.get_job('job_1').status == 'stopped'
+        assert provider.terminated == ['inst_1']
+
+    def test_upload_failure_records_stage_failure_and_cleans(self, job_manager):
+        from src.remote.lifecycle import RemoteLifecycle
+        worker = ScriptedWorker([WorkerStatus(state=STATE_FAILED, error='artifact upload failed')])
+        provider, _, _ = run(make_config(), job_manager, worker=worker)
+        assert provider.terminated == ['inst_1']
+        assert RemoteLifecycle(job_manager.db_path).attempts()[0]['state'] == 'failed'
+        assert job_manager.get_job('job_1').status == 'failed'
+
+    def test_in_process_reconciler_leaves_live_controller_alone(self, job_manager):
+        """The API's periodic reconciler must not kill a run this process drives."""
+        import time
+        from types import SimpleNamespace
+        from src.remote.cleanup import start_reconciler
+
+        class InventoryFake(FakeProvider):
+            def __init__(self):
+                super().__init__()
+                self.scans = 0
+            def provision(self, spec):
+                instance = super().provision(spec)
+                instance.raw = {"name": spec.name}
+                return instance
+            def list_instances(self):
+                self.scans += 1
+                return [RemoteInstance(f"inst_{i + 1}", self.name, "running", raw={"name": s.name})
+                        for i, s in enumerate(self.provisioned)
+                        if f"inst_{i + 1}" not in self.terminated]
+
+        provider = InventoryFake()
+        killed_while_running = []
+
+        class SlowWorker(ScriptedWorker):
+            def status(self, since_step=0):
+                if provider.terminated:
+                    killed_while_running.append(list(provider.terminated))
+                time.sleep(0.02)
+                return super().status(since_step)
+
+        def push_adapter():
+            Path("trained_adapter").mkdir(exist_ok=True)
+            (Path("trained_adapter") / "adapter_config.json").write_text("{}")
+            store.push_dir(Path("trained_adapter"), "adapter")
+        store = LocalArtifactStore(Path("store"))
+        worker = SlowWorker([WorkerStatus(state=STATE_RUNNING)] * 10
+                            + [WorkerStatus(state=STATE_DONE, artifacts=["adapter"])], on_done=push_adapter)
+        thread, stop = start_reconciler(job_manager, SimpleNamespace(runpod_api_key="test-only"),
+                                        provider_factory=lambda *a, **k: provider, interval=0.005)
+        try:
+            run(make_config(), job_manager, provider=provider, store=store, worker=worker)
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+        assert provider.scans > 1
+        assert killed_while_running == []
+        job = job_manager.get_job("job_1")
+        assert job.status == "completed"
+        assert "remote_plan" in job.metrics        # reconciler didn't clobber live metrics
+        assert "inst_1" in provider.terminated

@@ -77,6 +77,11 @@ def reattach_orphaned_workers(job_manager: Any, event_loop=None) -> dict:
     for job in jobs:
         if job.status not in ACTIVE_STATUSES:
             continue
+        # Remote ownership is reconciled against provider resources, never a
+        # local PID. A second API process must not fail another live controller.
+        remote = (getattr(job, "config", None) or {}).get("remote") or {}
+        if remote.get("enabled"):
+            continue
 
         pid = getattr(job, "worker_pid", None)
         if pid and _is_our_worker(pid, job.job_id):
