@@ -43,8 +43,13 @@ def check_remote_compatible(config: Any) -> List[str]:
     Return blocking problems that make a config unrunnable remotely.
 
     HF sources load directly; other sources are snapshotted into the job's
-    artifact store before provisioning. Internal revisions must be pinned.
+    artifact store before provisioning. That store must be operator-owned S3,
+    local files must sit inside REMOTE_LOCAL_DATA_ROOTS, private names are
+    refused, and internal revisions must be pinned.
     """
+    from config import settings
+    from .inputs import (RemoteInputError, allowed_local_file, check_upload_name,
+                         require_operator_store)
     problems: List[str] = []
     dataset = getattr(config, "dataset", None)
     sources = []
@@ -66,11 +71,26 @@ def check_remote_compatible(config: Any) -> List[str]:
         elif kind == "local_file":
             if not getattr(src, "file_path", None):
                 problems.append("local_file datasets require a file_path for staging.")
+            else:
+                try:
+                    allowed_local_file(src.file_path)
+                except RemoteInputError as error:
+                    problems.append(str(error))
         elif kind == "upload":
             if not getattr(src, "dataset_id", None):
                 problems.append("upload datasets require a dataset_id for staging.")
+            else:
+                try:
+                    check_upload_name(src.dataset_id)
+                except RemoteInputError as error:
+                    problems.append(str(error))
         elif kind != "huggingface":
             problems.append("Unsupported remote dataset source type.")
+    if any(getattr(src, "source_type", "huggingface") != "huggingface" for src in sources):
+        try:
+            require_operator_store(getattr(settings, "merlina_artifact_store", "hf_hub"))
+        except RemoteInputError as error:
+            problems.append(str(error))
     mode = (getattr(config, "training_mode", "") or "").lower()
     if mode.startswith("vlm_") or mode.startswith("diffusion_"):
         problems.append(

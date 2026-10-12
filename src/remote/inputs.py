@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 import re
 import shutil
 import tempfile
@@ -19,6 +20,9 @@ from .artifacts import ArtifactStore
 INPUT_VERSION = 1
 FORMATS = {"json", "jsonl", "csv", "parquet"}
 REFERENCE = re.compile(r"^artifact://(input-[0-9]+-[a-f0-9]{64})$")
+# Operator data may only be staged into an operator-controlled bucket, never
+# a third-party repo such as the default HF artifact store.
+OPERATOR_STORE_KINDS = {"s3"}
 
 
 class RemoteInputError(ValueError):
@@ -30,6 +34,15 @@ def _sources(config: dict) -> list[dict]:
     return (([dataset["source"]] if dataset.get("source") else [])
             + list(dataset.get("additional_sources") or [])
             + ([dataset["eval_source"]] if dataset.get("eval_source") else []))
+
+
+def metadata_config(config: dict) -> dict:
+    """Config for store provenance, without upload ids or local dataset paths."""
+    cleaned = copy.deepcopy(config)
+    for source in _sources(cleaned):
+        for key in ("dataset_id", "file_path"):
+            source.pop(key, None)
+    return cleaned
 
 
 def _digest(path: Path) -> str:
@@ -45,6 +58,42 @@ def _format(source: dict, filename: str) -> str:
     if fmt not in FORMATS:
         raise RemoteInputError("Remote dataset format must be json, jsonl, csv or parquet.")
     return fmt
+
+
+def require_operator_store(kind) -> None:
+    if kind not in OPERATOR_STORE_KINDS:
+        raise RemoteInputError("Uploaded, local and internal datasets can only be staged to an "
+                               "operator-controlled S3/R2 artifact store (MERLINA_ARTIFACT_STORE=s3).")
+
+
+def local_data_roots() -> list[Path]:
+    from config import settings
+    raw = settings.remote_local_data_roots or ""
+    return [Path(part.strip()).expanduser().resolve()
+            for part in re.split(f"[,{re.escape(os.pathsep)}]", raw) if part.strip()]
+
+
+def allowed_local_file(file_path) -> Path:
+    """Resolve a remote local_file source inside REMOTE_LOCAL_DATA_ROOTS."""
+    from dataset_handlers.internal_store import is_private_name
+    try:
+        resolved = Path(file_path or "").resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise RemoteInputError("Local dataset must be an existing regular file.") from None
+    # Containment on resolved paths: symlinks and ".." cannot escape a root.
+    if not any(resolved.is_relative_to(root) for root in local_data_roots()):
+        raise RemoteInputError("Remote local_file datasets must be inside REMOTE_LOCAL_DATA_ROOTS.")
+    if is_private_name(str(file_path)) or is_private_name(str(resolved)):
+        raise RemoteInputError("Private local datasets cannot be exported to remote workers.")
+    if not resolved.is_file():
+        raise RemoteInputError("Local dataset must be an existing regular file.")
+    return resolved
+
+
+def check_upload_name(*names) -> None:
+    from dataset_handlers.internal_store import is_private_name
+    if any(isinstance(name, str) and is_private_name(name) for name in names):
+        raise RemoteInputError("Private uploaded datasets cannot be exported to remote workers.")
 
 
 def pinned_internal_uri(uri: str) -> tuple[str, str]:
@@ -126,6 +175,7 @@ def stage_remote_inputs(config: dict, uploads: dict, store: ArtifactStore,
             continue
         if kind not in {"internal", "local_file", "upload"}:
             raise RemoteInputError("Unsupported remote dataset source.")
+        require_operator_store(getattr(store, "kind", None))
         try:
             with tempfile.TemporaryDirectory(prefix="merlina-input-") as temporary:
                 work = Path(temporary)
@@ -134,8 +184,8 @@ def stage_remote_inputs(config: dict, uploads: dict, store: ArtifactStore,
                     data, provenance = _stage_internal(source, work, internal_store)
                     fmt = "parquet"
                 elif kind == "local_file":
-                    original = Path(source.get("file_path") or "")
-                    if not original.is_file() or original.is_symlink():
+                    original = allowed_local_file(source.get("file_path"))
+                    if Path(source.get("file_path")).is_symlink():
                         raise RemoteInputError("Local dataset must be an existing regular file.")
                     fmt = _format(source, str(original))
                     data = work / f"data.{fmt}"
@@ -144,6 +194,7 @@ def stage_remote_inputs(config: dict, uploads: dict, store: ArtifactStore,
                     upload = uploads.get(source.get("dataset_id"))
                     if not upload or not isinstance(upload.get("content"), bytes):
                         raise RemoteInputError("Uploaded dataset is unavailable; upload it again.")
+                    check_upload_name(source.get("dataset_id"), upload.get("filename"))
                     fmt = _format(source, upload.get("filename") or "")
                     data = work / f"data.{fmt}"
                     data.write_bytes(upload["content"])

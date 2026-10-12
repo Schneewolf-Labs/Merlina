@@ -7,6 +7,15 @@ checks. Planning
 checks that each source can be staged; execution verifies availability and
 finishes staging before provisioning compute. Local training is unchanged.
 
+Uploaded, local and internal sources are staged only when the control plane
+uses an operator-controlled S3/R2 artifact store (`MERLINA_ARTIFACT_STORE=s3`);
+with the HF artifact store they are refused, so operator data never lands in a
+third-party repo. Remote local files must resolve (symlinks followed) inside a
+directory listed in `REMOTE_LOCAL_DATA_ROOTS` (comma or `os.pathsep`
+separated); the default, empty, refuses every remote local file. Local paths,
+upload IDs and upload filenames matching the private-name policy are refused.
+Planning/preflight reports these problems, and staging enforces them again.
+
 Local files and uploads support JSON, JSONL, CSV, and Parquet. Internal sources
 must use a concrete revision, Parquet, and the `train` split. Internal shards
 are downloaded by the control plane and combined in bounded-size Arrow batches.
@@ -29,7 +38,8 @@ The reference pins provenance and content metadata together. It contains
 count, SHA-256, and minimal provenance (source type and pinned internal URI).
 The portable training configuration uses `artifact://<name>` references.
 Original upload names, upload IDs, local filenames and paths, source bucket
-addresses, and credentials are omitted from these manifests and references.
+addresses, and credentials are omitted from these manifests and references,
+including the artifact provenance metadata recorded with each snapshot.
 Source-specific column mappings are preserved. HF sources continue loading
 through the existing HF workflow.
 

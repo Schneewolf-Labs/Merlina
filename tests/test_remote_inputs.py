@@ -10,6 +10,16 @@ from src.remote.inputs import RemoteInputError, restore_remote_inputs, stage_rem
 from src.remote.plan import check_remote_compatible
 
 
+@pytest.fixture(autouse=True)
+def operator_storage(monkeypatch, tmp_path):
+    """LocalArtifactStore stands in for an operator-owned S3/R2 bucket here."""
+    from config import settings
+    from src.remote import inputs
+    monkeypatch.setattr(inputs, "OPERATOR_STORE_KINDS", {"s3", "local"})
+    monkeypatch.setattr(settings, "merlina_artifact_store", "s3")
+    monkeypatch.setattr(settings, "remote_local_data_roots", str(tmp_path))
+
+
 def config(source, additional=None):
     return {"dataset": {"source": source, "additional_sources": additional or []}}
 
@@ -182,10 +192,13 @@ def test_remote_plan_rejects_unpinned_or_invalid_internal_revision(uri):
 
 @pytest.mark.parametrize("source", [
     {"source_type": "upload", "dataset_id": "id"},
-    {"source_type": "local_file", "file_path": "/chosen/data.jsonl"},
+    {"source_type": "local_file", "file_path": "data.jsonl"},
     {"source_type": "internal", "uri": "swl://demo@rev"},
 ])
-def test_remote_plan_accepts_stageable_sources(source):
+def test_remote_plan_accepts_stageable_sources(source, tmp_path):
+    if "file_path" in source:
+        (tmp_path / source["file_path"]).write_text("{}\n")
+        source = {**source, "file_path": str(tmp_path / source["file_path"])}
     cfg = SimpleNamespace(dataset=SimpleNamespace(source=SimpleNamespace(**source), additional_sources=[]),
                           training_mode="sft")
     assert check_remote_compatible(cfg) == []
@@ -238,9 +251,9 @@ def test_upload_train_and_explicit_eval_reach_real_training_pipeline(tmp_path, m
     monkeypatch.setattr(datasets.config, "HF_DATASETS_CACHE", tmp_path / "cache")
     rows = [{"prompt": f"question {i}", "chosen": f"answer {i}"} for i in range(3)]
     uploads = {
-        "train": {"filename": "/private/train.jsonl", "content":
+        "train": {"filename": "/secret/train.jsonl", "content":
                   "\n".join(json.dumps(row) for row in rows).encode()},
-        "eval": {"filename": "/private/eval.jsonl", "content":
+        "eval": {"filename": "/secret/eval.jsonl", "content":
                  b'{"question":"held out","response":"expected"}\n'},
     }
     original = TrainingConfig(
@@ -310,3 +323,118 @@ def test_private_explicit_eval_never_uploads_to_remote_store(tmp_path):
     with pytest.raises(RemoteInputError, match="Private"):
         stage_remote_inputs(cfg, {}, store, internal_store=InternalStore(tmp_path, private=True))
     assert list((tmp_path / "store").iterdir()) == []
+
+
+def _plan_config(source):
+    return SimpleNamespace(dataset=SimpleNamespace(source=SimpleNamespace(**source), additional_sources=[]),
+                           training_mode="sft")
+
+
+def _s3_store():
+    from src.remote.s3_artifacts import S3ArtifactStore
+    from tests.test_s3_artifacts import FakeS3
+    fs = FakeS3()
+    return S3ArtifactStore("bucket", "job", fs=fs), fs
+
+
+def test_local_file_outside_allowlist_is_refused_in_plan_and_staging(tmp_path):
+    store, fs = _s3_store()
+    hostname = Path("/etc/hostname")
+    if not hostname.is_file():
+        pytest.skip("no /etc/hostname on this system")
+    # A symlink inside the allowlisted root resolves outside it.
+    link = tmp_path / "data.json"
+    link.symlink_to(hostname)
+    for path in (hostname, link, tmp_path / ".." / tmp_path.name / ".." / "x.json"):
+        source = {"source_type": "local_file", "file_path": str(path), "file_format": "json"}
+        assert check_remote_compatible(_plan_config(source))
+        with pytest.raises(RemoteInputError):
+            stage_remote_inputs(config(source), {}, store)
+    assert fs.objects == {}
+
+
+def test_empty_allowlist_refuses_every_remote_local_file(tmp_path, monkeypatch):
+    from config import settings
+    monkeypatch.setattr(settings, "remote_local_data_roots", "")
+    data = tmp_path / "data.jsonl"
+    data.write_text("{}\n")
+    source = {"source_type": "local_file", "file_path": str(data)}
+    assert any("REMOTE_LOCAL_DATA_ROOTS" in p for p in check_remote_compatible(_plan_config(source)))
+    with pytest.raises(RemoteInputError, match="REMOTE_LOCAL_DATA_ROOTS"):
+        stage_remote_inputs(config(source), {}, _s3_store()[0])
+
+
+def test_private_named_local_file_and_upload_are_refused(tmp_path):
+    store, fs = _s3_store()
+    exports = tmp_path / "vps-incident-exports"
+    exports.mkdir()
+    data = exports / "logs.jsonl"
+    data.write_text("{}\n")
+    source = {"source_type": "local_file", "file_path": str(data)}
+    assert any("Private" in p for p in check_remote_compatible(_plan_config(source)))
+    with pytest.raises(RemoteInputError, match="Private"):
+        stage_remote_inputs(config(source), {}, store)
+    upload = {"source_type": "upload", "dataset_id": "u"}
+    with pytest.raises(RemoteInputError, match="Private"):
+        stage_remote_inputs(config(upload), {"u": {"filename": "west1-incident.jsonl", "content": b"[]"}}, store)
+    assert check_remote_compatible(_plan_config({"source_type": "upload", "dataset_id": "incident_dump"}))
+    assert fs.objects == {}
+
+
+def test_allowlisted_local_file_stages_to_s3_store(tmp_path, monkeypatch):
+    from config import settings
+    from src.remote import inputs
+    monkeypatch.setattr(inputs, "OPERATOR_STORE_KINDS", {"s3"})
+    root = tmp_path / "datasets"
+    root.mkdir()
+    monkeypatch.setattr(settings, "remote_local_data_roots", f"/nonexistent-root,{root}")
+    data = root / "train.jsonl"
+    data.write_text('{"prompt":"hi","chosen":"hello"}\n')
+    store, fs = _s3_store()
+    source = {"source_type": "local_file", "file_path": str(data)}
+    assert check_remote_compatible(_plan_config(source)) == []
+    prepared = stage_remote_inputs(config(source), {}, store)
+    restored = restore_remote_inputs(prepared, store, tmp_path / "worker")
+    assert Path(restored["dataset"]["source"]["file_path"]).read_text() == data.read_text()
+
+
+def test_non_s3_artifact_store_refuses_operator_data(tmp_path, monkeypatch):
+    from config import settings
+    from src.remote.artifacts import HFHubArtifactStore
+    data = tmp_path / "train.jsonl"
+    data.write_text("{}\n")
+    store = HFHubArtifactStore("someone/merlina-run")
+    store.push_dir = lambda *a: pytest.fail("operator data reached the HF store")
+    sources = [{"source_type": "local_file", "file_path": str(data)},
+               {"source_type": "upload", "dataset_id": "u"},
+               {"source_type": "internal", "uri": "swl://demo@rev"}]
+    monkeypatch.setattr(settings, "merlina_artifact_store", "hf_hub")
+    for source in sources:
+        assert any("S3/R2" in p for p in check_remote_compatible(_plan_config(source)))
+        with pytest.raises(RemoteInputError, match="S3/R2"):
+            stage_remote_inputs(config(source), {"u": {"filename": "d.json", "content": b"[]"}}, store,
+                                internal_store=InternalStore(tmp_path))
+    # HF sources need no operator store.
+    assert check_remote_compatible(_plan_config({"source_type": "huggingface", "repo_id": "org/d"})) == []
+
+
+def test_input_snapshot_manifests_omit_upload_ids(monkeypatch):
+    from config import settings
+    from src.remote.artifacts import store_for_job
+    from src.remote.s3_artifacts import S3ArtifactStore
+    from tests.test_s3_artifacts import FakeS3
+    monkeypatch.setattr(settings, "merlina_artifact_s3_bucket", "bucket")
+    upload_id = "upload_1760000000_0123456789abcdef0123456789abcdef"
+    original = config({"source_type": "upload", "dataset_id": upload_id},
+                      [{"source_type": "local_file", "file_path": "/srv/data/customer.json"}])
+    store = store_for_job(SimpleNamespace(hf_token=None, model_dump=lambda: original), "job")
+    fs = FakeS3()
+    store._fs = fs
+    stage_remote_inputs(config({"source_type": "upload", "dataset_id": upload_id}),
+                        {upload_id: {"filename": "d.json", "content": b"[]"}}, store)
+    manifests = [v for k, v in fs.objects.items() if k.endswith("/manifest.json")]
+    assert manifests
+    for raw in manifests:
+        assert upload_id not in raw.decode()
+        assert "customer" not in raw.decode()
+    assert original["dataset"]["source"]["dataset_id"] == upload_id

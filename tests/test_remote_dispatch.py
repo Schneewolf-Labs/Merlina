@@ -123,6 +123,9 @@ class TestRemotePreflight:
     def test_existing_local_file_dataset_can_be_staged_remotely(self, monkeypatch, tmp_path):
         from config import settings
         monkeypatch.setattr(settings, "runpod_api_key", "rp_key", raising=False)
+        monkeypatch.setattr(settings, "merlina_artifact_store", "s3")
+        monkeypatch.setattr(settings, "merlina_artifact_s3_bucket", "artifacts")
+        monkeypatch.setattr(settings, "remote_local_data_roots", str(tmp_path))
         dataset_file = tmp_path / "training.jsonl"
         dataset_file.write_text('{"prompt":"Hi","chosen":"Hello","rejected":"No"}\n')
         config = make_training_config(
@@ -178,7 +181,9 @@ class TestRemoteStoragePreflight:
             get_manifest=lambda *_: manifest))
         return {"source_type": "internal", "uri": "swl://demo@rev"}
 
-    def test_s3_output_and_local_input_need_no_hf_token_or_repo(self, tmp_path):
+    def test_s3_output_and_local_input_need_no_hf_token_or_repo(self, tmp_path, monkeypatch):
+        from config import settings
+        monkeypatch.setattr(settings, "remote_local_data_roots", str(tmp_path))
         path = tmp_path / "data.jsonl"
         path.write_text('{"prompt":"hi","chosen":"hello"}\n')
         valid, results = PreflightValidator().validate_all(self._config(

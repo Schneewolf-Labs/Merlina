@@ -393,12 +393,17 @@ class TestUploadedDatasetStaging:
         assert job_manager.get_job("job_1").status == "failed"
         assert provider.provisioned == []
 
-    def test_upload_uses_portable_payload_before_provisioning(self, job_manager):
+    def test_upload_uses_portable_payload_before_provisioning(self, job_manager, monkeypatch):
         import base64
         import json
+        from config import settings
+        from src.remote.s3_artifacts import S3ArtifactStore
+        from tests.test_s3_artifacts import FakeS3
+        # Operator data is only staged into an operator-owned S3/R2 store.
+        monkeypatch.setattr(settings, "merlina_artifact_store", "s3")
         cfg = make_config()
         cfg.dataset.source = SimpleNamespace(source_type="upload", dataset_id="uploaded")
-        store = LocalArtifactStore(Path("store"))
+        store = S3ArtifactStore("bucket", "job_1", fs=FakeS3())
         provider = FakeProvider()
         data = b'{"prompt":"hi","chosen":"hello"}'
         def finished():
@@ -409,7 +414,7 @@ class TestUploadedDatasetStaging:
         worker = ScriptedWorker([WorkerStatus(state=STATE_DONE)], on_done=finished)
         job_manager.create_job("job_1", cfg.model_dump())
         run_training_remote("job_1", cfg, job_manager,
-                            {"uploaded": {"filename": "/private/customer.json", "content": data}},
+                            {"uploaded": {"filename": "/home/me/customer.json", "content": data}},
                             provider=provider, store=store,
                             worker_client_factory=lambda *_: worker, poll_interval_s=0.01)
         assert job_manager.get_job("job_1").status == "completed"
@@ -417,7 +422,7 @@ class TestUploadedDatasetStaging:
         source = payload["config"]["dataset"]["source"]
         assert source["file_path"].startswith("artifact://input-0-")
         assert "dataset_id" not in source
-        assert "/private/customer" not in json.dumps(payload)
+        assert "/home/me/customer" not in json.dumps(payload)
         assert store.exists(source["file_path"].removeprefix("artifact://"))
 
 
