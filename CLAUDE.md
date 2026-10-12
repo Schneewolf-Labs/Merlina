@@ -138,6 +138,8 @@ python bump_version.py minor --release-name "Feature Name"
 - `preflight_checks.py` - Configuration validation
 - `training_runner.py` - Enhanced training with callbacks
 - `job_queue.py` - Job queue with priority and concurrency control
+- `worker_monitor.py` - The one loop that watches a detached training subprocess (progress relay, stop forwarding, exit reconciliation)
+- `worker_reattach.py` - Startup scan that re-adopts workers which outlived an API restart
 
 **Dataset Handling Module (dataset_handlers/)**
 
@@ -311,11 +313,24 @@ Jobs are managed through a priority queue system with configurable concurrency:
 - `stopped` - Job stopped by user request
 - `cancelled` - Job cancelled while in queue
 
+**How it works (src/job_queue.py):**
+- One `threading.Condition` guards two dicts: `_pending` (job_id -> `QueuedJob`) and `_running` (job_id -> worker thread). Every read or write of queue state happens under it; there is no separate heap to keep in sync.
+- `max_concurrent_jobs` worker threads wait on the condition, pop the best pending job (HIGH first, then submission order) and run its callback. The DB write to `initializing` doubles as the existence check: a job whose row was deleted while it waited never runs.
+- `submit()` writes `queued` to the DB *before* the job becomes visible to workers (so it can't overwrite the worker's `initializing`), and raises `ValueError` if the id is already queued or running.
+- `cancel()` on a queued job removes it and writes `cancelled` immediately - it never waits for a worker. On a running job it sets `stop_requested` in the DB; whatever is executing the job (in-thread trainer callback, subprocess worker + `worker_monitor`, remote orchestrator) polls that flag.
+- `remove()` / `remove_all_queued()` drop queued entries without touching the DB (used after the row was deleted). Removed entries release their config so API tokens don't linger.
+- A job already claimed by a worker when its row is deleted may still run; its status writes become no-ops. Deleting a running job's row is not a stop - call `/stop` first.
+- `shutdown()` stops accepting work and lets workers finish their current job; anything still queued stays `queued` in the DB for the restart reconciler.
+- Local and remote jobs use separate `JobQueue` instances (`job_queue`, `remote_job_queue`); `_queue_holding(job_id)` in `merlina.py` finds the one tracking a job.
+
+**Subprocess monitoring (src/worker_monitor.py):**
+- `run_training_distributed` launches `accelerate launch src/train_worker.py` in its own session and records `worker_pid` / `progress_file` on the job, then calls `monitor_worker()`. The same function is used by `worker_reattach.py` after a restart, so the two paths cannot drift.
+- The loop: forward a stop request as SIGTERM to the process group (SIGKILL after `STOP_GRACE_SECONDS`), tail the JSONL progress file into `websocket_manager.publish()`, and on exit mark the job `failed` if it is not already in a terminal status, clear the pid, and delete the run directory. Per-iteration errors (e.g. a locked DB) are logged and never end the loop while the worker lives.
+- The worker owns its DB writes (status, metrics); the progress file only feeds live WebSocket clients.
+
 **Queue Features:**
 - Priority levels: LOW, NORMAL, HIGH (higher priority jobs run first)
 - Configurable max concurrent jobs (default: 1)
-- Thread-safe job management with worker threads
-- Automatic queue processing
 - Job cancellation support (queued or running)
 - Queue position tracking
 
@@ -781,6 +796,8 @@ Live training updates via WebSocket connections.
 **Key class:**
 - `WebSocketManager` - Manages connections and broadcasts
 
+**Publishing from worker threads:** the server binds its event loop at startup (`websocket_manager.bind_loop(loop)`); any thread can then call `websocket_manager.publish(job_id, message)` or `websocket_manager.schedule(coro)` and the send hops onto the loop. With no loop bound (tests, CLI) messages are dropped silently. The `send_*` coroutines remain for code already on the loop; `training_runner.send_websocket_update(coro, loop)` is a thin wrapper over `schedule`.
+
 **Message types sent to clients:**
 - `status_update` - Training status, progress, loss, GPU memory
 - `metrics` - Detailed metrics at specific steps
@@ -836,7 +853,10 @@ merlina/
 ├── .env                          # User configuration (gitignored)
 ├── .env.example                  # Configuration template
 ├── src/                          # Source modules (v1.1)
-│   ├── job_manager.py           # Job persistence
+│   ├── job_manager.py           # Job persistence (SQLite, WAL)
+│   ├── job_queue.py             # Priority queue + worker threads
+│   ├── worker_monitor.py        # Subprocess progress/stop/exit loop
+│   ├── worker_reattach.py       # Re-adopt workers after a restart
 │   ├── websocket_manager.py     # WebSocket manager
 │   ├── preflight_checks.py      # Validation
 │   ├── training_runner.py       # Text-LLM training (Grimoire) + sibling dispatcher

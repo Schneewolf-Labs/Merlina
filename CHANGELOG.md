@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Job execution core rewritten for correct concurrency** (`src/job_queue.py`, `src/job_manager.py`, `src/websocket_manager.py`, new `src/worker_monitor.py`, `src/worker_reattach.py`): the queue now keeps all state (pending + running) under a single condition variable instead of a `PriorityQueue` plus three separately-locked side tables. Cancelling or deleting a queued job is a plain removal — no tombstones left for a worker to skip, no stale config (with API tokens) kept alive. Submitting a job id that is already queued or running raises instead of silently overwriting the entry. `shutdown()` no longer deadlocks when work is still queued. `JobManager.update_job()` takes `**fields` validated against the schema (unknown columns raise), enables WAL once at init instead of on every connection, and schema migrations are table-driven. The WebSocket manager gains `bind_loop()` / `publish()` so worker threads and the subprocess monitor publish without threading an event-loop reference through every call.
+- **One worker monitor loop** (`src/worker_monitor.py`): the progress-tailing / stop-forwarding / exit-reconciling loop that `run_training_distributed` and the post-restart re-attach path each had their own copy of is now a single `monitor_worker()`. It survives transient DB errors while the worker is alive, escalates SIGTERM → SIGKILL after the grace window exactly once, and marks a job failed whenever its worker exits without a terminal status (the old distributed path only did this for a non-zero exit code, so a worker exiting 0 mid-run left the job "training" forever).
+
+### Fixed
+- **Cancelling a queued job now takes effect immediately.** Previously `POST /jobs/{id}/stop` on a queued job only flagged it; the DB kept saying `queued` until a worker popped the entry — behind a multi-hour run that meant a cancelled job reported as queued for hours. The job is now recorded `cancelled` at the moment of the request.
+- `POST /jobs/{id}/stop` resolves which queue (local or remote) holds the job with one lookup instead of probing each queue's status in turn.
+
+### Tests
+- `tests/test_worker_monitor.py` (new): exit reconciliation, SIGTERM forwarding and SIGKILL escalation, progress relay, DB-error resilience — all without GPUs. `tests/test_queue.py` gains cases for immediate cancel, stop-flag on running jobs, duplicate submit, and shutdown with a backlog.
+
 ## [2.2.0] - 2026-08-14 "Fused Kernels"
 
 ### Added
