@@ -158,3 +158,79 @@ errors. Alert on sustained failures and any resource that continues billing afte
 its deadline. Never include passwords, bearer tokens, presigned URLs or raw
 customer datasets in telemetry. Support access needs an explicit operational
 policy and audit trail; customer authorization is not replaced by an LLM prompt.
+
+## Advisor configuration and boundaries
+
+Set `MERLINA_ADVISOR_ENABLED=true`, `MERLINA_ADVISOR_MODEL`,
+`MERLINA_ADVISOR_BASE_URL` (an HTTPS OpenAI-compatible `/v1` endpoint), and
+`MERLINA_ADVISOR_API_KEY` in the hosted server's secret environment. Do not set
+these values in frontend assets. Choose a provider whose retention and privacy
+terms match the pilot agreement. The advisor is explicitly unavailable until
+configured; an outage returns an error, never a fabricated LLM answer.
+
+This first pilot sponsors advisor calls from the operator's account; they are
+not debited from customer compute credits. Calls are limited to six per account
+per minute, 2,000 output tokens and a 45-second provider timeout. Add provider
+account spending caps before enabling it. Automated agent billing and adaptive
+experiment loops require separate implementation and authorization.
+
+The advisor receives project goals, bounded recent conversation, selected hosted
+configuration, verified dataset shape/counts, allowlisted numeric results and
+failure codes, and user-reported evaluation observations. It does not receive raw
+dataset examples, raw worker logs or infrastructure secrets. Explain this data
+flow to pilot participants. Project goals, field names and observations remain
+untrusted input. The model receives no tools; service ownership checks and strict
+hosted configuration validation apply to every proposal and draft approval.
+
+Conversation requests, immutable proposals, accepted plans and evaluations are
+stored in the hosted database and included in its backup. An accepted plan can
+create a draft job; only the separate billing quote approval can authorize paid
+execution. Repeated plan approval returns the same draft. Recorded observations
+are labeled user-reported; this milestone does not execute an independent model
+evaluation or claim quality from training loss alone.
+
+A provider interruption leaves a visible failed/pending conversation turn. Retry
+with a new request key after investigating sustained errors; duplicate keys do
+not repeat a completed call. Pending requests are not automatically replayed
+across restarts, to avoid unbounded provider charges. Set conversation retention
+and deletion policy before public production use.
+
+## Starting the assembled services
+
+Use the [identity setup](../dev/hosted-identity.md) to create pilot accounts.
+Provide configuration through the supervised process environment (the hosted
+factory does not load `.env` itself). For paid dispatch install the repository's
+runtime dependencies, configure [artifact storage](../dev/artifact-storage.md),
+and supply the [billing inputs](../dev/hosted-billing.md), including the measured
+catalog and your current total-price service. The price service is an operator
+integration, not a bundled hosted endpoint.
+
+Set `MERLINA_HOSTED_PUBLIC_URL` to the HTTPS public origin. The app composes the
+S3 store, per-job capability broker, RunPod dispatcher and billing guard at startup
+when `MERLINA_HOSTED_PAID_EXECUTION_ENABLED=true`; incomplete configuration fails
+startup or quote creation. With the flag false, sign-in, drafts and optional advisor
+remain available without initializing paid execution. `MERLINA_HOSTED_MAX_ARTIFACT_BYTES`
+sets each worker grant's cumulative allocation ceiling (default 100 GiB).
+
+Run one hosted web process behind TLS:
+
+```sh
+uvicorn src.hosted.app:create_hosted_app --factory --host 127.0.0.1 --port 8000 --workers 1
+```
+
+Its lifespan dispatches approved work and retries result publication every
+`MERLINA_HOSTED_DISPATCH_INTERVAL_SECONDS` (default 10). Supervise cleanup as a
+separate OS service using the same persistent remote job database and platform
+RunPod credential; it must survive web process failure:
+
+```sh
+python -m src.remote.cleanup --db /var/lib/merlina-hosted/remote-jobs.sqlite3 --interval 30
+```
+
+Match that path to `MERLINA_HOSTED_DATA_DIR`. The cleanup service terminates owned
+resources and preserves unresolved evidence; hosted reconciliation settles the
+ledger after the web service returns. Monitor the cleanup JSON/alerts rather than
+assuming a process heartbeat proves termination. During API maintenance an
+operator can run `python -m src.hosted.runtime --once` with the same environment
+for one dispatch/reconciliation pass, or supervise that module continuously.
+Choose one dispatch host and retain independent cleanup throughout maintenance.

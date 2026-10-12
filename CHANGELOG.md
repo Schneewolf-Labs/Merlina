@@ -14,11 +14,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add the [Merlina 3 plan](docs/dev/merlina-3.md): reliable rented compute,
   S3/R2 artifacts, a planned managed service at `merlina.swl.ai`, prepaid
   execution, and an agent-guided model-building workflow.
-- This is a release identity and planning update, not a published 3.0.0 release.
-  Hosted accounts, billing, and the built-in advisor remain planned. No API or
-  stored-config migration is introduced here.
-- Add opt-in self-hosted S3/R2 artifact handoff with verified manifests and
-  durable remote checkpoints ([durable remote artifacts](docs/dev/artifact-storage.md)).
+- Add verified, manifest-based S3-compatible artifact handoffs and periodic
+  checkpoint publication; stage uploaded, local and pinned internal datasets
+  for remote workers, including explicit evaluation data.
+- Persist remote launch intents, resource ownership, leases and cancellation;
+  provide independent inventory reconciliation and cleanup after controller loss.
+- Add a separate hosted app with account/project isolation, bounded uploads,
+  hashed sessions and expiring job-scoped artifact capabilities.
+- Add opt-in USD prepaid reservations, signed Stripe payment confirmation,
+  measured/current-price quotes, metered settlement and durable result recovery.
+- Add the Wishcraft managed studio and optional project-aware LLM advisor.
+  Advisor plan approval creates a draft; paid execution still requires a separate
+  quote approval. Evaluation records are user-reported observations.
+- This is an unpublished development implementation. New SQLite tables are
+  additive; hosted data is separate from the self-hosted API. Paid execution and
+  advisor calls are disabled by default. Real infrastructure validation and the
+  [pilot launch gates](docs/operations/hosted-pilot.md) remain outstanding.
 
 ### Changed
 - **Job execution core rewritten for correct concurrency** (`src/job_queue.py`, `src/job_manager.py`, `src/websocket_manager.py`, new `src/worker_monitor.py`, `src/worker_reattach.py`): the queue now keeps all state (pending + running) under a single condition variable instead of a `PriorityQueue` plus three separately-locked side tables. Cancelling or deleting a queued job is a plain removal — no tombstones left for a worker to skip, no stale config (with API tokens) kept alive. Submitting a job id that is already queued or running raises instead of silently overwriting the entry. `shutdown()` no longer deadlocks when work is still queued. `JobManager.update_job()` takes `**fields` validated against the schema (unknown columns raise), enables WAL once at init instead of on every connection, and schema migrations are table-driven. The WebSocket manager gains `bind_loop()` / `publish()` so worker threads and the subprocess monitor publish without threading an event-loop reference through every call.

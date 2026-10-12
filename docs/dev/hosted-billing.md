@@ -30,9 +30,10 @@ not implemented. Do not enable general public payments without those procedures.
 ## Runtime configuration
 
 `install_runtime(app, artifact_store_factory)` binds the hosted app to RunPod and
-its durable lifecycle. Run `app.state.execution.tick()` periodically from a
-supervised process; it starts approved jobs in background threads and reconciles
-claimed jobs after restart. Also supervise the independent lifecycle cleanup
+its durable lifecycle. The assembled app lifespan installs this binding when
+paid execution is enabled and calls `app.state.execution.tick()` periodically;
+it starts approved jobs in background threads and reconciles claimed jobs after
+restart. See the [service commands](../operations/hosted-pilot.md#starting-the-assembled-services). Also supervise the independent lifecycle cleanup
 service. Claim ambiguity never resets automatically: uncertain creates retain
 reservations until provider inventory and cleanup are resolved. A dispatch claim
 without a lifecycle record requires operator investigation; it is never replayed.
@@ -56,8 +57,9 @@ Required operator inputs:
   "gpu_count":1,"cloud_type":"secure","container_disk_gb":100,"volume_gb":0,
   "rate_minor_per_hour":120}]}`. Evidence older than 60 seconds is rejected.
   Rates are cross-checked against fresh RunPod GPU offers, with no static fallback.
-- `artifact_store_factory(job)`: must supply a per-job scoped worker capability;
-  a plain store containing platform AWS keys is rejected.
+- `MERLINA_HOSTED_PUBLIC_URL`: public HTTPS origin for the worker capability
+  broker. The assembled runtime builds the scoped `artifact_store_factory(job)`
+  from S3 configuration; a plain store containing platform AWS keys is rejected.
 
 Hosted identity supplies safe dataset/config fields, overriding operator fields
 that could enable local execution, remote code, publishing, retained instances or

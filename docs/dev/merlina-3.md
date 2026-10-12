@@ -1,8 +1,9 @@
 # Merlina 3 — Wishcraft ✨
 
-Status: development plan, started 2026-10-11. The source version is `3.0.0`;
-this document describes planned work, not a published release or available
-hosted service. The release name is **Wishcraft**: a friendly magician helping
+Status: development implementation, started 2026-10-11. The source version is
+`3.0.0`; the stacked implementation covers M3-01 through M3-08 for an
+operator-controlled pilot. This is not a published release or available hosted
+service. The release name is **Wishcraft**: a friendly magician helping
 turn a goal into a working model. Preserve the cute, magical personality while
 making execution dependable and the hosted experience easier to use.
 
@@ -27,7 +28,7 @@ fees and metered execution. Exact pricing and the hosted/self-hosted feature
 boundary still need decisions. Customer-owned buckets can be an advanced
 option later rather than a prerequisite for the hosted workflow.
 
-## What exists today
+## Baseline before the implementation stack
 
 | Area | Existing implementation | Work needed for the hosted experience |
 | --- | --- | --- |
@@ -38,7 +39,7 @@ option later rather than a prerequisite for the hosted workflow.
 | Agent tools | MCP client for training, validation, previews and job inspection (`mcp_server.py`) | Project-aware advisor, scoped tool access, explicit budget approval, evaluations and an action history |
 | Hosted product | Existing local web UI and API | Accounts, project ownership, tenant isolation, billing, managed onboarding and operational support |
 
-Existing remote training is API/config driven and supports text LLM modes.
+The baseline remote training is API/config driven and supports text LLM modes.
 The first hosted pilot should use that path; hosted VLM and diffusion support
 need separate validation. Local training support remains valuable throughout.
 
@@ -58,7 +59,7 @@ need separate validation. Local training support remains valuable throughout.
 
 ## Implementation sequence and acceptance criteria
 
-### 0. Release identity and planning — this change
+### 0. Release identity and planning
 
 - Set the source version and release name, keep version consumers consistent,
   and link this plan from the project docs.
@@ -142,9 +143,10 @@ Acceptance: a user completes the goal-to-model journey without provider setup.
 The agent explains a failed run using its evidence and proposes a reviewable
 next step. It cannot bypass the account boundary or approved spending limit.
 
-## Initial backlog
+## Implementation stack
 
-All items below are planned, not implemented by this version change.
+Each milestone has code and automated checks. The acceptance criteria above
+remain the release gates; mocks are not evidence of live service compatibility.
 
 | ID | Deliverable | Depends on |
 | --- | --- | --- |
@@ -157,15 +159,46 @@ All items below are planned, not implemented by this version change.
 | M3-07 | Managed launch/progress/results UI and operating procedures | M3-02, M3-04, M3-05, M3-06 |
 | M3-08 | Advisor with approved actions and evaluation workflow | M3-05, M3-06, M3-07 |
 
-Start implementation with **M3-01**: it removes the required HF artifact
-dependency and establishes the durable output contract used by later work.
+Implementation details and remaining boundaries:
+
+- **M3-01:** [S3 artifact manifests and checkpoint publication](artifact-storage.md).
+  Immutable generations, checksums, manifest-last commit, bounded checkpoint
+  uploads and verified recovery are implemented. Automatic garbage collection
+  and automatic training resume are not implemented; S3/R2 need live validation.
+- **M3-02:** [Portable remote inputs](remote-inputs.md). Upload/local and pinned
+  non-private internal data are staged and verified; private data is not silently
+  exported. Explicit evaluation data uses the same staging path.
+- **M3-03/04:** [Durable lifecycle and cleanup](remote-lifecycle.md). Launch intent
+  precedes provisioning; leases, cancellation and independent inventory cleanup
+  survive restarts. Uncertain ownership is retained for operator investigation.
+- **M3-05:** [Hosted identity](hosted-identity.md). A separate CPU control plane
+  scopes all resources to accounts/projects. Workers receive expiring per-job
+  object capabilities rather than platform storage credentials.
+- **M3-06:** [Prepaid execution](hosted-billing.md). Integer ledger, reservations,
+  signed payment events, actual lifecycle usage and restart-safe downloads are
+  implemented. The adapter-only text pilot requires an exact measured workload
+  catalog and an operator-supplied HTTPS total-price feed. Refunds, chargebacks,
+  tax/invoicing and general public billing operations remain outside this pilot.
+- **M3-07:** The managed studio covers goals, uploads, drafts, quote approval,
+  progress, cancellation and downloads. The [runbook](../operations/hosted-pilot.md)
+  documents backup/restore, rollback, reconciliation and operator response.
+- **M3-08:** An optional OpenAI-compatible advisor stores conversations, immutable
+  proposals and accepted draft plans. It sees dataset shape and finite job
+  metrics; it has no execution tools or spending authority. Evaluation records
+  are user-reported, not independent automated model-quality evaluations.
+
+The Python suites exercise storage faults, staging, lifecycle recovery,
+account isolation, ledger concurrency and a hosted-to-orchestrator-to-artifact
+flow with fake external transports. Node and Chromium checks exercise the
+studio journey and advisor rendering. No paid GPU, live Stripe charge, live
+bucket or live LLM call is performed by these tests.
 
 ## Decisions to resolve before the hosted pilot
 
 - First supported model family, workload and evaluation criteria.
 - Initial provider/region, supported GPU shapes and pinned worker images.
 - Hosted bucket layout, retention defaults, export/deletion policy and pricing.
-- Account identity, production database and worker authentication design.
+- Production identity lifecycle (signup/recovery), database scaling and operational access policy; the pilot uses operator-created accounts and SQLite.
 - Payment processor, margin, refunds, failure charges and overage responsibility.
 - Advisor model/provider, data handling, and which actions need explicit approval.
 - Hosted/self-hosted feature boundary and migration support for existing installs.

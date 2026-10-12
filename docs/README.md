@@ -5,7 +5,13 @@ Welcome to the Merlina documentation! Choose your path:
 ## ✨ Merlina 3 — Wishcraft
 
 - **[Development Plan](dev/merlina-3.md)** - Product direction, current capabilities,
-  implementation milestones, and the initial backlog for the planned SWL.ai service
+  implementation milestones, and pilot launch gates for the planned SWL.ai service
+- **[Hosted Pilot Runbook](operations/hosted-pilot.md)** - Startup, launch gates, recovery and advisor setup
+- **[Artifact Storage](dev/artifact-storage.md)** - S3-compatible handoffs and checkpoints
+- **[Remote Inputs](dev/remote-inputs.md)** - Portable datasets and evaluation staging
+- **[Remote Lifecycle](dev/remote-lifecycle.md)** - Durable ownership and independent cleanup
+- **[Hosted Identity](dev/hosted-identity.md)** - Accounts and resource isolation
+- **[Hosted Billing](dev/hosted-billing.md)** - Quotes, reservations and settlement
 
 ## 📖 For Users
 
