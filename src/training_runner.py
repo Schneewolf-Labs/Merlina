@@ -47,7 +47,9 @@ except ImportError:
 from peft import LoraConfig, PeftModel, AutoPeftModelForCausalLM
 from grimoire import GrimoireTrainer, TrainingConfig, TrainerCallback
 from grimoire.losses import SFTLoss, ORPOLoss, DPOLoss, SimPOLoss, CPOLoss, IPOLoss, KTOLoss
-from grimoire.data import tokenize_sft, tokenize_preference, tokenize_kto
+from src.prompt_budget import (
+    budget_splits, record_reports, tokenize_sft_row, tokenize_preference_row, tokenize_kto_row,
+)
 
 from huggingface_hub import HfApi
 from src.model_card import generate_model_readme, upload_model_readme, generate_wandb_run_name, upload_config_image
@@ -1492,19 +1494,20 @@ def run_training_sync(
             loss_fn = SFTLoss()
 
             # Tokenize: concatenate prompt+chosen, mask prompt tokens in labels
+            train_dataset, eval_dataset, _budget_reports = budget_splits(
+                train_dataset, eval_dataset, tokenizer, config, training_mode)
+            record_reports(job_manager, job_id, _budget_reports)
             train_dataset = train_dataset.map(
-                lambda x: tokenize_sft(
+                lambda x: tokenize_sft_row(
                     x, tokenizer, max_length=config.max_length,
                     max_prompt_length=config.max_prompt_length,
-                    prompt_field="prompt", response_field="chosen",
                 ),
                 remove_columns=train_dataset.column_names,
             )
             eval_dataset = eval_dataset.map(
-                lambda x: tokenize_sft(
+                lambda x: tokenize_sft_row(
                     x, tokenizer, max_length=config.max_length,
                     max_prompt_length=config.max_prompt_length,
-                    prompt_field="prompt", response_field="chosen",
                 ),
                 remove_columns=eval_dataset.column_names,
             )
@@ -1551,21 +1554,20 @@ def run_training_sync(
             eval_dataset = _split_to_kto(eval_dataset)
 
             # Tokenize: prompt+response with binary label
+            train_dataset, eval_dataset, _budget_reports = budget_splits(
+                train_dataset, eval_dataset, tokenizer, config, training_mode)
+            record_reports(job_manager, job_id, _budget_reports)
             train_dataset = train_dataset.map(
-                lambda x: tokenize_kto(
+                lambda x: tokenize_kto_row(
                     x, tokenizer, max_length=config.max_length,
                     max_prompt_length=config.max_prompt_length,
-                    prompt_field="prompt", response_field="response",
-                    label_field="label",
                 ),
                 remove_columns=train_dataset.column_names,
             )
             eval_dataset = eval_dataset.map(
-                lambda x: tokenize_kto(
+                lambda x: tokenize_kto_row(
                     x, tokenizer, max_length=config.max_length,
                     max_prompt_length=config.max_prompt_length,
-                    prompt_field="prompt", response_field="response",
-                    label_field="label",
                 ),
                 remove_columns=eval_dataset.column_names,
             )
@@ -1588,15 +1590,18 @@ def run_training_sync(
                 loss_fn = IPOLoss(beta=config.beta)
 
             # Tokenize: chosen and rejected pairs with prompt masking
+            train_dataset, eval_dataset, _budget_reports = budget_splits(
+                train_dataset, eval_dataset, tokenizer, config, training_mode)
+            record_reports(job_manager, job_id, _budget_reports)
             train_dataset = train_dataset.map(
-                lambda x: tokenize_preference(
+                lambda x: tokenize_preference_row(
                     x, tokenizer, max_length=config.max_length,
                     max_prompt_length=config.max_prompt_length,
                 ),
                 remove_columns=train_dataset.column_names,
             )
             eval_dataset = eval_dataset.map(
-                lambda x: tokenize_preference(
+                lambda x: tokenize_preference_row(
                     x, tokenizer, max_length=config.max_length,
                     max_prompt_length=config.max_prompt_length,
                 ),

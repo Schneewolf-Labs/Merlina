@@ -759,7 +759,8 @@ class NewLoader(DatasetLoader):
 ORPO-specific parameters are in the `ORPOConfig` class:
 - `beta` - Controls preference optimization strength (higher = stronger preference)
 - `max_length` - Total sequence length (prompt + completion)
-- `max_prompt_length` - Maximum prompt length
+- `max_prompt_length` - Prompt token budget; `null` (default) = auto, i.e. `max_length` minus each row's response (response capped at half). Over-long prompts keep their end. See `src/prompt_budget.py`.
+- `prompt_truncation_tolerance` - Fraction of training rows allowed to lose prompt tokens before the job fails with a report (default 0.1)
 - `max_completion_length` - Calculated automatically
 
 LoRA parameters are in `LoraConfig`:

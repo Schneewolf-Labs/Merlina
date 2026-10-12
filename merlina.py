@@ -590,7 +590,25 @@ class TrainingConfig(BaseModel):
     # reports it. Raised to the context lengths current bases actually support; VRAM remains
     # the real constraint and is checked separately.
     max_length: int = Field(2048, ge=512, le=131072)
-    max_prompt_length: int = Field(1024, ge=256, le=131072)
+    # Unset (the default) means "auto": each row's prompt gets max_length minus that row's
+    # response, with the response capped at half the window. A fixed 1024 default used to
+    # cut 6k-token agent transcripts down to their system prompt on every row. Whatever the
+    # budget, over-long prompts keep their END (latest turns + generation header).
+    max_prompt_length: Optional[int] = Field(
+        None, ge=256, le=131072,
+        description=(
+            "Prompt token budget. Leave unset for auto (max_length minus each row's response, "
+            "response capped at half). Over-long prompts are truncated from the start, keeping "
+            "the end of the conversation."
+        ),
+    )
+    prompt_truncation_tolerance: float = Field(
+        0.10, ge=0.0, le=1.0,
+        description=(
+            "Largest fraction of training rows whose prompt may be truncated before the job "
+            "fails with a report instead of training. 1.0 disables the check."
+        ),
+    )
 
     # Model type
     model_type: str = Field(

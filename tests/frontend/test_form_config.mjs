@@ -148,6 +148,7 @@ function fullFormState({ extras = {}, cards, radios } = {}) {
             'use-4bit': true,
             'max-length': '2048',
             'max-prompt-length': '1024',
+            'prompt-truncation-tolerance': '0.1',
             'epochs': '2',
             'batch-size': '1',
             'grad-accum': '16',
@@ -288,6 +289,25 @@ describe('buildTrainingConfig — coverage of TrainingConfig fields', () => {
             `buildTrainingConfig emits keys not on TrainingConfig: ${unknown.join(', ')}. ` +
             `Pydantic v2 silently drops unknown fields — these values would be lost.`
         ));
+    });
+});
+
+// ─── Prompt budget ──────────────────────────────────────────────────────────
+
+describe('buildTrainingConfig — prompt budget', () => {
+    it('sends max_prompt_length as an integer when set', () => {
+        setState(fullFormState());
+        assert.equal(buildTrainingConfig().max_prompt_length, 1024);
+    });
+
+    it('sends null (auto budget) when max prompt length is blank', () => {
+        setState(fullFormState({ extras: { 'max-prompt-length': '' } }));
+        assert.equal(buildTrainingConfig().max_prompt_length, null);
+    });
+
+    it('carries the truncation tolerance', () => {
+        setState(fullFormState({ extras: { 'prompt-truncation-tolerance': '0.25' } }));
+        assert.equal(buildTrainingConfig().prompt_truncation_tolerance, 0.25);
     });
 });
 

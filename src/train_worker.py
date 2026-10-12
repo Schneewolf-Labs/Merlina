@@ -46,7 +46,9 @@ except ImportError:
 from peft import LoraConfig
 from grimoire import GrimoireTrainer, TrainingConfig as GrimoireTrainingConfig, TrainerCallback
 from grimoire.losses import SFTLoss, ORPOLoss, DPOLoss, SimPOLoss, CPOLoss, IPOLoss, KTOLoss
-from grimoire.data import tokenize_sft, tokenize_preference, tokenize_kto
+from src.prompt_budget import (
+    budget_splits, record_reports, tokenize_sft_row, tokenize_preference_row, tokenize_kto_row,
+)
 
 from dataset_handlers import (
     DatasetPipeline,
@@ -556,20 +558,21 @@ def run_worker(args):
 
         if training_mode == "sft":
             loss_fn = SFTLoss()
+            train_dataset, eval_dataset, _budget_reports = budget_splits(
+                train_dataset, eval_dataset, tokenizer, config, training_mode)
+            record_reports(job_manager, args.job_id, _budget_reports)
             train_dataset = train_dataset.map(
-                lambda x: tokenize_sft(
+                lambda x: tokenize_sft_row(
                     x, tokenizer, max_length=config.max_length,
                     max_prompt_length=config.max_prompt_length,
-                    prompt_field="prompt", response_field="chosen",
                 ),
                 remove_columns=train_dataset.column_names,
             )
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(
-                    lambda x: tokenize_sft(
+                    lambda x: tokenize_sft_row(
                         x, tokenizer, max_length=config.max_length,
                         max_prompt_length=config.max_prompt_length,
-                        prompt_field="prompt", response_field="chosen",
                     ),
                     remove_columns=eval_dataset.column_names,
                 )
@@ -592,20 +595,21 @@ def run_worker(args):
             train_dataset = _split_to_kto(train_dataset)
             if eval_dataset is not None:
                 eval_dataset = _split_to_kto(eval_dataset)
+            train_dataset, eval_dataset, _budget_reports = budget_splits(
+                train_dataset, eval_dataset, tokenizer, config, training_mode)
+            record_reports(job_manager, args.job_id, _budget_reports)
             train_dataset = train_dataset.map(
-                lambda x: tokenize_kto(
+                lambda x: tokenize_kto_row(
                     x, tokenizer, max_length=config.max_length,
                     max_prompt_length=config.max_prompt_length,
-                    prompt_field="prompt", response_field="response", label_field="label",
                 ),
                 remove_columns=train_dataset.column_names,
             )
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(
-                    lambda x: tokenize_kto(
+                    lambda x: tokenize_kto_row(
                         x, tokenizer, max_length=config.max_length,
                         max_prompt_length=config.max_prompt_length,
-                        prompt_field="prompt", response_field="response", label_field="label",
                     ),
                     remove_columns=eval_dataset.column_names,
                 )
@@ -620,8 +624,11 @@ def run_worker(args):
                 loss_fn = CPOLoss(beta=config.beta, label_smoothing=config.label_smoothing)
             elif training_mode == "ipo":
                 loss_fn = IPOLoss(beta=config.beta)
+            train_dataset, eval_dataset, _budget_reports = budget_splits(
+                train_dataset, eval_dataset, tokenizer, config, training_mode)
+            record_reports(job_manager, args.job_id, _budget_reports)
             train_dataset = train_dataset.map(
-                lambda x: tokenize_preference(
+                lambda x: tokenize_preference_row(
                     x, tokenizer, max_length=config.max_length,
                     max_prompt_length=config.max_prompt_length,
                 ),
@@ -629,7 +636,7 @@ def run_worker(args):
             )
             if eval_dataset is not None:
                 eval_dataset = eval_dataset.map(
-                    lambda x: tokenize_preference(
+                    lambda x: tokenize_preference_row(
                         x, tokenizer, max_length=config.max_length,
                         max_prompt_length=config.max_prompt_length,
                     ),

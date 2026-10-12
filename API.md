@@ -242,7 +242,7 @@ Validates training configuration before starting. Checks GPU availability, VRAM,
   "batch_size": 1,
   "gradient_accumulation_steps": 16,
   "max_length": 2048,
-  "max_prompt_length": 1024,
+  "max_prompt_length": null,
   "beta": 0.1,
   "use_4bit": true,
   "dataset": {
@@ -1373,7 +1373,7 @@ Complete training configuration schema.
   "batch_size": 1,
   "gradient_accumulation_steps": 16,
   "max_length": 2048,
-  "max_prompt_length": 1024,
+  "max_prompt_length": null,
   "beta": 0.1,
 
   "seed": 42,
@@ -1588,7 +1588,7 @@ config = {
     "batch_size": 1,
     "gradient_accumulation_steps": 16,
     "max_length": 2048,
-    "max_prompt_length": 1024,
+    "max_prompt_length": null,
     "beta": 0.1,
     "use_4bit": True,
     "dataset": {
