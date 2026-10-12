@@ -53,6 +53,7 @@ DEFAULT_WORKER_IMAGE = "ghcr.io/schneewolf-labs/merlina:latest"
 DEFAULT_POLL_INTERVAL_S = 10.0
 DEFAULT_BOOT_TIMEOUT_MIN = 30.0
 DEFAULT_STOP_GRACE_MIN = 15.0
+DEFAULT_STATUS_ERROR_TOLERANCE_MIN = 10.0
 
 # Merge instances need RAM/disk, not GPU horsepower. Until CPU-instance
 # sizing is wired up we rent the cheapest viable GPU box with a big disk.
@@ -387,13 +388,40 @@ def _poll_stage_to_completion(*, client, stage, job_id, job_manager, event_loop,
     """Poll worker status until a terminal state, mirroring progress home."""
     from config import settings
     stop_grace_s = getattr(settings, "remote_stop_grace_minutes", DEFAULT_STOP_GRACE_MIN) * 60
+    error_tolerance_s = getattr(settings, "remote_status_error_tolerance_minutes",
+                                DEFAULT_STATUS_ERROR_TOLERANCE_MIN) * 60
 
     since_step = 0
     stop_sent_at: Optional[float] = None
+    unreachable_since: Optional[float] = None
 
     while True:
         tick()
-        status = client.status(since_step=since_step)
+        try:
+            status = client.status(since_step=since_step)
+        except Exception as e:
+            # Provider proxies return 404/5xx while routing settles or blips;
+            # one failed poll must not abandon a healthy, billing worker.
+            if _is_auth_error(e):
+                raise RemoteStageError(f"Worker rejected the control plane's token: {e}") from e
+            now = time.monotonic()
+            if unreachable_since is None:
+                unreachable_since = now
+                logger.warning("Worker status for job %s unreachable (%s); retrying", job_id, e)
+            elif now - unreachable_since > error_tolerance_s:
+                raise RemoteStageError(
+                    f"Worker status unreachable for {error_tolerance_s / 60:.0f} minutes: {e}"
+                ) from e
+            if now > deadline:
+                raise RemoteBudgetExceeded("max_runtime_hours reached while the worker was unreachable.")
+            job = job_manager.get_job(job_id)
+            if job and job.stop_requested:
+                raise RemoteStopped()
+            time.sleep(poll_interval_s)
+            continue
+        if unreachable_since is not None:
+            logger.info("Worker status for job %s reachable again", job_id)
+            unreachable_since = None
 
         if mirror_job_fields:
             since_step = _mirror_status(status, job_id, job_manager, event_loop, since_step)
@@ -428,6 +456,11 @@ def _poll_stage_to_completion(*, client, stage, job_id, job_manager, event_loop,
                 raise RemoteStopped()
 
         time.sleep(poll_interval_s)
+
+
+def _is_auth_error(error: Exception) -> bool:
+    response = getattr(error, "response", None)
+    return getattr(response, "status_code", None) in (401, 403)
 
 
 def _mirror_status(status, job_id, job_manager, event_loop, since_step) -> int:

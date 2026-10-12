@@ -318,6 +318,68 @@ class TestFailure:
         assert provider.terminated == ["inst_1"]
 
 
+class TestStatusErrors:
+    """A provider proxy blip must not abandon a healthy, billing worker."""
+
+    @staticmethod
+    def _http_error(code):
+        import requests
+        response = requests.Response()
+        response.status_code = code
+        return requests.HTTPError(f"{code} Client Error", response=response)
+
+    def _flaky(self, failures, code=404):
+        outer = self
+
+        class Flaky(ScriptedWorker):
+            calls = 0
+
+            def status(self, since_step=0):
+                Flaky.calls += 1
+                if Flaky.calls <= failures:
+                    raise outer._http_error(code)
+                return super().status(since_step)
+
+        return Flaky
+
+    def test_transient_proxy_errors_are_retried(self, job_manager):
+        store = LocalArtifactStore(Path("store"))
+
+        def push_adapter():
+            src = Path("trained_adapter")
+            src.mkdir(exist_ok=True)
+            (src / "adapter_config.json").write_text("{}")
+            store.push_dir(src, "adapter")
+
+        worker = self._flaky(3)([WorkerStatus(state=STATE_RUNNING),
+                                 WorkerStatus(state=STATE_DONE, artifacts=["adapter"])],
+                                on_done=push_adapter)
+        provider = FakeProvider()
+        run(make_config(), job_manager, provider=provider, store=store, worker=worker)
+        assert job_manager.get_job("job_1").status == "completed"
+        assert provider.terminated == ["inst_1"]
+
+    def test_persistent_errors_fail_after_tolerance(self, job_manager, monkeypatch):
+        from config import settings
+        monkeypatch.setattr(settings, "remote_status_error_tolerance_minutes", 0.0001, raising=False)
+        worker = self._flaky(10_000)([WorkerStatus(state=STATE_RUNNING)])
+        provider = FakeProvider()
+        run(make_config(), job_manager, provider=provider, worker=worker)
+        job = job_manager.get_job("job_1")
+        assert job.status == "failed"
+        assert "unreachable" in job.error
+        assert provider.terminated == ["inst_1"]
+
+    def test_auth_rejection_fails_immediately(self, job_manager):
+        worker = self._flaky(10_000, code=401)([WorkerStatus(state=STATE_RUNNING)])
+        provider = FakeProvider()
+        run(make_config(), job_manager, provider=provider, worker=worker)
+        job = job_manager.get_job("job_1")
+        assert job.status == "failed"
+        assert "token" in job.error
+        assert worker.calls == 1
+
+
 class TestStop:
     @staticmethod
     def _stop_after_first_status(job_manager, script, on_stop=None):
