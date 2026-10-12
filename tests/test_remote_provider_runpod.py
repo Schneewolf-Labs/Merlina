@@ -13,7 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.remote.providers.base import ProviderError, get_provider
+from src.remote.providers.base import ProviderError, ProvisionRejected, get_provider
 from src.remote.providers.runpod import RunPodProvider
 from src.remote.spec import InstanceSpec
 
@@ -99,6 +99,41 @@ class TestProvision:
         session.routes[("POST", "/pods")] = FakeResponse(500, {"error": "boom"})
         with pytest.raises(ProviderError, match="500"):
             provider.provision(basic_spec())
+
+    @pytest.mark.parametrize("response", [
+        FakeResponse(400, {"error": "invalid gpuTypeIds"}),
+        FakeResponse(401, None),
+        FakeResponse(429, {"error": "rate limited"}),
+        FakeResponse(500, {"error": "create pod: There are no instances currently available"}),
+    ])
+    def test_definite_refusals_are_rejections(self, provider, session, response):
+        session.routes[("POST", "/pods")] = response
+        with pytest.raises(ProvisionRejected):
+            provider.provision(basic_spec())
+
+    def test_missing_create_endpoint_is_rejection(self, provider, session):
+        with pytest.raises(ProvisionRejected):
+            provider.provision(basic_spec())
+
+    @pytest.mark.parametrize("response", [
+        FakeResponse(200, {}),                        # accepted but unparseable
+        FakeResponse(502, None),                      # gateway, no provider body
+        FakeResponse(500, {"error": "x", "id": "pod_abc"}),  # carries an id
+    ])
+    def test_ambiguous_failures_are_not_rejections(self, provider, session, response):
+        session.routes[("POST", "/pods")] = response
+        with pytest.raises(ProviderError) as info:
+            provider.provision(basic_spec())
+        assert not isinstance(info.value, ProvisionRejected)
+
+    def test_network_error_is_not_rejection(self, provider, session):
+        import requests
+        def boom(*args, **kwargs):
+            raise requests.ConnectionError("reset")
+        session.request = boom
+        with pytest.raises(ProviderError) as info:
+            provider.provision(basic_spec())
+        assert not isinstance(info.value, ProvisionRejected)
 
     def test_auth_header_set(self, session):
         RunPodProvider("rp_secret", session=session)
