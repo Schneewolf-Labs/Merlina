@@ -61,6 +61,7 @@ from dataset_handlers.formatters import get_chat_template_for_format
 from dataset_handlers.factory import create_loader_from_config
 
 from src.job_manager import JobManager
+from src.trainer_metrics import extract_extra_metrics, finite_or_none
 from src.model_card import generate_wandb_run_name
 from src.utils import build_grimoire_config, fix_vlm_state_dict_on_disk
 from src.checkpoint_policy import (
@@ -285,6 +286,12 @@ class FileProgressCallback(TrainerCallback):
             gpu_memory = torch.cuda.max_memory_allocated() / (1024**3)
             record["gpu_memory"] = gpu_memory
 
+        # Every other metric the loss function logged (ORPO nll/or loss,
+        # preference rewards and margins, ...), so they outlive stdout.
+        extra = extract_extra_metrics(metrics)
+        if extra:
+            record["extra"] = extra
+
         self._write(record)
 
         # Also update DB
@@ -302,23 +309,38 @@ class FileProgressCallback(TrainerCallback):
                 update_data["progress"] = record["progress"]
             if update_data:
                 self.job_manager.update_job(self.job_id, **update_data)
-            if "loss" in record:
+            if "loss" in record or extra:
                 self.job_manager.add_metric(
                     self.job_id,
                     step=trainer.global_step,
                     loss=record.get("loss"),
                     learning_rate=record.get("learning_rate"),
                     gpu_memory_used=gpu_memory,
+                    extra=extra or None,
                 )
 
     def on_evaluate(self, trainer, metrics):
         """Write eval metrics."""
         record = {"type": "eval"}
-        if "eval/loss" in metrics:
-            record["eval_loss"] = float(metrics["eval/loss"])
-            self._write(record)
-            if self.job_manager:
-                self.job_manager.update_job(self.job_id, eval_loss=record["eval_loss"])
+        eval_loss = finite_or_none(metrics.get("eval/loss"))
+        extra = extract_extra_metrics(metrics)
+        if eval_loss is not None:
+            record["eval_loss"] = eval_loss
+        if extra:
+            record["extra"] = extra
+        if eval_loss is None and not extra:
+            return
+        if trainer.global_step:
+            record["current_step"] = trainer.global_step
+        self._write(record)
+        if self.job_manager:
+            if eval_loss is not None:
+                self.job_manager.update_job(self.job_id, eval_loss=eval_loss)
+            if trainer.global_step:
+                self.job_manager.record_eval_metric(
+                    self.job_id, step=trainer.global_step,
+                    eval_loss=eval_loss, extra=extra or None,
+                )
 
 
 class EvalMemoryTeardownCallback(TrainerCallback):

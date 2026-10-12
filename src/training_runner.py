@@ -66,6 +66,7 @@ from dataset_handlers import (
     create_loader_from_config
 )
 from src.job_manager import JobManager
+from src.trainer_metrics import extract_extra_metrics, finite_or_none
 from src.memory_guard import reclaim_cuda_cache
 from src.websocket_manager import websocket_manager
 from src.preflight_checks import is_local_model_path
@@ -693,6 +694,10 @@ class WebSocketCallback(TrainerCallback):
             progress = 0.3 + (0.6 * (trainer.global_step / trainer.max_steps))
             update_data["progress"] = min(progress, 0.9)
 
+        # Every other metric the loss function logged (ORPO nll/or loss,
+        # preference rewards and margins, ...), persisted alongside the loss.
+        extra = extract_extra_metrics(metrics)
+
         if update_data:
             # Mirror status into the JobManager DB so HTTP /jobs reads it.
             # The websocket already announces status="training" below, but
@@ -702,14 +707,15 @@ class WebSocketCallback(TrainerCallback):
             # diffusion path) for the entire training run.
             self.job_manager.update_job(self.job_id, status="training", **update_data)
 
-            if trainer.global_step and "loss" in update_data:
+            if trainer.global_step and ("loss" in update_data or extra):
                 self.job_manager.add_metric(
                     self.job_id,
                     step=trainer.global_step,
                     loss=update_data.get("loss"),
                     eval_loss=update_data.get("eval_loss"),
                     learning_rate=update_data.get("learning_rate"),
-                    gpu_memory_used=gpu_memory
+                    gpu_memory_used=gpu_memory,
+                    extra=extra or None,
                 )
 
             send_websocket_update(
@@ -722,18 +728,23 @@ class WebSocketCallback(TrainerCallback):
                     loss=update_data.get("loss"),
                     eval_loss=update_data.get("eval_loss"),
                     learning_rate=update_data.get("learning_rate"),
-                    gpu_memory=gpu_memory
+                    gpu_memory=gpu_memory,
+                    extra_metrics=extra or None,
                 ),
                 self.event_loop
             )
 
     def on_evaluate(self, trainer, metrics):
         """Called after evaluation completes"""
-        update_data = {}
-        if "eval/loss" in metrics:
-            update_data["eval_loss"] = float(metrics["eval/loss"])
-        if update_data:
-            self.job_manager.update_job(self.job_id, **update_data)
+        eval_loss = finite_or_none(metrics.get("eval/loss"))
+        extra = extract_extra_metrics(metrics)
+        if eval_loss is not None:
+            self.job_manager.update_job(self.job_id, eval_loss=eval_loss)
+        if trainer.global_step and (eval_loss is not None or extra):
+            self.job_manager.record_eval_metric(
+                self.job_id, step=trainer.global_step,
+                eval_loss=eval_loss, extra=extra or None,
+            )
 
 
 def _teardown_eval_memory() -> None:

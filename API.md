@@ -480,21 +480,47 @@ Returns detailed time-series training metrics for a job.
     {
       "step": 1,
       "loss": 0.845,
-      "eval_loss": 0.923,
+      "eval_loss": null,
       "learning_rate": 5e-6,
-      "timestamp": "2025-01-16T14:35:00"
+      "gpu_memory_used": 11.2,
+      "timestamp": "2025-01-16T14:35:00",
+      "extra": {
+        "train/epoch": 0.01,
+        "train/nll_loss": 0.802,
+        "train/or_loss": 0.043,
+        "train/chosen_rewards": -0.081,
+        "train/rejected_rewards": -0.094,
+        "train/log_odds_ratio": 0.21,
+        "train/reward_margin": 0.013,
+        "train/reward_accuracy": 0.62
+      }
     },
     {
       "step": 10,
       "loss": 0.654,
       "eval_loss": 0.712,
       "learning_rate": 4.8e-6,
-      "timestamp": "2025-01-16T14:37:00"
+      "gpu_memory_used": 11.2,
+      "timestamp": "2025-01-16T14:37:00",
+      "extra": {
+        "train/nll_loss": 0.611,
+        "train/reward_margin": 0.031,
+        "eval/reward_margin": 0.027,
+        "eval/reward_accuracy": 0.68
+      }
     }
   ],
   "count": 520
 }
 ```
+
+`extra` holds every other metric the trainer logged for that step, keyed as
+logged (`train/...` from training logs, `eval/...` from the evaluation at that
+step). Its contents depend on the training mode: ORPO logs NLL and odds-ratio
+loss, preference modes log chosen/rejected rewards, reward margin and accuracy,
+SFT logs little beyond the loss. Non-finite values are reported as `null`.
+Rows recorded before this field existed return `"extra": {}`. Evaluation
+results are merged into the row for the step they ran at.
 
 **Status Codes:**
 - `200 OK` - Job found
@@ -1285,9 +1311,13 @@ Sent periodically during training with progress and metrics.
   "eval_loss": 0.256,
   "learning_rate": 4.8e-6,
   "gpu_memory": 12.5,
+  "extra_metrics": {"train/nll_loss": 0.211, "train/reward_margin": 0.03},
   "timestamp": 1705413022.123
 }
 ```
+
+`extra_metrics` (when present) carries the same per-component metrics that are
+persisted in the metrics history's `extra` field.
 
 #### Metrics Update
 

@@ -391,7 +391,15 @@ class JobManager {
                 status.loss,
                 status.eval_loss || null,
                 status.learning_rate || null,
-                status.gpu_memory || null
+                status.gpu_memory || null,
+                status.extra_metrics || null
+            );
+        } else if (status.current_step && (status.eval_loss || status.extra_metrics)) {
+            // Evaluation results arrive without a training loss.
+            this.lossChart.mergeEval(
+                status.current_step,
+                status.eval_loss ?? null,
+                status.extra_metrics || null
             );
         }
 

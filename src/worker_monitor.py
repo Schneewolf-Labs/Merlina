@@ -76,11 +76,16 @@ def forward_progress_record(record: dict, job_id: str, event_loop=None) -> None:
             loss=record.get("loss"),
             learning_rate=record.get("learning_rate"),
             gpu_memory=record.get("gpu_memory"),
+            extra_metrics=record.get("extra"),
         )
     elif rec_type == "eval":
-        if "eval_loss" not in record:
+        if "eval_loss" not in record and not record.get("extra"):
             return
-        message = ws.status_message(job_id, "training", eval_loss=record["eval_loss"])
+        message = ws.status_message(
+            job_id, "training", eval_loss=record.get("eval_loss"),
+            current_step=record.get("current_step"),
+            extra_metrics=record.get("extra"),
+        )
     elif rec_type == "status":
         message = ws.status_message(
             job_id, record.get("status", "training"), message=record.get("message")
