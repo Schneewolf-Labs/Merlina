@@ -1901,6 +1901,9 @@
                             <div class="loss-chart-controls">
                                 <button type="button" id="chart-toggle-lr" class="chart-toggle-btn" title="Toggle Learning Rate">LR</button>
                                 <button type="button" id="chart-toggle-gpu" class="chart-toggle-btn" title="Toggle GPU Memory">GPU</button>
+                                <select id="chart-extra-metric" class="chart-toggle-btn chart-metric-select" title="Plot another logged metric (e.g. ORPO NLL/OR loss, reward margin)" aria-label="Plot another logged metric" style="display: none;">
+                                    <option value="">More metrics…</option>
+                                </select>
                             </div>
                         </div>
                         <div class="loss-chart-container">

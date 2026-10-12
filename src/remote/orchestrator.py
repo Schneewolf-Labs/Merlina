@@ -503,6 +503,7 @@ def _mirror_status(status, job_id, job_manager, event_loop, since_step) -> int:
             eval_loss=metric.get("eval_loss"),
             learning_rate=metric.get("learning_rate"),
             gpu_memory_used=metric.get("gpu_memory_used"),
+            extra=metric.get("extra") or None,
         )
         since_step = max(since_step, step)
     return since_step

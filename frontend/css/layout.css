@@ -172,6 +172,15 @@ header {
     color: white;
 }
 
+.chart-metric-select {
+    max-width: 180px;
+}
+
+.chart-metric-select option {
+    color: var(--text-primary);
+    background: var(--card-bg);
+}
+
 .loss-chart-container {
     position: relative;
     height: 220px;

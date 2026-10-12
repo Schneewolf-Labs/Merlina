@@ -130,7 +130,8 @@ globalThis.localStorage = {
 
 const {
     Toast, LoadingManager, ConnectionStatus, Modal,
-    ProgressBar, FormUI, JobCardRenderer, MetricsDisplay, GPUDisplay
+    ProgressBar, FormUI, JobCardRenderer, MetricsDisplay, GPUDisplay,
+    LossChart, collectExtraMetricKeys, extraMetricSeries, formatMetricLabel
 } = await import('../../frontend/js/ui.js');
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -443,5 +444,75 @@ describe('Modal', () => {
         modal.show();
         modal.hide();
         modal.destroy();
+    });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Extra (per-component) trainer metrics on the loss chart
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('extra trainer metrics', () => {
+    const rows = [
+        { 'train/nll_loss': 1.2, 'train/or_loss': 0.3, 'train/reward_margin': 0.01 },
+        {},
+        { 'train/reward_margin': 0.05, 'eval/reward_accuracy': 0.75, 'train/epoch': 0.5 },
+        null,
+    ];
+
+    it('collects metric names, train before eval, alphabetical', () => {
+        assert.deepEqual(collectExtraMetricKeys(rows), [
+            'train/epoch', 'train/nll_loss', 'train/or_loss', 'train/reward_margin',
+            'eval/reward_accuracy',
+        ]);
+    });
+
+    it('returns no keys for SFT-style rows with no extras', () => {
+        assert.deepEqual(collectExtraMetricKeys([{}, {}]), []);
+        assert.deepEqual(collectExtraMetricKeys(undefined), []);
+    });
+
+    it('builds a step-aligned series with nulls for missing values', () => {
+        assert.deepEqual(extraMetricSeries(rows, 'train/reward_margin'), [0.01, null, 0.05, null]);
+        assert.deepEqual(
+            extraMetricSeries([{ 'train/x': null }, { 'train/x': 'bad' }, { 'train/x': 2 }], 'train/x'),
+            [null, null, 2],
+        );
+    });
+
+    it('formats metric labels', () => {
+        assert.equal(formatMetricLabel('train/reward_margin'), 'reward margin (train)');
+        assert.equal(formatMetricLabel('custom_metric'), 'custom metric');
+    });
+
+    it('LossChart keeps extras aligned with steps and merges eval results', () => {
+        const select = createElement('select');
+        domElements['chart-extra-metric'] = select;
+        const chart = new LossChart('no-canvas');
+        chart.loadHistory([
+            { step: 1, loss: 2.0, eval_loss: null, learning_rate: 1e-5, gpu_memory_used: null,
+              extra: { 'train/nll_loss': 1.8 } },
+            { step: 2, loss: 1.9, eval_loss: null, learning_rate: 1e-5, gpu_memory_used: null },
+        ]);
+        assert.deepEqual(chart.data.extra, [{ 'train/nll_loss': 1.8 }, {}]);
+        assert.deepEqual(chart.extraKeys, ['train/nll_loss']);
+        assert.ok(select.innerHTML.includes('value="train/nll_loss"'));
+        assert.equal(select._style.display, '');
+
+        chart.addPoint(3, 1.7, null, 1e-5, null, { 'train/nll_loss': 1.6, 'train/or_loss': 0.1 });
+        chart.mergeEval(3, 1.75, { 'eval/reward_margin': 0.2 });
+        assert.equal(chart.data.steps.length, 3);
+        assert.equal(chart.data.evalLoss[2], 1.75);
+        assert.deepEqual(chart.data.extra[2],
+            { 'train/nll_loss': 1.6, 'train/or_loss': 0.1, 'eval/reward_margin': 0.2 });
+
+        // Eval on a step with no training log appends a point without loss.
+        chart.mergeEval(4, 1.7, null);
+        assert.deepEqual(chart.data.steps, [1, 2, 3, 4]);
+        assert.equal(chart.data.loss[3], null);
+
+        chart.reset();
+        assert.deepEqual(chart.data.extra, []);
+        assert.equal(select._style.display, 'none');
+        delete domElements['chart-extra-metric'];
     });
 });

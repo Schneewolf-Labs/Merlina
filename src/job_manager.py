@@ -87,6 +87,20 @@ _UPDATABLE_COLUMNS: Dict[str, str] = {
 _NULLABLE_COLUMNS = frozenset({"worker_pid", "progress_file"})
 
 
+def _dump_extra(extra: Optional[Dict[str, Any]]) -> Optional[str]:
+    return json.dumps(extra) if extra else None
+
+
+def _load_extra(raw: Optional[str]) -> Dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
 class JobManager:
     """CRUD for jobs and their time-series metrics."""
 
@@ -142,9 +156,15 @@ class JobManager:
                     eval_loss REAL,
                     learning_rate REAL,
                     gpu_memory_used REAL,
+                    extra TEXT,
                     FOREIGN KEY (job_id) REFERENCES jobs(job_id)
                 )
             """)
+            # Databases from before per-component metrics lack ``extra``.
+            metric_columns = {row[1] for row in conn.execute("PRAGMA table_info(training_metrics)")}
+            if "extra" not in metric_columns:
+                conn.execute("ALTER TABLE training_metrics ADD COLUMN extra TEXT")
+                logger.info("Added extra column to training_metrics table")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_job_status ON jobs(status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_job_created ON jobs(created_at DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_metrics_job ON training_metrics(job_id, step)")
@@ -256,21 +276,75 @@ class JobManager:
         eval_loss: Optional[float] = None,
         learning_rate: Optional[float] = None,
         gpu_memory_used: Optional[float] = None,
+        extra: Optional[Dict[str, Any]] = None,
     ) -> None:
+        """Append one metrics row.
+
+        ``extra`` holds every other metric the trainer logged for this step
+        (e.g. ORPO's ``train/nll_loss`` / ``train/or_loss``, DPO's reward
+        margin), keyed as the trainer logged them. Stored as JSON.
+        """
         with self._connect() as conn:
             conn.execute(
                 "INSERT INTO training_metrics"
-                " (job_id, timestamp, step, loss, eval_loss, learning_rate, gpu_memory_used)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (job_id, datetime.now().isoformat(), step, loss, eval_loss, learning_rate, gpu_memory_used),
+                " (job_id, timestamp, step, loss, eval_loss, learning_rate, gpu_memory_used, extra)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (job_id, datetime.now().isoformat(), step, loss, eval_loss, learning_rate,
+                 gpu_memory_used, _dump_extra(extra)),
+            )
+
+    def record_eval_metric(
+        self,
+        job_id: str,
+        step: int,
+        eval_loss: Optional[float] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Attach evaluation results to the metrics row for ``step``.
+
+        The trainer logs the training row for a step before it evaluates, so
+        eval results are merged into that row (one row per step keeps the
+        chart aligned). If no row exists for the step - eval ran on a step
+        that wasn't a logging step - a new row is inserted.
+        """
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT id, eval_loss, extra FROM training_metrics"
+                " WHERE job_id = ? AND step = ? ORDER BY id DESC LIMIT 1",
+                (job_id, step),
+            ).fetchone()
+            if row is None:
+                conn.execute(
+                    "INSERT INTO training_metrics (job_id, timestamp, step, eval_loss, extra)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (job_id, datetime.now().isoformat(), step, eval_loss, _dump_extra(extra)),
+                )
+                return
+            merged = {**_load_extra(row["extra"]), **(extra or {})}
+            conn.execute(
+                "UPDATE training_metrics SET eval_loss = ?, extra = ? WHERE id = ?",
+                (eval_loss if eval_loss is not None else row["eval_loss"],
+                 _dump_extra(merged), row["id"]),
             )
 
     def get_metrics(self, job_id: str) -> List[Dict[str, Any]]:
+        """Metrics rows, oldest step first.
+
+        Each row has the fixed columns (``step``, ``loss``, ``eval_loss``,
+        ``learning_rate``, ``gpu_memory_used``, ``timestamp``) plus ``extra``:
+        a dict of every other logged metric (``{}`` for rows recorded before
+        extras were persisted).
+        """
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT * FROM training_metrics WHERE job_id = ? ORDER BY step ASC", (job_id,)
+                "SELECT * FROM training_metrics WHERE job_id = ? ORDER BY step ASC, id ASC", (job_id,)
             ).fetchall()
-        return [dict(row) for row in rows]
+        result = []
+        for row in rows:
+            data = dict(row)
+            data["extra"] = _load_extra(data.get("extra"))
+            result.append(data)
+        return result
 
     def get_stats(self) -> Dict[str, Any]:
         with self._connect() as conn:

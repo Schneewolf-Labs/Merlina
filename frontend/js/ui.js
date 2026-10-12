@@ -519,19 +519,61 @@ class MetricsDisplay {
 /**
  * Loss chart visualization using Chart.js
  */
+/**
+ * Extra (per-component) metric names present in a list of `extra` dicts,
+ * e.g. ORPO's "train/nll_loss" / "train/or_loss" or DPO's reward margin.
+ * Train metrics sort before eval metrics, then alphabetically.
+ */
+function collectExtraMetricKeys(extras) {
+    const keys = new Set();
+    for (const extra of extras || []) {
+        if (!extra || typeof extra !== 'object') continue;
+        for (const key of Object.keys(extra)) keys.add(key);
+    }
+    const rank = (k) => (k.startsWith('train/') ? 0 : k.startsWith('eval/') ? 1 : 2);
+    return [...keys].sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+}
+
+/**
+ * One value per row for `key` (null where a row didn't log it), aligned
+ * with the chart's step labels.
+ */
+function extraMetricSeries(extras, key) {
+    return (extras || []).map((extra) => {
+        const value = extra && typeof extra === 'object' ? extra[key] : undefined;
+        return typeof value === 'number' && Number.isFinite(value) ? value : null;
+    });
+}
+
+/** Human label for a metric key: "train/reward_margin" -> "reward margin (train)". */
+function formatMetricLabel(key) {
+    const slash = key.indexOf('/');
+    if (slash === -1) return key.replace(/_/g, ' ');
+    return `${key.slice(slash + 1).replace(/_/g, ' ')} (${key.slice(0, slash)})`;
+}
+
+function escapeAttr(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+function emptyChartData() {
+    return { steps: [], loss: [], evalLoss: [], learningRate: [], gpuMemory: [], extra: [] };
+}
+
 class LossChart {
     constructor(canvasId = 'loss-chart') {
         this.canvasId = canvasId;
         this.chart = null;
-        this.data = {
-            steps: [],
-            loss: [],
-            evalLoss: [],
-            learningRate: [],
-            gpuMemory: []
-        };
+        this.data = emptyChartData();
         this.showLR = false;
         this.showGPU = false;
+        this.extraKey = '';
+        this.extraKeys = [];
 
         this.setupToggleButtons();
     }
@@ -554,6 +596,37 @@ class LossChart {
                 this.updateVisibility();
             });
         }
+        const extraSelect = document.getElementById('chart-extra-metric');
+        if (extraSelect) {
+            extraSelect.addEventListener('change', () => {
+                this.extraKey = extraSelect.value || '';
+                extraSelect.classList.toggle('active', !!this.extraKey);
+                this.syncChart();
+                this.updateVisibility();
+            });
+        }
+    }
+
+    /**
+     * Refresh the extra-metric selector when new metric names appear.
+     * The selector stays hidden until the trainer logs something beyond
+     * the loss (SFT logs nothing extra; ORPO/DPO/... log their components).
+     */
+    refreshExtraOptions() {
+        const keys = collectExtraMetricKeys(this.data.extra);
+        if (keys.length === this.extraKeys.length && keys.every((k, i) => k === this.extraKeys[i])) return;
+        this.extraKeys = keys;
+        if (this.extraKey && !keys.includes(this.extraKey)) this.extraKey = '';
+
+        const select = document.getElementById('chart-extra-metric');
+        if (!select) return;
+        const options = ['<option value="">More metrics…</option>']
+            .concat(keys.map((k) => {
+                return `<option value="${escapeAttr(k)}"${k === this.extraKey ? ' selected' : ''}>${escapeAttr(formatMetricLabel(k))}</option>`;
+            }));
+        select.innerHTML = options.join('');
+        select.value = this.extraKey;
+        select.style.display = keys.length ? '' : 'none';
     }
 
     getThemeColors() {
@@ -563,6 +636,7 @@ class LossChart {
             evalLoss: '#ff6b9d',
             lr: '#4caf50',
             gpu: '#2196f3',
+            extra: '#ff9800',
             grid: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)',
             text: isDark ? '#c0c0c0' : '#555'
         };
@@ -591,6 +665,7 @@ class LossChart {
                         pointHitRadius: 8,
                         tension: 0.3,
                         fill: true,
+                        spanGaps: true,
                         yAxisID: 'y'
                     },
                     {
@@ -603,6 +678,7 @@ class LossChart {
                         pointRadius: 3,
                         pointBackgroundColor: colors.evalLoss,
                         tension: 0.3,
+                        spanGaps: true,
                         yAxisID: 'y'
                     },
                     {
@@ -627,6 +703,19 @@ class LossChart {
                         fill: true,
                         hidden: true,
                         yAxisID: 'y2'
+                    },
+                    {
+                        label: 'Extra metric',
+                        data: [],
+                        borderColor: colors.extra,
+                        backgroundColor: 'transparent',
+                        borderWidth: 1.5,
+                        pointRadius: 2,
+                        pointBackgroundColor: colors.extra,
+                        tension: 0.3,
+                        spanGaps: true,
+                        hidden: true,
+                        yAxisID: 'y3'
                     }
                 ]
             },
@@ -648,7 +737,7 @@ class LossChart {
                             pointStyle: 'line',
                             padding: 12,
                             font: { size: 11 },
-                            filter: (item) => !item.hidden || item.datasetIndex <= 1
+                            filter: (item) => !item.hidden || item.datasetIndex <= 1 || item.datasetIndex === 4
                         }
                     },
                     tooltip: {
@@ -663,6 +752,7 @@ class LossChart {
                                 if (val === null || val === undefined) return null;
                                 if (ctx.datasetIndex === 2) return `LR: ${val.toExponential(2)}`;
                                 if (ctx.datasetIndex === 3) return `GPU: ${val.toFixed(2)} GB`;
+                                if (ctx.datasetIndex === 4) return `${ctx.dataset.label}: ${val.toPrecision(4)}`;
                                 return `${ctx.dataset.label}: ${val.toFixed(4)}`;
                             }
                         }
@@ -694,6 +784,13 @@ class LossChart {
                         ticks: { color: colors.text },
                         grid: { drawOnChartArea: false },
                         beginAtZero: true
+                    },
+                    y3: {
+                        display: false,
+                        position: 'right',
+                        title: { display: true, text: 'Metric', color: colors.text },
+                        ticks: { color: colors.text },
+                        grid: { drawOnChartArea: false }
                     }
                 }
             }
@@ -711,6 +808,12 @@ class LossChart {
         this.chart.data.datasets[3].hidden = !this.showGPU;
         this.chart.options.scales.y2.display = this.showGPU;
 
+        // Extra metric dataset (index 4)
+        const showExtra = !!this.extraKey;
+        this.chart.data.datasets[4].hidden = !showExtra;
+        this.chart.options.scales.y3.display = showExtra;
+        if (showExtra) this.chart.options.scales.y3.title.text = formatMetricLabel(this.extraKey);
+
         this.chart.update('none');
     }
 
@@ -720,16 +823,18 @@ class LossChart {
     loadHistory(metrics) {
         if (!metrics || metrics.length === 0) return;
 
-        this.data = { steps: [], loss: [], evalLoss: [], learningRate: [], gpuMemory: [] };
+        this.data = emptyChartData();
 
         for (const m of metrics) {
             this.data.steps.push(m.step);
-            this.data.loss.push(m.loss);
-            this.data.evalLoss.push(m.eval_loss);
-            this.data.learningRate.push(m.learning_rate);
-            this.data.gpuMemory.push(m.gpu_memory_used);
+            this.data.loss.push(m.loss ?? null);
+            this.data.evalLoss.push(m.eval_loss ?? null);
+            this.data.learningRate.push(m.learning_rate ?? null);
+            this.data.gpuMemory.push(m.gpu_memory_used ?? null);
+            this.data.extra.push(m.extra || {});
         }
 
+        this.refreshExtraOptions();
         this.initChart();
         this.syncChart();
         this.showChart();
@@ -738,7 +843,7 @@ class LossChart {
     /**
      * Add a single data point from real-time updates
      */
-    addPoint(step, loss, evalLoss, learningRate, gpuMemory) {
+    addPoint(step, loss, evalLoss, learningRate, gpuMemory, extra = null) {
         if (step === null || step === undefined) return;
         // Avoid duplicate steps
         if (this.data.steps.length > 0 && step <= this.data.steps[this.data.steps.length - 1]) return;
@@ -748,7 +853,37 @@ class LossChart {
         this.data.evalLoss.push(evalLoss ?? null);
         this.data.learningRate.push(learningRate ?? null);
         this.data.gpuMemory.push(gpuMemory ?? null);
+        this.data.extra.push(extra || {});
 
+        this.refreshExtraOptions();
+        this.initChart();
+        this.syncChart();
+        this.showChart();
+    }
+
+    /**
+     * Merge evaluation results (eval loss and eval metrics) into the point
+     * for `step`, mirroring how the server stores them. Eval on a step that
+     * had no training log yet appends a point with no training loss.
+     */
+    mergeEval(step, evalLoss, extra = null) {
+        if (step === null || step === undefined) return;
+        const last = this.data.steps.length - 1;
+        if (last >= 0 && this.data.steps[last] === step) {
+            if (evalLoss !== null && evalLoss !== undefined) this.data.evalLoss[last] = evalLoss;
+            if (extra) this.data.extra[last] = { ...this.data.extra[last], ...extra };
+        } else if (last < 0 || step > this.data.steps[last]) {
+            this.data.steps.push(step);
+            this.data.loss.push(null);
+            this.data.evalLoss.push(evalLoss ?? null);
+            this.data.learningRate.push(null);
+            this.data.gpuMemory.push(null);
+            this.data.extra.push(extra || {});
+        } else {
+            return;
+        }
+
+        this.refreshExtraOptions();
         this.initChart();
         this.syncChart();
         this.showChart();
@@ -762,6 +897,9 @@ class LossChart {
         this.chart.data.datasets[1].data = this.data.evalLoss;
         this.chart.data.datasets[2].data = this.data.learningRate;
         this.chart.data.datasets[3].data = this.data.gpuMemory;
+        this.chart.data.datasets[4].data = this.extraKey
+            ? extraMetricSeries(this.data.extra, this.extraKey) : [];
+        this.chart.data.datasets[4].label = this.extraKey ? formatMetricLabel(this.extraKey) : 'Extra metric';
 
         this.chart.update('none');
     }
@@ -779,7 +917,16 @@ class LossChart {
      * Reset chart for a new job
      */
     reset() {
-        this.data = { steps: [], loss: [], evalLoss: [], learningRate: [], gpuMemory: [] };
+        this.data = emptyChartData();
+        this.extraKey = '';
+        this.extraKeys = [];
+        const extraSelect = document.getElementById('chart-extra-metric');
+        if (extraSelect) {
+            extraSelect.innerHTML = '<option value="">More metrics…</option>';
+            extraSelect.value = '';
+            extraSelect.style.display = 'none';
+            extraSelect.classList.remove('active');
+        }
 
         if (this.chart) {
             this.chart.destroy();
@@ -949,6 +1096,9 @@ export {
     JobCardRenderer,
     MetricsDisplay,
     LossChart,
+    collectExtraMetricKeys,
+    extraMetricSeries,
+    formatMetricLabel,
     GPUDisplay,
     Tooltip,
     confirm,

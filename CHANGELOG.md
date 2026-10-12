@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Merlina 3.0.0 — "Wishcraft" (development)
 
+- **Persist every metric the trainer logs**, not just the total loss.
+  ORPO's NLL and odds-ratio loss, preference rewards, reward margin and
+  accuracy (and whatever any other loss function logs) are stored per step
+  in a new `extra` field on `training_metrics`, alongside evaluation metrics
+  for the same step. `GET /jobs/{job_id}/metrics` returns them, and the job
+  loss chart gains a "More metrics" selector to plot any of them. Existing
+  databases are migrated in place; older rows report `extra: {}`.
 - Start the 3.0.0 development cycle with the release name **Wishcraft** and
   align the source package version with the shared `version.py` metadata.
 - Add the [Merlina 3 plan](docs/dev/merlina-3.md): reliable rented compute,
