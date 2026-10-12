@@ -159,4 +159,63 @@ def store_from_description(desc: dict, token: Optional[str] = None) -> ArtifactS
         return LocalArtifactStore(Path(desc["base_dir"]))
     if kind == "hf_hub":
         return HFHubArtifactStore(desc["repo_id"], token=token, private=desc.get("private", True))
+    if kind == "s3":
+        from .s3_artifacts import S3ArtifactStore
+        fs = None
+        if desc.get("credential_transport") == "broker":
+            import os
+            from .artifact_capabilities import CapabilityS3Client
+            fs = CapabilityS3Client(desc["broker_url"], os.environ["MERLINA_ARTIFACT_BROKER_TOKEN"])
+        return S3ArtifactStore(desc["bucket"], desc.get("prefix", ""),
+                               endpoint_url=desc.get("endpoint_url"),
+                               region_name=desc.get("region_name"), fs=fs)
     raise ArtifactStoreError(f"Unknown artifact store kind: {kind!r}")
+
+
+def store_for_job(config, job_id: str, token: Optional[str] = None) -> ArtifactStore:
+    """Select the server-configured store; S3 never requires an HF account."""
+    from config import settings
+    from .s3_artifacts import S3ArtifactStore, artifact_metadata, safe_path
+    kind = settings.merlina_artifact_store
+    token = token or getattr(config, "hf_token", None)
+    if kind == "s3":
+        if not settings.merlina_artifact_s3_bucket:
+            raise ArtifactStoreError("MERLINA_ARTIFACT_S3_BUCKET is required for S3 artifacts")
+        prefix = "/".join(p for p in (settings.merlina_artifact_s3_prefix, safe_path(job_id)) if p)
+        return S3ArtifactStore(
+            settings.merlina_artifact_s3_bucket, prefix,
+            endpoint_url=settings.merlina_artifact_s3_endpoint,
+            region_name=settings.merlina_artifact_s3_region,
+            metadata=artifact_metadata(config.model_dump()),
+        )
+    if kind != "hf_hub":
+        raise ArtifactStoreError("MERLINA_ARTIFACT_STORE must be s3 or hf_hub")
+    repo_id = config.remote.artifact_repo
+    if not repo_id:
+        if not token:
+            raise ArtifactStoreError("Configure S3 artifacts or supply an HF token / remote.artifact_repo")
+        from huggingface_hub import HfApi
+        repo_id = f"{HfApi(token=token).whoami()['name']}/merlina-run-{job_id}"
+    return HFHubArtifactStore(repo_id, token=token, private=True)
+
+
+def artifact_worker_env(description: dict) -> dict:
+    """Send only dedicated artifact credentials, outside persisted descriptions.
+
+    Operators must scope these credentials to the selected job prefix. AWS
+    ambient credentials are deliberately never copied to rented workers.
+    """
+    if description.get("kind") != "s3" or description.get("credential_transport") == "broker":
+        return {}
+    from config import settings
+    return {name.upper(): value for name in (
+        "merlina_artifact_access_key", "merlina_artifact_secret_key",
+        "merlina_artifact_session_token",
+    ) if (value := getattr(settings, name))}
+
+
+def __getattr__(name):
+    if name == "S3ArtifactStore":
+        from .s3_artifacts import S3ArtifactStore
+        return S3ArtifactStore
+    raise AttributeError(name)

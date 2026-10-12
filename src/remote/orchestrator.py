@@ -31,7 +31,7 @@ from typing import Any, Callable, List, Optional
 from src.job_manager import JobManager
 from src.websocket_manager import websocket_manager
 
-from .artifacts import ArtifactStore, HFHubArtifactStore
+from .artifacts import ArtifactStore, artifact_worker_env, store_for_job
 from .plan import RemotePlanError, build_remote_plan
 from .providers import ComputeProvider, ProviderError, get_provider
 from .spec import InstanceSpec, RemotePlan, StagePlan
@@ -161,7 +161,8 @@ def run_training_remote(
             _update(job_manager, event_loop, job_id, status="merging", progress=0.94,
                     message=f"Merging adapter ({merge_stage.target})")
             if merge_stage.target == "local":
-                _run_local_merge(config, output_dir)
+                merged_dir = _run_local_merge(config, output_dir)
+                store.push_dir(merged_dir, "merged")
             elif merge_stage.target == "remote":
                 _run_remote_stage(
                     stage=merge_stage,
@@ -351,6 +352,12 @@ def _poll_stage_to_completion(*, client, stage, job_id, job_manager, event_loop,
 def _mirror_status(status, job_id, job_manager, event_loop, since_step) -> int:
     """Mirror worker job fields/metrics into the local job record + WS."""
     job_fields = status.job or {}
+    checkpoint = job_fields.get("checkpoint_publication")
+    if isinstance(checkpoint, dict):
+        current = job_manager.get_job(job_id)
+        metrics = dict(current.metrics or {}) if current else {}
+        metrics["checkpoint_publication"] = checkpoint
+        job_manager.update_job(job_id, metrics=metrics)
     update = {k: job_fields[k] for k in
               ("status", "progress", "current_step", "total_steps",
                "loss", "eval_loss", "learning_rate")
@@ -424,6 +431,7 @@ def _worker_env(payload: dict, token: str, config: Any) -> dict:
     wandb_key = getattr(config, "wandb_key", None)
     if wandb_key:
         env["WANDB_API_KEY"] = wandb_key
+    env.update(artifact_worker_env(payload.get("artifact_store", {})))
     return env
 
 
@@ -444,7 +452,8 @@ def _train_instance_spec(job_id: str, config: Any, plan: RemotePlan,
                           or max(int(sizing.disk_required_gb), 50),
         volume_gb=config.remote.volume_gb or 0,
         cloud_type=sizing.cloud_type,
-        env=_worker_env(payload, token, config),
+        env={**_worker_env(payload, token, config),
+             **(store.worker_environment() if callable(getattr(store, "worker_environment", None)) else {})},
         http_ports=[WORKER_PORT],
         docker_start_cmd=["python", "-m", "src.remote.worker_entry"],
     )
@@ -466,7 +475,8 @@ def _merge_instance_spec(job_id: str, config: Any, plan: RemotePlan,
         gpu_count=1,
         container_disk_gb=max(disk_gb, 100),
         cloud_type=config.remote.cloud_type,
-        env=_worker_env(payload, token, config),
+        env={**_worker_env(payload, token, config),
+             **(store.worker_environment() if callable(getattr(store, "worker_environment", None)) else {})},
         http_ports=[WORKER_PORT],
         docker_start_cmd=["python", "-m", "src.remote.worker_entry"],
     )
@@ -507,18 +517,7 @@ def _publish_dir_to_hub(local_dir: Path, *, repo_id: str,
 
 
 def _default_store(config: Any, job_id: str) -> ArtifactStore:
-    """Private HF repo per run: <user>/merlina-run-<job_id>."""
-    repo_id = config.remote.artifact_repo
-    if not repo_id:
-        if not config.hf_token:
-            raise RemotePlanError(
-                "Remote runs need an artifact store. Provide an HF token (the "
-                "default store is a private HF repo) or set remote.artifact_repo."
-            )
-        from huggingface_hub import HfApi
-        username = HfApi(token=config.hf_token).whoami()["name"]
-        repo_id = f"{username}/merlina-run-{job_id}"
-    return HFHubArtifactStore(repo_id, token=config.hf_token, private=True)
+    return store_for_job(config, job_id)
 
 
 def _uses_uploaded_dataset(config: Any) -> bool:

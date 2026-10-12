@@ -106,6 +106,7 @@ def build_status_payload(state: WorkerState, job_manager: Optional[JobManager],
                 "eval_loss": job.eval_loss,
                 "learning_rate": job.learning_rate,
                 "error": job.error,
+                "checkpoint_publication": (job.metrics or {}).get("checkpoint_publication"),
             }
         payload["new_metrics"] = [
             m for m in job_manager.get_metrics(state.job_id)
@@ -205,10 +206,14 @@ def _load_training_config(config_dict: Dict[str, Any]):
 
 
 def _resolve_store(payload: Dict[str, Any]):
-    return store_from_description(
+    store = store_from_description(
         payload["artifact_store"],
         token=payload["config"].get("hf_token") or os.environ.get("HF_TOKEN"),
     )
+    if store.kind == "s3":
+        from src.remote.s3_artifacts import artifact_metadata
+        store.metadata = artifact_metadata(payload["config"])
+    return store
 
 
 def run_train_stage(payload: Dict[str, Any], job_manager: JobManager,
@@ -269,9 +274,11 @@ def run_merge_stage(payload: Dict[str, Any], job_manager: JobManager,
     )
 
     state.set_state(STATE_PUSHING)
+    for artifact in payload.get("artifacts_out") or ["merged"]:
+        store.push_dir(merged_dir, artifact)
+        state.add_artifact(artifact)
     if config_dict.get("push_to_hub"):
-        # Publish straight to the user's target repo — re-shipping a merged
-        # model through the artifact store would double the upload.
+        # Publishing is optional; the durable store remains the source of truth.
         from huggingface_hub import HfApi
         token = config_dict.get("hf_token") or os.environ.get("HF_TOKEN")
         api = HfApi(token=token)
@@ -281,10 +288,6 @@ def run_merge_stage(payload: Dict[str, Any], job_manager: JobManager,
         api.upload_folder(folder_path=str(merged_dir), repo_id=repo_id,
                           commit_message="Upload from Merlina remote run")
         state.add_artifact(f"hub:{repo_id}")
-    else:
-        for artifact in payload.get("artifacts_out") or ["merged"]:
-            store.push_dir(merged_dir, artifact)
-            state.add_artifact(artifact)
 
     job_manager.update_job(job_id, status="completed", progress=1.0,
                            output_dir=str(merged_dir))

@@ -56,6 +56,19 @@ class Settings(BaseSettings):
     hf_token: Optional[str] = None
 
     # ==========================================
+    # Remote artifact store (credentials are never in store descriptions)
+    # ==========================================
+    merlina_artifact_store: str = "hf_hub"
+    merlina_checkpoint_timeout_seconds: int = 120
+    merlina_artifact_s3_bucket: Optional[str] = None
+    merlina_artifact_s3_prefix: str = "merlina/runs"
+    merlina_artifact_s3_endpoint: Optional[str] = None
+    merlina_artifact_s3_region: Optional[str] = None
+    merlina_artifact_access_key: Optional[str] = None
+    merlina_artifact_secret_key: Optional[str] = None
+    merlina_artifact_session_token: Optional[str] = None
+
+    # ==========================================
     # Internal Dataset Store (S3-compatible)
     # ==========================================
     # An S3-API object store (self-hosted MinIO, or Cloudflare R2) that Merlina

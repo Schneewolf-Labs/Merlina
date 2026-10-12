@@ -736,6 +736,10 @@ def run_worker(args):
         )
 
         callbacks = []
+        from src.remote.checkpoints import remote_checkpoint_callback
+        durable_checkpoint = remote_checkpoint_callback(args.job_id, job_manager)
+        if durable_checkpoint is not None:
+            callbacks.append(durable_checkpoint)
         if is_main:
             callbacks.append(
                 FileProgressCallback(args.job_id, args.progress_file, job_manager)

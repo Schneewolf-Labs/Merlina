@@ -325,11 +325,17 @@ class TestMergeStage:
     def test_local_merge_invoked(self, job_manager, monkeypatch):
         merged = []
         from src.remote import orchestrator
-        monkeypatch.setattr(orchestrator, "_run_local_merge",
-                            lambda config, adapter_dir: merged.append(adapter_dir))
+        def fake_merge(config, adapter_dir):
+            merged.append(adapter_dir)
+            result = Path("merged-result")
+            result.mkdir()
+            (result / "weights").write_text("merged")
+            return result
+        monkeypatch.setattr(orchestrator, "_run_local_merge", fake_merge)
         cfg = make_config(remote=make_remote_cfg(merge_strategy="local"))
         run(cfg, job_manager)
         assert merged == [Path("models/my-model")]
+        assert (Path("store/merged") / "weights").read_text() == "merged"
         assert job_manager.get_job("job_1").status == "completed"
 
     def test_remote_merge_provisions_second_instance(self, job_manager):
