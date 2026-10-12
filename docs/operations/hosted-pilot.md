@@ -163,14 +163,15 @@ policy and audit trail; customer authorization is not replaced by an LLM prompt.
 
 Set `MERLINA_ADVISOR_ENABLED=true`, `MERLINA_ADVISOR_MODEL`,
 `MERLINA_ADVISOR_BASE_URL` (an HTTPS OpenAI-compatible `/v1` endpoint), and
-`MERLINA_ADVISOR_API_KEY` in the hosted server's secret environment. Do not set
+`MERLINA_ADVISOR_API_KEY` in the hosted server's secret environment, and install
+`httpx>=0.24.0` (needed only by the advisor). Do not set
 these values in frontend assets. Choose a provider whose retention and privacy
 terms match the pilot agreement. The advisor is explicitly unavailable until
 configured; an outage returns an error, never a fabricated LLM answer.
 
 This first pilot sponsors advisor calls from the operator's account; they are
 not debited from customer compute credits. Calls are limited to six per account
-per minute, 2,000 output tokens and a 45-second provider timeout. Add provider
+per minute, 2,000 output tokens and a 45-second total provider timeout. Add provider
 account spending caps before enabling it. Automated agent billing and adaptive
 experiment loops require separate implementation and authorization.
 

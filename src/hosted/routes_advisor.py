@@ -1,5 +1,6 @@
 """Authenticated advisor routes. None can reserve credits or launch compute."""
 from fastapi import APIRouter, Depends, Request
+from fastapi.concurrency import run_in_threadpool
 from pydantic import Field
 
 from .auth import Principal, require_principal
@@ -34,7 +35,9 @@ def history(project_id: str, request: Request, principal: Principal = Depends(re
 @router.post('/advisor/messages')
 async def message(project_id: str, body: MessageRequest, request: Request, principal: Principal = Depends(require_principal)):
     provider = getattr(request.app.state, 'advisor_provider', None) or AdvisorProvider()
-    return await service(request).ask(provider, request.app.state.settings, principal.account_id,
+    # Store setup runs SQLite DDL; keep it off the event loop like the rest of ask().
+    advisor = await run_in_threadpool(service, request)
+    return await advisor.ask(provider, request.app.state.settings, principal.account_id,
                                       project_id, body.message, body.request_key, body.job_id, body.dataset_id)
 
 

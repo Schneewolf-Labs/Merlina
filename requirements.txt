@@ -61,7 +61,7 @@ qrcode>=7.4.2
 # REST API as Model Context Protocol tools. Thin HTTP client, no torch needed.
 # Install with `pip install 'merlina[mcp]'` or uncomment below.
 #   mcp[cli]>=1.2.0
-#   httpx>=0.24.0
+#   httpx>=0.24.0   (also required by the hosted advisor, src/hosted/advisor.py)
 
 # Optional but recommended
 # xformers is tightly coupled to torch+CUDA. Install manually after torch:

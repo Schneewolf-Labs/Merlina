@@ -186,3 +186,77 @@ def test_provider_failure_modes_do_not_become_advice(failure):
         asyncio.run(provider.complete([]))
     assert error.value.status_code == 502
     assert 'private-secret' not in error.value.detail
+
+
+def test_hosted_app_starts_without_httpx(tmp_path, monkeypatch):
+    import importlib
+    import sys
+    from fastapi import HTTPException
+    from src.hosted import advisor, routes_advisor
+    monkeypatch.setitem(sys.modules, 'httpx', None)  # import httpx -> ImportError
+    try:
+        importlib.reload(advisor)
+        importlib.reload(routes_advisor)
+        app = create_hosted_app(HostedSettings(data_dir=tmp_path))
+        client = TestClient(app)
+        app.state.store.create_account('alice@example.com', 'correct-horse-123')
+        token = client.post('/api/hosted/session', json={'email': 'alice@example.com', 'password': 'correct-horse-123'}).json()['token']
+        headers = {'Authorization': f'Bearer {token}'}
+        project = client.post('/api/hosted/projects', headers=headers, json={'name': 'Moonlight'}).json()
+        prefix = f"/api/hosted/projects/{project['id']}"
+        assert client.get(prefix + '/advisor', headers=headers).status_code == 200
+        response = client.post(prefix + '/advisor/messages', headers=headers,
+                               json={'message': 'Hello', 'request_key': 'request-1234'})
+        assert response.status_code == 503
+        settings = advisor.AdvisorSettings('https://advisor.example/v1', 'model', 'key', True)
+        with pytest.raises(HTTPException) as error:
+            asyncio.run(advisor.AdvisorProvider(settings).complete([]))
+        assert error.value.status_code == 503 and 'httpx' in error.value.detail
+    finally:
+        monkeypatch.undo()
+        importlib.reload(advisor)
+        importlib.reload(routes_advisor)
+
+
+def test_provider_timeout_bounds_the_whole_call():
+    import time
+    from fastapi import HTTPException
+
+    class Trickle(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            # Each chunk arrives well inside httpx's per-read timeout.
+            for _ in range(100):
+                await asyncio.sleep(.05)
+                yield b' '
+
+    provider = AdvisorProvider(AdvisorSettings('https://advisor.example/v1', 'test', 'secret', True, timeout_seconds=.3),
+                               httpx.MockTransport(lambda request: httpx.Response(200, stream=Trickle())))
+    started = time.monotonic()
+    with pytest.raises(HTTPException) as error:
+        asyncio.run(provider.complete([]))
+    assert error.value.status_code == 502
+    assert time.monotonic() - started < 2
+
+
+def test_advisor_storage_and_evidence_run_off_the_event_loop(studio, monkeypatch):
+    from src.hosted import advisor
+    _, client, alice, _, prefix, _ = studio
+    on_loop = []
+    def running_loop():
+        try:
+            asyncio.get_running_loop()
+            return True
+        except RuntimeError:
+            return False
+    original = advisor.evidence_for
+    def record(*args, **kwargs):
+        on_loop.append(running_loop())
+        return original(*args, **kwargs)
+    monkeypatch.setattr(advisor, 'evidence_for', record)
+    original_finish = advisor.AdvisorStore._finish
+    def finish(self, *args):
+        on_loop.append(running_loop())
+        return original_finish(self, *args)
+    monkeypatch.setattr(advisor.AdvisorStore, '_finish', finish)
+    assert post(client, alice, prefix).status_code == 200
+    assert on_loop == [False, False]

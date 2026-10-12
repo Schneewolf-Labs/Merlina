@@ -18,6 +18,9 @@ python -m src.hosted.cli create-account pilot@example.com
 uvicorn src.hosted.app:create_hosted_app --factory --host 127.0.0.1 --port 8000 --workers 1
 ```
 
+The optional advisor additionally needs `python -m pip install 'httpx>=0.24.0'`;
+without it the app still starts and advisor requests return 503.
+
 Run behind a TLS reverse proxy with a request size limit, request timeout,
 per-IP login throttling, and access logs that omit authorization headers and
 bodies. Account creation prompts twice for the password; never pass passwords

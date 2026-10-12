@@ -1,5 +1,6 @@
 """Project advisor: bounded evidence in, reviewable proposals out; no execution tools."""
 from dataclasses import dataclass, field
+import asyncio
 import hashlib
 import json
 import os
@@ -7,7 +8,6 @@ import time
 import uuid
 from urllib.parse import urlsplit
 
-import httpx
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -49,6 +49,8 @@ class AdvisorSettings:
     model: str = field(default_factory=lambda: os.getenv('MERLINA_ADVISOR_MODEL', ''))
     api_key: str = field(default_factory=lambda: os.getenv('MERLINA_ADVISOR_API_KEY', ''), repr=False)
     enabled: bool = field(default_factory=lambda: os.getenv('MERLINA_ADVISOR_ENABLED', '').lower() == 'true')
+    # Whole-call bound (connect, upload, stream); httpx's own timeout is per phase.
+    timeout_seconds: float = 45
 
 
 class AdvisorProvider:
@@ -64,7 +66,14 @@ class AdvisorProvider:
         if url.scheme != 'https' or not url.hostname or url.username or url.password or url.query or url.fragment:
             raise HTTPException(503, 'Advisor provider configuration is invalid')
         try:
-            async with httpx.AsyncClient(timeout=45, follow_redirects=False, transport=self.transport) as client:
+            # Optional dependency: only the enabled advisor needs an HTTP client.
+            import httpx
+        except ImportError:
+            raise HTTPException(503, 'The advisor requires the httpx package on the server') from None
+
+        async def request():
+            async with httpx.AsyncClient(timeout=settings.timeout_seconds, follow_redirects=False,
+                                         transport=self.transport) as client:
                 async with client.stream('POST', settings.base_url.rstrip('/') + '/chat/completions',
                     headers={'Authorization': f'Bearer {settings.api_key}'},
                     json={'model': settings.model, 'messages': messages, 'temperature': .2,
@@ -75,9 +84,12 @@ class AdvisorProvider:
                         content.extend(chunk)
                         if len(content) > 128 * 1024:
                             raise ValueError('oversized provider response')
-                    result = json.loads(content)
+                    return json.loads(content)
+
+        try:
+            result = await asyncio.wait_for(request(), settings.timeout_seconds)
             return AdvisorReply.model_validate_json(result['choices'][0]['message']['content'])
-        except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError):
+        except (httpx.HTTPError, asyncio.TimeoutError, ValueError, KeyError, IndexError, TypeError):
             # Provider bodies may contain credentials or customer content: never return them.
             raise HTTPException(502, 'The advisor could not produce a valid response. Please try again.') from None
 
@@ -173,6 +185,26 @@ class AdvisorStore:
                 'evaluations': [dict(row) for row in evaluations]}
 
     async def ask(self, provider, settings, account_id, project_id, message, request_key, job_id=None, dataset_id=None):
+        # SQLite (BEGIN IMMEDIATE, busy timeout) and dataset hashing block; keep
+        # them off the event loop so one slow request does not stall the worker.
+        prepared = await asyncio.to_thread(self._begin, settings, account_id, project_id,
+                                           message, request_key, job_id, dataset_id)
+        if prepared[0] == 'replay':
+            return prepared[1]
+        _, turn_id, now, evidence, messages = prepared
+        try:
+            reply = await provider.complete(messages)
+            return await asyncio.to_thread(self._finish, reply, evidence, account_id, project_id, job_id, turn_id, now)
+        except BaseException:
+            # Shielded so a cancelled request still records its failed turn.
+            await asyncio.shield(asyncio.to_thread(self._fail, turn_id))
+            raise
+
+    def _fail(self, turn_id):
+        with self.store.transaction() as db:
+            db.execute("UPDATE advisor_turns SET status='failed' WHERE id=? AND status='pending'", (turn_id,))
+
+    def _begin(self, settings, account_id, project_id, message, request_key, job_id, dataset_id):
         evidence = evidence_for(self.store, settings, account_id, project_id, job_id, dataset_id)
         history = self.history(account_id, project_id)
         for evaluation in history['evaluations'][:5]:
@@ -187,7 +219,7 @@ class AdvisorStore:
                 if prior['user_message'] != message or prior['evidence'] != serialized_evidence:
                     raise HTTPException(409, 'Request key already belongs to another message or context')
                 if prior['status'] == 'complete':
-                    return json.loads(prior['response'])
+                    return 'replay', json.loads(prior['response'])
                 raise HTTPException(409, 'This advisor request is pending or failed. Use a new request key to retry.')
             recent = db.execute('SELECT COUNT(*) FROM advisor_turns WHERE account_id=? AND created_at>?', (account_id, now - 60)).fetchone()[0]
             if recent >= 6:
@@ -200,29 +232,26 @@ class AdvisorStore:
                 messages += [{'role': 'user', 'content': turn['user_message'][:4000]},
                              {'role': 'assistant', 'content': turn['response']['message'][:4000]}]
         messages.append({'role': 'user', 'content': json.dumps({'evidence': evidence, 'request': message})})
-        try:
-            reply = await provider.complete(messages)
-            if not set(reply.evidence_ids).issubset({item['id'] for item in evidence}):
-                raise HTTPException(502, 'The advisor cited evidence that is not available. Please try again.')
-            data = reply.model_dump(exclude_none=True)
-            if reply.plan and reply.plan.config:
-                data['plan']['config'] = validate_job_config(self.store, account_id, project_id, data['plan']['config'])
-            data['turn_id'] = turn_id
-            with self.store.transaction() as db:
-                if reply.plan:
-                    plan_id = uuid.uuid4().hex
-                    db.execute('INSERT INTO advisor_plans VALUES (?,?,?,?,?,?,?,?)',
-                               (plan_id, account_id, project_id, turn_id, json.dumps(data['plan']), 'proposed', None, now))
-                    data['plan_id'] = plan_id
-                db.execute("UPDATE advisor_turns SET response=?,status='complete' WHERE id=?", (json.dumps(data), turn_id))
-                db.execute('INSERT INTO events (id,project_id,job_id,kind,payload,created_at) VALUES (?,?,?,?,?,?)',
-                           (uuid.uuid4().hex, project_id, job_id, 'advisor.proposed',
-                            json.dumps({'turn_id': turn_id, 'plan_id': data.get('plan_id')}), now))
-            return data
-        except BaseException:
-            with self.store.transaction() as db:
-                db.execute("UPDATE advisor_turns SET status='failed' WHERE id=? AND status='pending'", (turn_id,))
-            raise
+        return 'pending', turn_id, now, evidence, messages
+
+    def _finish(self, reply, evidence, account_id, project_id, job_id, turn_id, now):
+        if not set(reply.evidence_ids).issubset({item['id'] for item in evidence}):
+            raise HTTPException(502, 'The advisor cited evidence that is not available. Please try again.')
+        data = reply.model_dump(exclude_none=True)
+        if reply.plan and reply.plan.config:
+            data['plan']['config'] = validate_job_config(self.store, account_id, project_id, data['plan']['config'])
+        data['turn_id'] = turn_id
+        with self.store.transaction() as db:
+            if reply.plan:
+                plan_id = uuid.uuid4().hex
+                db.execute('INSERT INTO advisor_plans VALUES (?,?,?,?,?,?,?,?)',
+                           (plan_id, account_id, project_id, turn_id, json.dumps(data['plan']), 'proposed', None, now))
+                data['plan_id'] = plan_id
+            db.execute("UPDATE advisor_turns SET response=?,status='complete' WHERE id=?", (json.dumps(data), turn_id))
+            db.execute('INSERT INTO events (id,project_id,job_id,kind,payload,created_at) VALUES (?,?,?,?,?,?)',
+                       (uuid.uuid4().hex, project_id, job_id, 'advisor.proposed',
+                        json.dumps({'turn_id': turn_id, 'plan_id': data.get('plan_id')}), now))
+        return data
 
     def approve_plan(self, account_id, project_id, plan_id):
         self.store.require_project(account_id, project_id)
