@@ -139,6 +139,9 @@ class Settings(BaseSettings):
     # After forwarding a stop, how long to wait for a graceful checkpoint
     # before terminating the instance anyway.
     remote_stop_grace_minutes: float = 15.0
+    # Directories whose files remote `local_file` datasets may be staged from
+    # (comma or os.pathsep separated). Empty refuses every remote local file.
+    remote_local_data_roots: str = ""
 
     # ==========================================
     # System Configuration

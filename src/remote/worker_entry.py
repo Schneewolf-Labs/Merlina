@@ -218,8 +218,19 @@ def _resolve_store(payload: Dict[str, Any]):
 
 def run_train_stage(payload: Dict[str, Any], job_manager: JobManager,
                     state: WorkerState) -> None:
+    # Persist only portable references; worker paths exist for the training
+    # lifetime and never enter the reproducibility record.
+    import tempfile
+    from .inputs import restore_remote_inputs
+    store = _resolve_store(payload)
+    with tempfile.TemporaryDirectory(prefix="merlina-worker-input-") as temporary:
+        runtime_config = restore_remote_inputs(payload["config"], store, Path(temporary))
+        _run_train_with_inputs(payload, runtime_config, job_manager, state)
+
+
+def _run_train_with_inputs(payload, runtime_config, job_manager, state):
     job_id = payload["job_id"]
-    config = _load_training_config(payload["config"])
+    config = _load_training_config(runtime_config)
     job_manager.create_job(job_id, payload["config"])
     state.set_state(STATE_RUNNING)
 

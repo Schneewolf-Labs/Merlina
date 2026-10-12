@@ -120,19 +120,25 @@ class TestRemotePreflight:
         assert not is_valid
         assert any("local path" in e for e in results["errors"])
 
-    def test_local_file_dataset_rejected(self, monkeypatch):
+    def test_existing_local_file_dataset_can_be_staged_remotely(self, monkeypatch, tmp_path):
         from config import settings
         monkeypatch.setattr(settings, "runpod_api_key", "rp_key", raising=False)
+        monkeypatch.setattr(settings, "merlina_artifact_store", "s3")
+        monkeypatch.setattr(settings, "merlina_artifact_s3_bucket", "artifacts")
+        monkeypatch.setattr(settings, "remote_local_data_roots", str(tmp_path))
+        dataset_file = tmp_path / "training.jsonl"
+        dataset_file.write_text('{"prompt":"Hi","chosen":"Hello","rejected":"No"}\n')
         config = make_training_config(
             remote={"enabled": True},
             dataset={
-                "source": {"source_type": "local_file", "file_path": "/data/x.json"},
+                "source": {"source_type": "local_file", "file_path": str(dataset_file)},
                 "format": {"format_type": "chatml"},
             },
         )
         is_valid, results = self._validate(config)
-        assert not is_valid
-        assert any("local_file" in e for e in results["errors"])
+        assert is_valid, results["errors"]
+        assert results["checks"]["Remote Config"]["status"] == "pass"
+        assert results["checks"]["Dataset Config"]["status"] == "pass"
 
     def test_non_remote_job_unchanged(self):
         config = make_training_config()
@@ -148,3 +154,103 @@ class TestQueues:
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+class TestRemoteStoragePreflight:
+    @pytest.fixture(autouse=True)
+    def remote_settings(self, monkeypatch):
+        from config import settings
+        monkeypatch.setattr(settings, "runpod_api_key", "rp_key")
+        monkeypatch.setattr(settings, "merlina_artifact_store", "s3")
+        monkeypatch.setattr(settings, "merlina_artifact_s3_bucket", "artifacts")
+        monkeypatch.setattr(settings, "merlina_artifact_s3_endpoint", None)
+        monkeypatch.setattr(settings, "merlina_artifact_s3_prefix", "runs")
+        # These tests validate storage, not Hub availability or offline model cache.
+        monkeypatch.setattr(PreflightValidator, "_check_model_access", lambda *_: {"model": "public/model"})
+
+    def _config(self, source, **dataset_fields):
+        return make_training_config(hf_token=None, push_to_hub=False,
+                                    remote={"enabled": True},
+                                    dataset={"source": source, **dataset_fields})
+
+    def _internal(self, monkeypatch, *, private=False):
+        from types import SimpleNamespace
+        from dataset_handlers.internal_store import Manifest
+        manifest = Manifest("demo", "rev", "parquet", ["s3://internal/demo/rev/part.parquet"], private=private)
+        monkeypatch.setattr("dataset_handlers.factory.default_internal_store", lambda: SimpleNamespace(
+            get_manifest=lambda *_: manifest))
+        return {"source_type": "internal", "uri": "swl://demo@rev"}
+
+    def test_s3_output_and_local_input_need_no_hf_token_or_repo(self, tmp_path, monkeypatch):
+        from config import settings
+        monkeypatch.setattr(settings, "remote_local_data_roots", str(tmp_path))
+        path = tmp_path / "data.jsonl"
+        path.write_text('{"prompt":"hi","chosen":"hello"}\n')
+        valid, results = PreflightValidator().validate_all(self._config(
+            {"source_type": "local_file", "file_path": str(path)}))
+        assert valid, results["errors"]
+
+    def test_pinned_public_internal_input_and_s3_output_pass(self, monkeypatch):
+        source = self._internal(monkeypatch)
+        valid, results = PreflightValidator().validate_all(self._config(source))
+        assert valid, results["errors"]
+
+    @pytest.mark.parametrize("location", ["source", "additional_sources", "eval_source"])
+    def test_private_internal_input_is_rejected_everywhere(self, monkeypatch, location):
+        source = self._internal(monkeypatch, private=True)
+        dataset = {"source": {"source_type": "upload", "dataset_id": "uploaded"}}
+        dataset[location] = [source] if location == "additional_sources" else source
+        cfg = self._config(**dataset)
+        valid, results = PreflightValidator().validate_all(cfg)
+        assert not valid
+        assert any("Private internal" in error for error in results["errors"])
+
+    def test_store_failure_does_not_expose_credentials(self, monkeypatch):
+        from types import SimpleNamespace
+        def fail(*_):
+            raise RuntimeError("key=SECRET /private/path")
+        monkeypatch.setattr("dataset_handlers.factory.default_internal_store", lambda: SimpleNamespace(get_manifest=fail))
+        valid, results = PreflightValidator().validate_all(self._config(
+            {"source_type": "internal", "uri": "swl://demo@rev"}))
+        assert not valid
+        assert "SECRET" not in str(results)
+        assert "/private/path" not in str(results)
+        assert "Internal dataset revision is unavailable" in results["errors"]
+
+    def test_s3_requires_bucket(self, monkeypatch):
+        from config import settings
+        monkeypatch.setattr(settings, "merlina_artifact_s3_bucket", None)
+        valid, results = PreflightValidator().validate_all(self._config(
+            {"source_type": "upload", "dataset_id": "uploaded"}))
+        assert not valid
+        assert any("MERLINA_ARTIFACT_S3_BUCKET" in error for error in results["errors"])
+
+    def test_hf_output_still_requires_hf_configuration(self, monkeypatch):
+        from config import settings
+        monkeypatch.setattr(settings, "merlina_artifact_store", "hf_hub")
+        valid, results = PreflightValidator().validate_all(self._config(
+            {"source_type": "upload", "dataset_id": "uploaded"}))
+        assert not valid
+        assert any("HF token" in error for error in results["errors"])
+
+    def test_public_internal_eval_passes_without_hf_output(self, monkeypatch):
+        source = self._internal(monkeypatch)
+        valid, results = PreflightValidator().validate_all(self._config(
+            {"source_type": "upload", "dataset_id": "uploaded"}, eval_source=source))
+        assert valid, results["errors"]
+
+    @pytest.mark.parametrize("uri", ["swl://demo", "swl://private/customer@rev"])
+    def test_remote_internal_revision_and_name_policy_applies_in_preflight(self, monkeypatch, uri):
+        self._internal(monkeypatch)
+        valid, results = PreflightValidator().validate_all(self._config(
+            {"source_type": "internal", "uri": uri}))
+        assert not valid
+        assert any("pinned" in error for error in results["errors"])
+
+    def test_s3_does_not_remove_explicit_hf_publication_auth_requirement(self, monkeypatch):
+        monkeypatch.delenv("HF_TOKEN", raising=False)
+        cfg = self._config({"source_type": "upload", "dataset_id": "uploaded"})
+        cfg.push_to_hub = True
+        valid, results = PreflightValidator().validate_all(cfg)
+        assert not valid
+        assert any("Push to HuggingFace Hub" in error for error in results["errors"])

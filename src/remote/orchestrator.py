@@ -100,12 +100,6 @@ def run_training_remote(
         _update(job_manager, event_loop, job_id, status="provisioning", progress=0.0,
                 message="Planning remote run")
 
-        if uploaded_datasets and _uses_uploaded_dataset(config):
-            raise RemotePlanError(
-                "Uploaded datasets can't travel to remote workers yet — push the "
-                "dataset to the HuggingFace Hub and use a 'huggingface' source."
-            )
-
         if provider is None:
             provider = get_provider(
                 remote_cfg.provider,
@@ -121,9 +115,12 @@ def run_training_remote(
         plan = build_remote_plan(config, offers=offers, job_id=job_id)
         if store is None:
             store = _default_store(config, job_id)
+        from .inputs import stage_remote_inputs
+        prepared_config = stage_remote_inputs(config.model_dump(), uploaded_datasets, store)
         job_manager.update_job(job_id, metrics={
             "remote_plan": plan.to_dict(),
             "artifact_store": store.describe(),
+            "remote_inputs": prepared_config.get("dataset"),
         })
         for w in plan.warnings:
             logger.warning("Remote plan warning for %s: %s", job_id, w)
@@ -136,7 +133,8 @@ def run_training_remote(
         train_stage = plan.stage("train")
         _run_remote_stage(
             stage=train_stage,
-            spec=_train_instance_spec(job_id, config, plan, store, settings),
+            spec=_train_instance_spec(job_id, config, plan, store, settings,
+                                      prepared_config=prepared_config),
             job_id=job_id,
             config=config,
             job_manager=job_manager,
@@ -167,7 +165,8 @@ def run_training_remote(
             elif merge_stage.target == "remote":
                 _run_remote_stage(
                     stage=merge_stage,
-                    spec=_merge_instance_spec(job_id, config, plan, store, settings),
+                    spec=_merge_instance_spec(job_id, config, plan, store, settings,
+                                              prepared_config=prepared_config),
                     job_id=job_id,
                     config=config,
                     job_manager=job_manager,
@@ -400,9 +399,11 @@ def _mirror_status(status, job_id, job_manager, event_loop, since_step) -> int:
 # ---------------------------------------------------------------------------
 
 def _stage_payload(job_id: str, stage: StagePlan, config: Any, store: ArtifactStore,
-                   multi_gpu_strategy: Optional[str] = None) -> dict:
+                   multi_gpu_strategy: Optional[str] = None,
+                   prepared_config: Optional[dict] = None) -> dict:
     """The job description a worker decodes from its environment."""
-    config_dict = config.model_dump()
+    import copy
+    config_dict = copy.deepcopy(prepared_config) if prepared_config is not None else config.model_dump()
     # Workers must never re-dispatch to remote, publish from the train
     # stage, or export GGUFs on rented metal (publishing is a control-plane
     # or merge-stage concern).
@@ -437,12 +438,14 @@ def _worker_env(payload: dict, token: str, config: Any) -> dict:
 
 
 def _train_instance_spec(job_id: str, config: Any, plan: RemotePlan,
-                         store: ArtifactStore, settings) -> InstanceSpec:
+                         store: ArtifactStore, settings,
+                         prepared_config: Optional[dict] = None) -> InstanceSpec:
     stage = plan.stage("train")
     sizing = stage.sizing
     token = secrets.token_urlsafe(32)
     payload = _stage_payload(job_id, stage, config, store,
-                             multi_gpu_strategy=sizing.multi_gpu_strategy)
+                             multi_gpu_strategy=sizing.multi_gpu_strategy,
+                             prepared_config=prepared_config)
     return InstanceSpec(
         name=f"merlina-{job_id}-train",
         image=config.remote.worker_image
@@ -461,11 +464,12 @@ def _train_instance_spec(job_id: str, config: Any, plan: RemotePlan,
 
 
 def _merge_instance_spec(job_id: str, config: Any, plan: RemotePlan,
-                         store: ArtifactStore, settings) -> InstanceSpec:
+                         store: ArtifactStore, settings,
+                         prepared_config: Optional[dict] = None) -> InstanceSpec:
     from .sizing import estimate_disk_gb
     stage = plan.stage("merge")
     token = secrets.token_urlsafe(32)
-    payload = _stage_payload(job_id, stage, config, store)
+    payload = _stage_payload(job_id, stage, config, store, prepared_config=prepared_config)
     disk_gb = int(estimate_disk_gb(plan.model_specs, merge_stage=True)) \
         if plan.model_specs else 200
     return InstanceSpec(
@@ -519,14 +523,6 @@ def _publish_dir_to_hub(local_dir: Path, *, repo_id: str,
 
 def _default_store(config: Any, job_id: str) -> ArtifactStore:
     return store_for_job(config, job_id)
-
-
-def _uses_uploaded_dataset(config: Any) -> bool:
-    dataset = getattr(config, "dataset", None)
-    if dataset is None:
-        return False
-    sources = [dataset.source] + list(getattr(dataset, "additional_sources", []) or [])
-    return any(getattr(s, "source_type", "") == "upload" for s in sources)
 
 
 # ---------------------------------------------------------------------------

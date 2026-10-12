@@ -103,8 +103,10 @@ choice: the trained adapter is a few GB, while merged weights would be
 
 ## Current limitations
 
-- Datasets must be on the HuggingFace Hub (local files / uploads don't
-  travel to workers yet); same for the base model.
+- Uploads, local files and internal datasets need S3/R2 artifact storage,
+  and local files must sit inside `REMOTE_LOCAL_DATA_ROOTS` (see
+  [portable remote datasets](../dev/remote-inputs.md)); otherwise use HF Hub
+  datasets. The base model must be on the HuggingFace Hub.
 - Text-LLM training modes only (no VLM / diffusion remote runs yet).
 - Spot/interruptible instances aren't used yet (no mid-run resume).
 - Configure via API/config JSON — the form UI is a follow-up.

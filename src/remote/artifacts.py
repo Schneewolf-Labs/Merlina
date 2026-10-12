@@ -175,6 +175,7 @@ def store_from_description(desc: dict, token: Optional[str] = None) -> ArtifactS
 def store_for_job(config, job_id: str, token: Optional[str] = None) -> ArtifactStore:
     """Select the server-configured store; S3 never requires an HF account."""
     from config import settings
+    from .inputs import metadata_config
     from .s3_artifacts import S3ArtifactStore, artifact_metadata, safe_path
     kind = settings.merlina_artifact_store
     token = token or getattr(config, "hf_token", None)
@@ -186,7 +187,9 @@ def store_for_job(config, job_id: str, token: Optional[str] = None) -> ArtifactS
             settings.merlina_artifact_s3_bucket, prefix,
             endpoint_url=settings.merlina_artifact_s3_endpoint,
             region_name=settings.merlina_artifact_s3_region,
-            metadata=artifact_metadata(config.model_dump()),
+            # Input snapshots are pushed with this metadata before staging
+            # rewrites the config, so strip upload ids and local paths here.
+            metadata=artifact_metadata(metadata_config(config.model_dump())),
         )
     if kind != "hf_hub":
         raise ArtifactStoreError("MERLINA_ARTIFACT_STORE must be s3 or hf_hub")
