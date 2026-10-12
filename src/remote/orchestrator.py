@@ -33,9 +33,9 @@ from src.job_manager import JobManager
 from src.websocket_manager import websocket_manager
 
 from .artifacts import ArtifactStore, artifact_worker_env, store_for_job
-from .lifecycle import RemoteLifecycle, RemoteAlreadyClaimed, terminate_confirmed
+from .lifecycle import RemoteLifecycle, RemoteAlreadyClaimed, RemoteLeaseLost, terminate_confirmed
 from .plan import RemotePlanError, build_remote_plan
-from .providers import ComputeProvider, ProviderError, get_provider
+from .providers import ComputeProvider, ProviderError, ProvisionRejected, get_provider
 from .spec import InstanceSpec, RemotePlan, StagePlan
 from .worker_client import (
     STATE_FAILED,
@@ -106,16 +106,8 @@ def run_training_remote(
         logger.warning("Ignoring duplicate remote dispatch for %s", job_id)
         return
     heartbeat_stop = threading.Event()
-
-    def heartbeat():
-        while not heartbeat_stop.wait(min(20.0, lifecycle.lease_seconds / 3)):
-            try:
-                lifecycle.heartbeat(job_id, owner)
-            except Exception:
-                logger.exception("Remote execution heartbeat failed for %s", job_id)
-                return
-
-    heartbeat_thread = threading.Thread(target=heartbeat, daemon=True)
+    heartbeat_thread = threading.Thread(
+        target=_heartbeat_loop, args=(lifecycle, job_id, owner, heartbeat_stop), daemon=True)
     heartbeat_thread.start()
     final_state, final_error = "failed", None
 
@@ -250,6 +242,30 @@ def run_training_remote(
                     logger.exception("Settlement pending for remote job %s", job_id)
 
 
+def _heartbeat_loop(lifecycle, job_id, owner, stop, *, interval=None, max_backoff=None):
+    """Renew the lease until stopped or definitively lost.
+
+    Transient failures (e.g. sqlite "database is locked" during a long pull or
+    Hub push) are retried with backoff; giving up would let the lease lapse and
+    the reconciler would terminate a healthy job.
+    """
+    interval = interval if interval is not None else min(20.0, lifecycle.lease_seconds / 3)
+    max_backoff = max_backoff if max_backoff is not None else interval
+    delay, backoff = interval, min(1.0, max_backoff)
+    while not stop.wait(delay):
+        try:
+            lifecycle.heartbeat(job_id, owner)
+        except RemoteLeaseLost:
+            logger.error("Remote execution lease lost for %s; heartbeat stopped", job_id)
+            return
+        except Exception as exc:
+            logger.warning("Remote execution heartbeat failed for %s (%s); retrying in %.1fs",
+                           job_id, exc, backoff)
+            delay, backoff = backoff, min(backoff * 2, max_backoff)
+        else:
+            delay, backoff = interval, min(1.0, max_backoff)
+
+
 # ---------------------------------------------------------------------------
 # Stage execution
 # ---------------------------------------------------------------------------
@@ -313,8 +329,11 @@ def _run_remote_stage(
         lifecycle.stage_state(job_id, stage.name, "completed", artifacts=artifacts)
     except BaseException as exc:
         failed = True
+        # Only a definitive provider refusal proves nothing was created;
+        # anything else before an instance id leaves the create ambiguous.
+        definite = instance is not None or isinstance(exc, ProvisionRejected)
         lifecycle.stage_state(job_id, stage.name,
-                              "failed" if instance else "provisioning_unknown",
+                              "failed" if definite else "provisioning_unknown",
                               error=type(exc).__name__)
         raise
     finally:

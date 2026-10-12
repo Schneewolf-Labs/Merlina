@@ -7,11 +7,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import sqlite3
 import time
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 
 class RemoteAlreadyClaimed(RuntimeError):
@@ -161,5 +164,10 @@ def terminate_confirmed(lifecycle, provider, instance_id):
         error = None if confirmed else 'Provider has not confirmed termination; resource may still be billing'
     except Exception as exc:
         confirmed, error = False, f'{type(exc).__name__}: termination confirmation failed'
+    if not confirmed:
+        # Billing-critical: keep this loud even though the record retries it.
+        logger.error("FAILED TO TERMINATE %s instance %s (%s) — it may still be billing; "
+                     "terminate it manually in the provider console if cleanup does not confirm it",
+                     provider.name, instance_id, error)
     lifecycle.cleanup_result(provider.name, instance_id, confirmed=confirmed, error=error)
     return confirmed

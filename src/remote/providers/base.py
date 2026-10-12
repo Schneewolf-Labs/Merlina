@@ -20,6 +20,15 @@ class ProviderError(RuntimeError):
     """A compute provider API call failed."""
 
 
+class ProvisionRejected(ProviderError):
+    """The provider definitively refused a create: nothing was provisioned.
+
+    Raise only when the response proves no instance exists (e.g. a 4xx, or an
+    explicit error body without an instance id such as "no capacity").
+    Timeouts and unparseable responses stay plain ProviderError: ambiguous.
+    """
+
+
 class ComputeProvider(ABC):
     name: str = "abstract"
 

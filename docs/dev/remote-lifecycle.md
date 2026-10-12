@@ -19,6 +19,10 @@ available independently of a failed execution.
 `settle(job_id, resources)`. The first two may raise to prevent/stop paid work.
 Settlement must retain funds while cleanup is unconfirmed. Ambiguous provisioning
 with no discovered instance skips settlement pending operator reconciliation.
+A provider raises `ProvisionRejected` only when its response proves nothing was
+created (RunPod: any 4xx, or an error body without a pod id such as "no
+instances available"); that attempt is recorded `failed`, not ambiguous.
+Timeouts, gateway errors and unparseable responses stay `provisioning_unknown`.
 Resource timestamps conservatively start at provisioning intent; these are
 estimates, not the provider's authoritative invoice.
 

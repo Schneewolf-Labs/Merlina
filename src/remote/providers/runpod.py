@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 from ..spec import GpuOffer, InstanceSpec, RemoteInstance
-from .base import ComputeProvider, ProviderError
+from .base import ComputeProvider, ProviderError, ProvisionRejected
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,15 @@ _STATUS_MAP = {
     "TERMINATED": "terminated",
     "DEAD": "exited",
 }
+
+
+class RunPodAPIError(ProviderError):
+    """A RunPod REST call returned an HTTP error status."""
+
+    def __init__(self, message: str, status_code: int, body: Any = None):
+        super().__init__(message)
+        self.status_code = status_code
+        self.body = body
 
 
 class RunPodProvider(ComputeProvider):
@@ -59,7 +68,12 @@ class RunPodProvider(ComputeProvider):
             return None
         if not resp.ok:
             detail = resp.text[:500]
-            raise ProviderError(f"RunPod API error {resp.status_code} on {method} {path}: {detail}")
+            try:
+                body = resp.json()
+            except ValueError:
+                body = None
+            raise RunPodAPIError(f"RunPod API error {resp.status_code} on {method} {path}: {detail}",
+                                 resp.status_code, body)
         if not resp.content:
             return {}
         try:
@@ -107,7 +121,15 @@ class RunPodProvider(ComputeProvider):
         if spec.docker_start_cmd:
             payload["dockerStartCmd"] = spec.docker_start_cmd
 
-        data = self._request("POST", "/pods", json=payload)
+        try:
+            data = self._request("POST", "/pods", json=payload)
+        except RunPodAPIError as e:
+            if _definitely_not_created(e):
+                raise ProvisionRejected(str(e)) from e
+            raise
+        if data is None:
+            # 404: the create endpoint itself was not found; nothing was made.
+            raise ProvisionRejected("RunPod pod creation endpoint returned 404")
         if not data or not data.get("id"):
             raise ProviderError(f"RunPod pod creation returned no id: {data!r}")
         logger.info("Provisioned RunPod pod %s (%s× %s)", data["id"], spec.gpu_count, spec.gpu_type_id)
@@ -167,3 +189,16 @@ class RunPodProvider(ComputeProvider):
             gpu_count=int(data.get("gpuCount") or 0),
             raw=data,
         )
+
+
+def _definitely_not_created(error: RunPodAPIError) -> bool:
+    """Only a provider-authored refusal proves no pod exists.
+
+    4xx is a request refusal. RunPod reports "no instances available" as a 500
+    with a JSON error body and no pod id; a bare 5xx (gateway HTML, empty body)
+    stays ambiguous because the create may have landed.
+    """
+    if 400 <= error.status_code < 500:
+        return True
+    body = error.body
+    return isinstance(body, dict) and bool(body.get("error")) and not body.get("id")

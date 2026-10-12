@@ -78,3 +78,42 @@ def test_cleanup_requires_positive_confirmation(tmp_path):
     provider.state = 'terminated'
     assert terminate_confirmed(lifecycle, provider, 'pod')
     assert lifecycle.resources('job')[0]['terminated_at']
+
+
+@pytest.mark.parametrize('failure', ['raises', 'unconfirmed'])
+def test_failed_termination_logs_manual_action(tmp_path, caplog, failure):
+    import logging
+    lifecycle = RemoteLifecycle(tmp_path / 'jobs.db')
+    owner = lifecycle.claim('job', 1)
+    label = lifecycle.intent('job', owner, 'train', 'runpod')
+    lifecycle.record_instance('job', 'train', label, RemoteInstance('pod-123', 'runpod'))
+    class Provider:
+        name = 'runpod'
+        def terminate(self, instance_id):
+            if failure == 'raises':
+                raise TimeoutError('provider timeout')
+        def get_instance(self, instance_id):
+            return RemoteInstance(instance_id, self.name, status='running')
+    with caplog.at_level(logging.ERROR, logger='src.remote.lifecycle'):
+        assert not terminate_confirmed(lifecycle, Provider(), 'pod-123')
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert errors
+    message = errors[0].getMessage()
+    assert 'runpod' in message and 'pod-123' in message and 'manually' in message
+
+
+def test_confirmed_termination_does_not_log_error(tmp_path, caplog):
+    import logging
+    lifecycle = RemoteLifecycle(tmp_path / 'jobs.db')
+    owner = lifecycle.claim('job', 1)
+    label = lifecycle.intent('job', owner, 'train', 'runpod')
+    lifecycle.record_instance('job', 'train', label, RemoteInstance('pod-123', 'runpod'))
+    class Provider:
+        name = 'runpod'
+        def terminate(self, instance_id):
+            pass
+        def get_instance(self, instance_id):
+            return RemoteInstance(instance_id, self.name, status='terminated')
+    with caplog.at_level(logging.ERROR, logger='src.remote.lifecycle'):
+        assert terminate_confirmed(lifecycle, Provider(), 'pod-123')
+    assert not [r for r in caplog.records if r.levelno == logging.ERROR]

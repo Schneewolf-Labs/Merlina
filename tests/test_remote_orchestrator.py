@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from src.job_manager import JobManager
 from src.remote.artifacts import LocalArtifactStore
 from src.remote.orchestrator import run_training_remote
-from src.remote.providers.base import ComputeProvider
+from src.remote.providers.base import ComputeProvider, ProviderError
 from src.remote.spec import GpuOffer, RemoteInstance
 from src.remote.worker_client import (
     STATE_DONE,
@@ -298,9 +298,67 @@ class TestFailure:
         assert "max_runtime_hours" in job.error
         assert provider.provisioned == []
 
+    def test_runtime_deadline_mid_stage_terminates(self, job_manager):
+        from src.remote.lifecycle import RemoteLifecycle
+
+        class ExpiresWhileRunning(ScriptedWorker):
+            def status(self, since_step=0):
+                # The shared total deadline lapses while the worker is training.
+                with RemoteLifecycle(job_manager.db_path).connect() as db:
+                    db.execute("UPDATE remote_runs SET deadline=0")
+                return super().status(since_step)
+
+        worker = ExpiresWhileRunning([WorkerStatus(state=STATE_RUNNING)] * 2)
+        provider = FakeProvider()
+        run(make_config(), job_manager, provider=provider, worker=worker)
+        job = job_manager.get_job("job_1")
+        assert job.status == "failed"
+        assert "max_runtime_hours" in job.error
+        assert len(provider.provisioned) == 1
+        assert provider.terminated == ["inst_1"]
+
 
 class TestStop:
-    def test_stop_request_forwarded_then_stopped(self, job_manager, monkeypatch):
+    @staticmethod
+    def _stop_after_first_status(job_manager, script, on_stop=None):
+        class StopMidRun(ScriptedWorker):
+            def status(self, since_step=0):
+                job_manager.request_stop("job_1")
+                return super().status(since_step)
+
+            def request_stop(self):
+                super().request_stop()
+                if on_stop:
+                    on_stop(self)
+                return True
+        return StopMidRun(script)
+
+    def test_stop_while_running_forwarded_then_terminated(self, job_manager, monkeypatch):
+        """No cooperation from the worker: the grace window ends and we terminate."""
+        from config import settings
+        monkeypatch.setattr(settings, "remote_stop_grace_minutes", 0.002, raising=False)
+        worker = self._stop_after_first_status(job_manager, [WorkerStatus(state=STATE_RUNNING)] * 2)
+        provider = FakeProvider()
+        run(make_config(), job_manager, provider=provider, worker=worker)
+        assert worker.stop_requests == 1
+        assert job_manager.get_job("job_1").status == "stopped"
+        assert provider.terminated == ["inst_1"]
+
+    def test_stop_while_running_honoured_by_worker(self, job_manager, monkeypatch):
+        from config import settings
+        monkeypatch.setattr(settings, "remote_stop_grace_minutes", 5.0, raising=False)
+
+        def worker_stops(worker):
+            worker.script = [WorkerStatus(state=STATE_DONE, job={"status": "stopped"})]
+        worker = self._stop_after_first_status(
+            job_manager, [WorkerStatus(state=STATE_RUNNING)] * 2, on_stop=worker_stops)
+        provider = FakeProvider()
+        run(make_config(), job_manager, provider=provider, worker=worker)
+        assert worker.stop_requests == 1
+        assert job_manager.get_job("job_1").status == "stopped"
+        assert provider.terminated == ["inst_1"]
+
+    def test_stop_before_provisioning_rents_nothing(self, job_manager, monkeypatch):
         from config import settings
         monkeypatch.setattr(settings, "remote_stop_grace_minutes", 0.0, raising=False)
 
@@ -321,6 +379,82 @@ class TestStop:
         assert running_forever.stop_requests == 0
         assert job_manager.get_job("job_1").status == "stopped"
         assert provider.provisioned == []
+
+
+class TestProvisionOutcome:
+    def _run_failing_provision(self, job_manager, error):
+        from src.remote.lifecycle import RemoteLifecycle
+
+        class Failing(FakeProvider):
+            def provision(self, spec):
+                self.provisioned.append(spec)
+                raise error
+        provider = Failing()
+        run(make_config(), job_manager, provider=provider)
+        return provider, RemoteLifecycle(job_manager.db_path).attempts()[0]
+
+    def test_definite_rejection_is_failed_not_ambiguous(self, job_manager):
+        from src.remote.providers.base import ProvisionRejected
+        provider, attempt = self._run_failing_provision(
+            job_manager, ProvisionRejected("no instances currently available"))
+        assert attempt["state"] == "failed"
+        assert attempt["error"] == "ProvisionRejected"
+        assert provider.terminated == []
+        assert job_manager.get_job("job_1").status == "failed"
+
+    @pytest.mark.parametrize("error", [ProviderError("RunPod API request failed: read timeout"),
+                                       TimeoutError("read timeout")])
+    def test_ambiguous_create_stays_unknown(self, job_manager, error):
+        _, attempt = self._run_failing_provision(job_manager, error)
+        assert attempt["state"] == "provisioning_unknown"
+
+
+class TestHeartbeat:
+    def test_transient_errors_retried_until_lease_lost(self, caplog):
+        import logging
+        import sqlite3
+        import threading
+        from src.remote.lifecycle import RemoteLeaseLost
+        from src.remote.orchestrator import _heartbeat_loop
+
+        class Lifecycle:
+            lease_seconds = 120.0
+            def __init__(self):
+                self.calls = 0
+            def heartbeat(self, job_id, owner):
+                self.calls += 1
+                if self.calls <= 3:
+                    raise sqlite3.OperationalError("database is locked")
+                if self.calls == 5:
+                    raise RemoteLeaseLost("expired")
+
+        lifecycle = Lifecycle()
+        stop = threading.Event()
+        with caplog.at_level(logging.WARNING, logger="src.remote.orchestrator"):
+            thread = threading.Thread(target=_heartbeat_loop, args=(lifecycle, "job", "owner", stop),
+                                      kwargs={"interval": 0.01, "max_backoff": 0.01})
+            thread.start()
+            thread.join(timeout=5)
+        assert not thread.is_alive()           # exited on RemoteLeaseLost
+        assert lifecycle.calls == 5            # kept going through transient errors
+        assert sum("database is locked" in r.getMessage() for r in caplog.records) == 3
+
+    def test_stop_event_ends_loop(self):
+        import threading
+        from src.remote.orchestrator import _heartbeat_loop
+
+        class Lifecycle:
+            lease_seconds = 120.0
+            calls = 0
+            def heartbeat(self, job_id, owner):
+                self.calls += 1
+        stop = threading.Event()
+        thread = threading.Thread(target=_heartbeat_loop, args=(Lifecycle(), "job", "owner", stop),
+                                  kwargs={"interval": 0.01})
+        thread.start()
+        stop.set()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
 
 
 class TestMergeStage:
