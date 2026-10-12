@@ -10,6 +10,18 @@ Train LLMs with ORPO, DPO, SimPO, CPO, IPO, KTO, and SFT using a delightful web 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![API Coverage](https://img.shields.io/badge/API%20Coverage-100%25-brightgreen.svg)](tests/TEST_SUMMARY.md)
 
+## Merlina 3 — Wishcraft ✨
+
+**3.0.0 is the current development target.** Wishcraft moves toward dependable
+model creation with AI agents on SWL.ai: managed rented compute, user-funded
+execution, and durable S3/R2 storage for datasets, checkpoints, and models.
+The friendly wizard personality stays; the infrastructure becomes easier to use.
+
+The hosted experience at `merlina.swl.ai` is planned. Accounts, billing, the
+built-in advisor, and S3/R2 model artifact storage are not available yet.
+See the [Merlina 3 plan](docs/dev/merlina-3.md) for the current baseline,
+implementation sequence, and acceptance criteria.
+
 ## Features
 
 - 🎨 **Beautiful Web Interface** - Cute wizard-themed UI with animations
@@ -367,7 +379,7 @@ docker run --gpus all -p 8000:8000 merlina
 - 📖 **[Quick Start Guide](docs/user/quick-start.md)** — Get started in minutes
 - 📚 **[Dataset Guide](docs/user/dataset-guide.md)** — Configure datasets (HuggingFace, local, uploads)
 - 🤖 **[Tokenizer Format Guide](docs/user/tokenizer-format.md)** — Automatic chat formatting (recommended!)
-- ⚙️ **[Configuration Management](docs/user/config_management.md)** — Save and reuse training configs
+- ⚙️ **[Configuration Management](docs/user/CONFIG_MANAGEMENT.md)** — Save and reuse training configs
 - 🆕 **[New Features Guide](docs/user/new-features.md)** — What's new in v1.1+
 - 🔌 **[MCP Server Guide](docs/user/mcp.md)** — Drive Merlina from an LLM agent via Model Context Protocol
 - 📋 **[Examples](examples/)** — Ready-to-use training configurations
