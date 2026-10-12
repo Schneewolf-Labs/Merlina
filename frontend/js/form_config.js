@@ -227,7 +227,9 @@ export function buildTrainingConfig({ gpuManager = null, includeSecrets = true }
         batch_size: num('batch-size', 1, parseInt),
         gradient_accumulation_steps: num('grad-accum', 16, parseInt),
         max_length: num('max-length', 2048, parseInt),
-        max_prompt_length: num('max-prompt-length', 1024, parseInt),
+        // Blank = auto budget (server derives it from max_length per row)
+        max_prompt_length: numOrNull('max-prompt-length', parseInt),
+        prompt_truncation_tolerance: num('prompt-truncation-tolerance', 0.1),
         beta: num('beta', 0.1),
         gamma: num('gamma', 0.5),
         label_smoothing: num('label-smoothing', 0.0),

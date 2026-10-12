@@ -488,7 +488,8 @@ class ConfigManager {
         const trainingModeEl = document.getElementById('training-mode');
         if (trainingModeEl) trainingModeEl.dispatchEvent(new Event('change'));
         this.setInputValue('max-length', config.max_length || 2048);
-        this.setInputValue('max-prompt-length', config.max_prompt_length || 1024);
+        this.setInputValue('max-prompt-length', config.max_prompt_length ?? '');
+        this.setInputValue('prompt-truncation-tolerance', config.prompt_truncation_tolerance ?? 0.1);
         this.setInputValue('epochs', config.num_epochs || config.num_train_epochs || 2);
         this.setInputValue('batch-size', config.batch_size || config.per_device_train_batch_size || 1);
         this.setInputValue('grad-accum', config.gradient_accumulation_steps || 16);

@@ -29,7 +29,7 @@ config = {
     "batch_size": 1,
     "gradient_accumulation_steps": 16,
     "max_length": 2048,
-    "max_prompt_length": 1024,
+    "max_prompt_length": None,
     "beta": 0.1,
     "dataset": {
         "source": {

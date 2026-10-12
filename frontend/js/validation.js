@@ -47,16 +47,16 @@ const ValidationRules = {
     'max-length': {
         required: true,
         type: 'number',
-        min: 128,
-        max: 32768,
-        message: 'Max length must be between 128 and 32768'
+        min: 512,
+        max: 131072,
+        message: 'Max length must be between 512 and 131072'
     },
     'max-prompt-length': {
-        required: true,
+        // Optional: blank means the server picks a per-row budget from max_length
         type: 'number',
-        min: 64,
-        max: 16384,
-        message: 'Max prompt length must be between 64 and 16384'
+        min: 256,
+        max: 131072,
+        message: 'Max prompt length must be between 256 and 131072 (or blank for auto)'
     },
     'beta': {
         required: true,

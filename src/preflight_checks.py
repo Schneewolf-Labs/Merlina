@@ -814,19 +814,25 @@ class PreflightValidator:
             )
 
         # ===== Sequence Length Checks =====
-        if config.max_prompt_length >= config.max_length:
-            self.errors.append(
-                f"max_prompt_length ({config.max_prompt_length}) must be less than "
-                f"max_length ({config.max_length})"
-            )
+        # max_prompt_length=None is "auto": each row's prompt gets max_length minus its
+        # response (response capped at half), measured on the real data at train time.
+        max_prompt_length = getattr(config, "max_prompt_length", None)
+        if max_prompt_length:
+            if max_prompt_length >= config.max_length:
+                self.errors.append(
+                    f"max_prompt_length ({max_prompt_length}) must be less than "
+                    f"max_length ({config.max_length})"
+                )
 
-        completion_length = config.max_length - config.max_prompt_length
-        if completion_length < 128:
-            self.warnings.append(
-                f"Completion length is only {completion_length} tokens "
-                f"(max_length {config.max_length} - max_prompt_length {config.max_prompt_length}). "
-                "This may truncate responses during training."
-            )
+            completion_length = config.max_length - max_prompt_length
+            if completion_length < 128:
+                self.warnings.append(
+                    f"Completion length is only {completion_length} tokens "
+                    f"(max_length {config.max_length} - max_prompt_length {max_prompt_length}). "
+                    "This may truncate responses during training."
+                )
+        else:
+            completion_length = None
 
         # ===== Output Name Validation =====
         output_name = config.output_name
@@ -870,7 +876,8 @@ class PreflightValidator:
 
         return {
             "effective_batch_size": effective_batch_size,
-            "completion_length": config.max_length - config.max_prompt_length,
+            # None in auto mode: the prompt/response split is decided per row at train time.
+            "completion_length": completion_length,
             "lora_enabled": config.use_lora,
             "issues": issues
         }

@@ -170,6 +170,23 @@ describe('Validator.validateField', () => {
 // Validator.validateForm tests
 // ═════════════════════════════════════════════════════════════════════════════
 
+describe('max-prompt-length rule', () => {
+    const rules = ValidationRules['max-prompt-length'];
+
+    it('allows blank (auto budget)', () => {
+        assert.deepEqual(Validator.validateField('max-prompt-length', '', rules), []);
+        assert.deepEqual(Validator.validateField('max-prompt-length', null, rules), []);
+    });
+
+    it('accepts long-context values', () => {
+        assert.deepEqual(Validator.validateField('max-prompt-length', '32768', rules), []);
+    });
+
+    it('rejects values below 256', () => {
+        assert.equal(Validator.validateField('max-prompt-length', '128', rules).length, 1);
+    });
+});
+
 describe('Validator.validateForm', () => {
     it('returns empty object for valid form data', () => {
         const formData = {

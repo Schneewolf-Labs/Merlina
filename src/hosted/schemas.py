@@ -66,7 +66,9 @@ class HostedJobConfig(StrictModel):
     batch_size: int = Field(default=1, ge=1, le=8)
     gradient_accumulation_steps: int = Field(default=16, ge=1, le=128)
     max_length: int = Field(default=2048, ge=512, le=8192)
-    max_prompt_length: int = Field(default=1024, ge=256, le=8192)
+    # None = auto: each row's prompt gets max_length minus its response (response capped
+    # at half); over-long prompts keep their end. See src/prompt_budget.py.
+    max_prompt_length: int | None = Field(default=None, ge=256, le=8192)
     lora_r: int = Field(default=16, ge=8, le=128)
     lora_alpha: int = Field(default=32, ge=8, le=256)
 
@@ -79,7 +81,7 @@ class HostedJobConfig(StrictModel):
 
     @model_validator(mode='after')
     def lengths(self):
-        if self.max_prompt_length >= self.max_length:
+        if self.max_prompt_length is not None and self.max_prompt_length >= self.max_length:
             raise ValueError('max_prompt_length must be less than max_length')
         return self
 
