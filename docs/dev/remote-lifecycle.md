@@ -94,6 +94,14 @@ this is a single-host control plane, not a distributed database architecture.
 Back up the complete database (including namespace and lifecycle tables). After
 a restore, audit provider inventory before enabling new paid executions.
 
+## Worker status polling
+
+Provider HTTP proxies return 404/5xx while routing to a fresh instance settles,
+and blip during long runs. A failed status poll is retried; the stage fails only
+after status stays unreachable for `REMOTE_STATUS_ERROR_TOLERANCE_MINUTES`
+(default 10), or immediately if the worker rejects the run token (401/403).
+Deadline and stop requests are still enforced while the worker is unreachable.
+
 ## Cancellation and startup
 
 Normal cancellation persists a single checkpoint grace deadline shared by the

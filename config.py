@@ -139,6 +139,9 @@ class Settings(BaseSettings):
     # After forwarding a stop, how long to wait for a graceful checkpoint
     # before terminating the instance anyway.
     remote_stop_grace_minutes: float = 15.0
+    # How long worker status may stay unreachable (proxy 404/5xx, timeouts)
+    # before a running stage is declared failed. Provider HTTP proxies blip.
+    remote_status_error_tolerance_minutes: float = 10.0
     # Directories whose files remote `local_file` datasets may be staged from
     # (comma or os.pathsep separated). Empty refuses every remote local file.
     remote_local_data_roots: str = ""
