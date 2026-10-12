@@ -92,8 +92,9 @@ class Settings(BaseSettings):
     # The internal MinIO store (s3_* above) is LAN-only, so a rented GPU box
     # (e.g. RunPod) can't reach it. The external tier is a second S3 backend —
     # same swl:// names, same code — that such a box CAN reach. Data gets there
-    # only via an explicit `merlina datasets promote`, which refuses anything
-    # marked private (west/IR data never leaves the private store).
+    # only via an explicit `merlina datasets promote` or `merlina storage sync`,
+    # both of which refuse anything marked private (west/IR data never leaves
+    # the private store). See docs/storage-tiers.md.
     r2_endpoint_url: Optional[str] = None  # e.g. "https://<acct>.r2.cloudflarestorage.com"
     r2_dataset_bucket: Optional[str] = None
     r2_access_key: Optional[str] = None

@@ -129,6 +129,160 @@ def _datasets_info(args: argparse.Namespace) -> int:
     return 0
 
 
+# ── storage: tier browsing / sync ────────────────────────────────────────────
+def _storage_tier(name: str):
+    """Resolve a configured storage tier or exit with a helpful message."""
+    from storage_tiers import StorageTierError, get_tier
+
+    try:
+        return get_tier(name)
+    except StorageTierError as e:
+        print(f"{e}. Configure it in the server's .env (see docs/storage-tiers.md).",
+              file=sys.stderr)
+        raise SystemExit(2)
+
+
+def _storage_tiers(args: argparse.Namespace) -> int:
+    from storage_tiers import du, get_tiers, human_bytes
+
+    for t in get_tiers().values():
+        d = t.describe()
+        badge = "private" if d["private"] else "shared"
+        if not d["configured"]:
+            print(f"{d['name']:<10} (not configured)")
+            continue
+        line = f"{d['name']:<10} {badge:<8} {d['bucket']} @ {d['endpoint_host'] or 'default endpoint'}"
+        if args.usage:
+            try:
+                u = du(t)
+                line += f"   {u['objects']} objects, {human_bytes(u['bytes'])}"
+            except Exception as e:  # noqa: BLE001
+                line += f"   (usage unavailable: {type(e).__name__})"
+        if d["hint_prefix"]:
+            line += f"   [runs under {d['hint_prefix']}]"
+        print(line)
+    return 0
+
+
+def _storage_ls(args: argparse.Namespace) -> int:
+    from storage_tiers import human_bytes, ls
+
+    t = _storage_tier(args.tier)
+    out = ls(t, args.prefix or "")
+    where = f"{t.name}:{out['prefix'] or '/'}"
+    if not out["dirs"] and not out["objects"]:
+        print(f"{where} is empty.")
+        return 0
+    print(where)
+    for d in out["dirs"]:
+        print(f"  {'':>10}  {'':<19}  {d['name']}")
+    for o in out["objects"]:
+        mtime = (o["mtime"] or "")[:19].replace("T", " ")
+        print(f"  {human_bytes(o['size']):>10}  {mtime:<19}  {o['name']}")
+    if out["truncated"]:
+        print(f"  … {out['object_count'] - len(out['objects'])} more object(s) not shown")
+    return 0
+
+
+def _storage_du(args: argparse.Namespace) -> int:
+    from storage_tiers import du
+
+    t = _storage_tier(args.tier)
+    u = du(t, args.prefix or "")
+    print(f"{t.name}:{u['prefix'] or '/'}  {u['objects']} object(s), {u['human']}")
+    return 0
+
+
+def _storage_buckets(args: argparse.Namespace) -> int:
+    from storage_tiers import list_buckets, make_bucket
+
+    t = _storage_tier(args.tier)
+    if args.create:
+        r = make_bucket(t, args.create)
+        print(r["message"], file=sys.stdout if r["ok"] else sys.stderr)
+        return 0 if r["ok"] else 1
+    r = list_buckets(t)
+    if not r["ok"]:
+        print(r["message"], file=sys.stderr)
+        return 1
+    for name in r["buckets"]:
+        mark = "  (this tier)" if name == t.bucket else ""
+        print(f"{name}{mark}")
+    return 0
+
+
+def _storage_sync(args: argparse.Namespace) -> int:
+    from storage_tiers import StorageTierError, human_bytes, sync
+
+    src, dst = _storage_tier(args.src), _storage_tier(args.dst)
+    if src.name == dst.name:
+        print("Source and destination tiers must differ.", file=sys.stderr)
+        return 2
+    last = {"key": None}
+
+    def progress(p):
+        if p.get("current_key") and p["current_key"] != last["key"]:
+            last["key"] = p["current_key"]
+            print(f"  [{p['objects_done'] + 1}/{p['objects_total']}] {p['current_key']}  "
+                  f"({human_bytes(p['bytes_done'])} / {human_bytes(p['bytes_total'])})",
+                  flush=True)
+
+    try:
+        res = sync(src, dst, args.prefix or "", dry_run=args.dry_run, move=args.move,
+                   verify=args.verify, overwrite=args.overwrite,
+                   allow_private=args.allow_private,
+                   progress_cb=None if args.dry_run else progress)
+    except StorageTierError as e:
+        print(f"Cannot sync: {e}", file=sys.stderr)
+        return 1
+
+    verb = "move" if args.move else "copy"
+    head = f"{src.name}:{res.prefix or '/'} -> {dst.name}"
+    if args.dry_run:
+        print(f"DRY RUN — {head}")
+        print(f"  would {verb}: {len(res.to_copy)} object(s), {human_bytes(res.bytes_to_copy)}")
+    else:
+        print(f"{'Moved' if args.move else 'Synced'} {head}")
+        print(f"  copied:  {len(res.copied)} object(s), {human_bytes(res.bytes_copied)}")
+    print(f"  skipped: {len(res.skipped)} object(s), {human_bytes(res.bytes_skipped)} already present")
+    if res.refused:
+        print(f"  refused: {len(res.refused)} private object(s) — never copied to a shared tier:")
+        for r in res.refused[:20]:
+            print(f"    {r['key']}  ({r['reason']})")
+        if len(res.refused) > 20:
+            print(f"    … and {len(res.refused) - 20} more")
+    if res.meta_missing:
+        print(f"  note: {len(res.meta_missing)} object(s) too large for sha256 metadata "
+              f"(compared by size next time; use --verify to hash)")
+    if res.deleted:
+        print(f"  deleted from {src.name}: {len(res.deleted)} object(s)")
+    if res.move_aborted:
+        print(f"  move aborted: {res.move_aborted}", file=sys.stderr)
+    for e in res.errors[:20]:
+        print(f"  error: {e['key']}: {e['error']}", file=sys.stderr)
+    if args.dry_run:
+        print("No data was transferred. Re-run without --dry-run to apply.")
+    return 1 if res.errors else 0
+
+
+def _storage_rm(args: argparse.Namespace) -> int:
+    from storage_tiers import StorageTierError, delete
+
+    t = _storage_tier(args.tier)
+    try:
+        if not args.yes:
+            plan = delete(t, args.prefix, dry_run=True)
+            print(f"Would delete {plan['objects']} object(s), {plan['human']} under "
+                  f"{t.name}:{plan['prefix']}/. Re-run with --yes to delete.")
+            return 1
+        r = delete(t, args.prefix, confirm=True)
+    except StorageTierError as e:
+        print(f"Refusing: {e}", file=sys.stderr)
+        return 2
+    print(f"Deleted {r['objects']} object(s), {r['human']} under {t.name}:{r['prefix']}/.")
+    return 0
+
+
 def _serve(args: argparse.Namespace) -> int:
     if importlib.util.find_spec("torch") is None:
         print(TORCH_INSTALL_HINT, file=sys.stderr)
@@ -206,6 +360,39 @@ def main(argv=None) -> int:
         help="Which tier to look in (default: internal)",
     )
 
+    # ── storage: browse / sync / prune object-storage tiers ─────────────────
+    st_parser = subparsers.add_parser(
+        "storage", help="Browse, sync and prune object-storage tiers (internal/external/artifacts)"
+    )
+    st_sub = st_parser.add_subparsers(dest="st_command")
+    tiers_p = st_sub.add_parser("tiers", help="List configured storage tiers")
+    tiers_p.add_argument("--usage", action="store_true", help="Also total each tier (lists every object)")
+    ls_p = st_sub.add_parser("ls", help="List one level of a tier")
+    ls_p.add_argument("tier")
+    ls_p.add_argument("prefix", nargs="?", default="")
+    du_p = st_sub.add_parser("du", help="Object count and bytes under a prefix")
+    du_p.add_argument("tier")
+    du_p.add_argument("prefix", nargs="?", default="")
+    bk_p = st_sub.add_parser("buckets", help="List (or --create) buckets on a tier's endpoint")
+    bk_p.add_argument("tier")
+    bk_p.add_argument("--create", metavar="NAME", default=None, help="Create a bucket instead")
+    sync_p = st_sub.add_parser("sync", help="Copy objects under a prefix from one tier to another")
+    sync_p.add_argument("src")
+    sync_p.add_argument("dst")
+    sync_p.add_argument("prefix", nargs="?", default="")
+    sync_p.add_argument("--dry-run", action="store_true", help="Plan only; transfer nothing")
+    sync_p.add_argument("--move", action="store_true",
+                        help="Delete source objects after every copy is verified (implies --verify)")
+    sync_p.add_argument("--verify", action="store_true",
+                        help="Hash objects to confirm identity (skip checks and post-write)")
+    sync_p.add_argument("--overwrite", action="store_true", help="Recopy even identical objects")
+    sync_p.add_argument("--allow-private", action="store_true",
+                        help="Override the private guard (danger: private data is meant to stay internal)")
+    rm_p = st_sub.add_parser("rm", help="Delete every object under a prefix")
+    rm_p.add_argument("tier")
+    rm_p.add_argument("prefix")
+    rm_p.add_argument("--yes", action="store_true", help="Actually delete (without it: preview)")
+
     args = parser.parse_args(argv)
 
     if args.command == "datasets":
@@ -215,6 +402,15 @@ def main(argv=None) -> int:
             return _datasets_info(args)
         ds_parser.print_help()
         return 2
+
+    if args.command == "storage":
+        handlers = {"tiers": _storage_tiers, "ls": _storage_ls, "du": _storage_du,
+                    "buckets": _storage_buckets, "sync": _storage_sync, "rm": _storage_rm}
+        handler = handlers.get(args.st_command)
+        if handler is None:
+            st_parser.print_help()
+            return 2
+        return handler(args)
 
     # Bare `merlina` serves too, but without flags (use `merlina serve --port N`).
     if args.command is None:

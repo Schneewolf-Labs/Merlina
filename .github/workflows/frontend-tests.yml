@@ -44,6 +44,9 @@ jobs:
     - name: Run theme manager unit tests
       run: node --test tests/frontend/test_theme.mjs
 
+    - name: Run object storage unit tests
+      run: node --test tests/frontend/test_storage.mjs
+
   integration-tests:
     name: Frontend Integration Tests
     runs-on: ubuntu-latest

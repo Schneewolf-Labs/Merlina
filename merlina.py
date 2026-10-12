@@ -124,6 +124,12 @@ openapi_tags = [
         "description": "Diffusion image-LoRA browsing and one-off image generation.",
     },
     {
+        "name": "Storage",
+        "description": "Object-storage tiers (internal / external / artifacts): browse, "
+                       "measure, sync between tiers and delete prefixes. Private data is "
+                       "never copied from the private tier to a shared one.",
+    },
+    {
         "name": "Disk & Cleanup",
         "description": "Disk usage analysis and cleanup of checkpoints, caches, "
                        "artifacts, and expired uploads. Destructive operations are "
@@ -2557,6 +2563,211 @@ def disk_wandb_clear(req: WandbClearRequest):
     Sync endpoint on purpose — log-dir deletion must not block the event loop.
     """
     return clear_wandb_runs(SCRIPT_DIR / "wandb", apply=req.apply)
+
+
+# ── Storage tiers (object storage) ──────────────────────────────────────────
+# Sync runs are background threads tracked in memory; one per (src, dst) pair.
+_storage_jobs: dict[str, dict] = {}
+_storage_active_pairs: dict[tuple, str] = {}
+_storage_lock = threading.Lock()
+_STORAGE_JOBS_KEEP = 50
+
+
+def _storage_tier_or_400(name: str):
+    import storage_tiers
+    try:
+        return storage_tiers.get_tier(name)
+    except storage_tiers.StorageTierError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/storage/tiers", tags=["Storage"], summary="List object-storage tiers")
+def storage_tiers_list(usage: bool = False):
+    """Configured tiers with bucket, endpoint host and privacy. Never returns
+    credentials. ``usage=true`` also totals each configured tier (lists every
+    object, so it can take a moment on large buckets)."""
+    import storage_tiers
+    out = []
+    for tier in storage_tiers.get_tiers().values():
+        d = tier.describe()
+        if usage and tier.configured:
+            try:
+                d["usage"] = storage_tiers.du(tier)
+            except Exception as e:  # noqa: BLE001 — report per tier, don't fail the list
+                d["usage_error"] = f"{type(e).__name__}: {e}"
+        out.append(d)
+    return {"tiers": out}
+
+
+@app.get("/storage/ls", tags=["Storage"], summary="List one level of a tier")
+def storage_ls(tier: str, prefix: str = ""):
+    """Delimiter-style listing: sub-prefixes plus objects (size, mtime)."""
+    import storage_tiers
+    t = _storage_tier_or_400(tier)
+    try:
+        return storage_tiers.ls(t, prefix)
+    except storage_tiers.StorageTierError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/storage/du", tags=["Storage"], summary="Object count and bytes under a prefix")
+def storage_du(tier: str, prefix: str = ""):
+    import storage_tiers
+    t = _storage_tier_or_400(tier)
+    try:
+        return storage_tiers.du(t, prefix)
+    except storage_tiers.StorageTierError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+class StorageSyncRequest(BaseModel):
+    # No allow_private here on purpose: the private guard has no API override.
+    model_config = {"extra": "forbid"}
+
+    src: str = Field(..., description="Source tier")
+    dst: str = Field(..., description="Destination tier")
+    prefix: str = Field("", description="Key prefix to sync ('' = whole bucket)")
+    dry_run: bool = Field(True, description="Plan only (returned synchronously)")
+    move: bool = Field(False, description="Delete sources after every copy is verified")
+    verify: bool = Field(False, description="Hash objects to confirm identity")
+    overwrite: bool = Field(False, description="Recopy even identical objects")
+
+
+def _storage_run_sync(job_id: str, src, dst, req: StorageSyncRequest, pair: tuple, cancel):
+    import storage_tiers
+    job = _storage_jobs[job_id]
+
+    def progress(p):
+        with _storage_lock:
+            job["progress"] = p
+
+    try:
+        res = storage_tiers.sync(src, dst, req.prefix, dry_run=False, move=req.move,
+                                 verify=req.verify, overwrite=req.overwrite,
+                                 progress_cb=progress, cancel=cancel)
+        with _storage_lock:
+            job["result"] = res.to_dict()
+            job["state"] = ("cancelled" if cancel.is_set()
+                            else "completed" if res.ok else "failed")
+    except Exception as e:  # noqa: BLE001
+        logger.exception("storage sync failed")
+        with _storage_lock:
+            job["state"] = "failed"
+            job["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        with _storage_lock:
+            job["finished_at"] = datetime.now().isoformat()
+            if _storage_active_pairs.get(pair) == job_id:
+                del _storage_active_pairs[pair]
+
+
+@app.post("/storage/sync", tags=["Storage"], summary="Plan or start a sync between tiers")
+def storage_sync(req: StorageSyncRequest):
+    """``dry_run`` (the default) returns the plan — to_copy / skipped / refused
+    with byte totals — synchronously. A real run starts a background job and
+    returns its id; poll ``GET /storage/sync/{id}``. Only one sync may run per
+    source/destination pair. Objects refused by the private guard are reported
+    and never copied; there is no override here."""
+    import storage_tiers
+    src, dst = _storage_tier_or_400(req.src), _storage_tier_or_400(req.dst)
+    if src.name == dst.name:
+        raise HTTPException(status_code=400, detail="Source and destination tiers must differ")
+    try:
+        storage_tiers.norm_prefix(req.prefix)
+    except storage_tiers.StorageTierError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if req.dry_run:
+        try:
+            res = storage_tiers.sync(src, dst, req.prefix, dry_run=True, move=req.move,
+                                     verify=req.verify, overwrite=req.overwrite)
+        except storage_tiers.StorageTierError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return {"dry_run": True, "plan": res.to_dict()}
+
+    import uuid
+    pair = (src.name, dst.name)
+    with _storage_lock:
+        running = _storage_active_pairs.get(pair)
+        if running:
+            raise HTTPException(status_code=409,
+                                detail=f"A {src.name} -> {dst.name} sync is already running ({running})")
+        job_id = f"sync_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
+        cancel = threading.Event()
+        _storage_jobs[job_id] = {
+            "id": job_id, "state": "running", "src": src.name, "dst": dst.name,
+            "prefix": req.prefix, "move": req.move, "verify": req.verify or req.move,
+            "overwrite": req.overwrite, "started_at": datetime.now().isoformat(),
+            "finished_at": None, "progress": {"phase": "planning"}, "result": None,
+            "error": None, "_cancel": cancel,
+        }
+        _storage_active_pairs[pair] = job_id
+        # Bound memory: drop the oldest finished jobs.
+        finished = [k for k, v in _storage_jobs.items() if v["state"] != "running"]
+        for k in finished[:-_STORAGE_JOBS_KEEP]:
+            _storage_jobs.pop(k, None)
+    threading.Thread(target=_storage_run_sync, args=(job_id, src, dst, req, pair, cancel),
+                     name=f"storage-{job_id}", daemon=True).start()
+    return {"dry_run": False, "id": job_id, "state": "running"}
+
+
+def _storage_job_view(job: dict) -> dict:
+    return {k: v for k, v in job.items() if not k.startswith("_")}
+
+
+@app.get("/storage/sync", tags=["Storage"], summary="List recent sync jobs")
+def storage_sync_list():
+    with _storage_lock:
+        return {"jobs": [_storage_job_view(j) for j in reversed(list(_storage_jobs.values()))]}
+
+
+@app.get("/storage/sync/{job_id}", tags=["Storage"], summary="Get sync job progress")
+def storage_sync_status(job_id: str):
+    """State (running/completed/failed/cancelled), progress (phase, objects and
+    bytes done/total, current key) and, once finished, the full result."""
+    with _storage_lock:
+        job = _storage_jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Unknown sync job")
+        return _storage_job_view(job)
+
+
+@app.post("/storage/sync/{job_id}/cancel", tags=["Storage"], summary="Cancel a running sync")
+def storage_sync_cancel(job_id: str):
+    """Stops after the current object; a partially-written multipart upload is
+    abandoned, and a ``move`` deletes nothing."""
+    with _storage_lock:
+        job = _storage_jobs.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Unknown sync job")
+        if job["state"] == "running":
+            job["_cancel"].set()
+        return _storage_job_view(job)
+
+
+class StorageDeleteRequest(BaseModel):
+    tier: str
+    prefix: str = Field(..., description="Non-empty prefix; the whole bucket is refused")
+    confirm: bool = Field(False, description="Must be true to delete")
+    dry_run: bool = Field(False, description="Preview what would be deleted")
+
+
+@app.post("/storage/delete", tags=["Storage"], summary="Delete every object under a prefix")
+def storage_delete(req: StorageDeleteRequest):
+    """Permanently deletes objects under ``prefix``. Requires ``confirm: true``
+    (or ``dry_run: true`` for a preview). An empty prefix is always refused.
+    Refused while a sync involving the tier is running."""
+    import storage_tiers
+    t = _storage_tier_or_400(req.tier)
+    if not req.dry_run:
+        with _storage_lock:
+            busy = [jid for pair, jid in _storage_active_pairs.items() if t.name in pair]
+        if busy:
+            raise HTTPException(status_code=409,
+                                detail=f"A sync involving '{t.name}' is running ({busy[0]})")
+    try:
+        return storage_tiers.delete(t, req.prefix, confirm=req.confirm, dry_run=req.dry_run)
+    except storage_tiers.StorageTierError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @app.get("/queue/status", tags=["Queue"], summary="Get queue status and statistics")

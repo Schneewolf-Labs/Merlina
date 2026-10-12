@@ -67,6 +67,11 @@
         <span class="nav-copy"><span class="nav-label">Storage</span><span class="nav-description">Keep things tidy</span></span>
 
     </button>
+<button type="button" class="section-nav-btn" data-section="storage-section" aria-controls="storage-section">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 18a4 4 0 0 1-.6-7.95A6 6 0 0 1 18 9a4.5 4.5 0 0 1-.5 9H7Z"/><path d="m10 14 2-2 2 2M12 12v5"/></svg>
+        <span class="nav-copy"><span class="nav-label">Object storage</span><span class="nav-description">Buckets, tiers &amp; sync</span></span>
+
+    </button>
 </nav>
             <div class="sidebar-note"><span aria-hidden="true">✧</span><p>Big ideas.<br>A little everyday magic.</p></div>
             <a class="sidebar-link" href="/docs" target="_blank" rel="noopener noreferrer">API documentation <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10"/></svg></a>
@@ -1808,6 +1813,32 @@
                         </button>
                         <div id="wandb-result" style="margin-top: 12px;"></div>
                     </div>
+                </div>
+            </section>
+
+            <!-- Object storage — browse / sync / prune S3-compatible tiers (storage.js) -->
+            <section id="storage-section" class="card nav-section" style="display: none;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <div class="page-heading"><p class="eyebrow">WORKSPACE / OBJECT STORAGE</p><h2 tabindex="-1">Everything in its place</h2><p class="page-description">Browse your storage tiers and move things between them.</p></div>
+                    <button id="storage-refresh-btn" type="button" class="action-button" style="max-width: 160px;">
+                        🔄 Refresh
+                    </button>
+                </div>
+                <p style="color: var(--text-muted); margin-top: 0;">
+                    Sync copies a prefix to the same keys in another tier and skips anything already
+                    there. Every sync is previewed first. Private data in the private tier is never
+                    copied to a shared tier; the preview lists anything the guard refuses.
+                </p>
+
+                <div class="spell-section">
+                    <h3 style="margin-top: 0;">Tiers</h3>
+                    <div id="storage-tiers" class="storage-tier-grid"><p style="color: var(--text-muted);">Loading…</p></div>
+                </div>
+
+                <div class="spell-section">
+                    <div id="storage-crumbs" style="margin-bottom: 10px;"></div>
+                    <div id="storage-actions" style="margin-bottom: 14px;"></div>
+                    <div id="storage-browser"><p style="color: var(--text-muted);">Loading…</p></div>
                 </div>
             </section>
 

@@ -23,6 +23,7 @@ Start here if you want to use Merlina to train models:
 - **[MCP Server Guide](user/mcp.md)** - Drive Merlina from an LLM agent via Model Context Protocol
 - **[Remote Training](user/remote-training.md)** - Current self-hosted RunPod workflow
 - **[Internal Dataset Store](internal-dataset-store.md)** - Existing S3/MinIO/R2 dataset support
+- **[Storage Tiers](storage-tiers.md)** - Browse, sync and prune your S3/MinIO/R2 buckets
 
 ## 🔧 For Developers
 

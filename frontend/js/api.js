@@ -416,6 +416,43 @@ class MerlinaAPI {
         }, LONG_TIMEOUT);
     }
 
+    // Object-storage tiers (browse / sync / delete)
+    static async getStorageTiers(usage = false) {
+        return this.fetch(`/storage/tiers?usage=${usage ? 'true' : 'false'}`, {}, LONG_TIMEOUT);
+    }
+
+    static async storageLs(tier, prefix = '') {
+        const q = new URLSearchParams({ tier, prefix });
+        return this.fetch(`/storage/ls?${q}`, {}, LONG_TIMEOUT);
+    }
+
+    static async storageDu(tier, prefix = '') {
+        const q = new URLSearchParams({ tier, prefix });
+        return this.fetch(`/storage/du?${q}`, {}, LONG_TIMEOUT);
+    }
+
+    static async storageSync({ src, dst, prefix = '', dry_run = true, move = false, verify = false, overwrite = false } = {}) {
+        return this.fetch('/storage/sync', {
+            method: 'POST',
+            body: JSON.stringify({ src, dst, prefix, dry_run, move, verify, overwrite })
+        }, LONG_TIMEOUT);
+    }
+
+    static async storageSyncStatus(id) {
+        return this.fetch(`/storage/sync/${encodeURIComponent(id)}`);
+    }
+
+    static async storageSyncCancel(id) {
+        return this.fetch(`/storage/sync/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
+    }
+
+    static async storageDelete({ tier, prefix, confirm = false, dry_run = false } = {}) {
+        return this.fetch('/storage/delete', {
+            method: 'POST',
+            body: JSON.stringify({ tier, prefix, confirm, dry_run })
+        }, LONG_TIMEOUT);
+    }
+
     // Disk cleanup & analysis endpoints
     static async getDiskAnalysis(keep = 1) {
         return this.fetch(`/disk/analysis?keep=${keep}`, {}, LONG_TIMEOUT);

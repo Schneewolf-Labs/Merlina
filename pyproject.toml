@@ -126,6 +126,7 @@ packages = ["src", "dataset_handlers"]
 [tool.hatch.build.targets.wheel.force-include]
 "merlina.py" = "merlina.py"
 "merlina_cli.py" = "merlina_cli.py"
+"storage_tiers.py" = "storage_tiers.py"
 "mcp_server.py" = "mcp_server.py"
 "config.py" = "config.py"
 "version.py" = "version.py"
@@ -135,6 +136,7 @@ packages = ["src", "dataset_handlers"]
 include = [
     "merlina.py",
     "merlina_cli.py",
+    "storage_tiers.py",
     "mcp_server.py",
     "config.py",
     "version.py",

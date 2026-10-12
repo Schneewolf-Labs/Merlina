@@ -30,6 +30,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   additive; hosted data is separate from the self-hosted API. Paid execution and
   advisor calls are disabled by default. Real infrastructure validation and the
   [pilot launch gates](docs/operations/hosted-pilot.md) remain outstanding.
+- Add **storage tiers** ([docs](docs/storage-tiers.md)): browse, measure, sync
+  and prune the internal, external and artifact object stores through
+  `merlina storage ...`, `/storage/*` and the web UI's Object storage section.
+  Sync streams objects in chunks, stores a SHA-256 as object metadata, skips
+  identical objects, and with `--move` deletes sources only after every copy is
+  verified. Private data (private manifests or private-marker paths) is never
+  copied from the private tier to a shared one. The only override is the CLI's
+  `--allow-private`.
 
 ### Changed
 - **Job execution core rewritten for correct concurrency** (`src/job_queue.py`, `src/job_manager.py`, `src/websocket_manager.py`, new `src/worker_monitor.py`, `src/worker_reattach.py`): the queue now keeps all state (pending + running) under a single condition variable instead of a `PriorityQueue` plus three separately-locked side tables. Cancelling or deleting a queued job is a plain removal — no tombstones left for a worker to skip, no stale config (with API tokens) kept alive. Submitting a job id that is already queued or running raises instead of silently overwriting the entry. `shutdown()` no longer deadlocks when work is still queued. `JobManager.update_job()` takes `**fields` validated against the schema (unknown columns raise), enables WAL once at init instead of on every connection, and schema migrations are table-driven. The WebSocket manager gains `bind_loop()` / `publish()` so worker threads and the subprocess monitor publish without threading an event-loop reference through every call.
