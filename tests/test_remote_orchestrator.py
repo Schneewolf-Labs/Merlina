@@ -111,6 +111,8 @@ class FakeConfig(SimpleNamespace):
             "hf_token": self.hf_token,
             "push_to_hub": self.push_to_hub,
             "training_mode": self.training_mode,
+            "dataset": {"source": vars(self.dataset.source),
+                        "additional_sources": [vars(src) for src in self.dataset.additional_sources]},
         }
 
 
@@ -365,7 +367,7 @@ class TestMergeStage:
         assert job_manager.get_job("job_1").status == "completed"
 
 
-class TestUploadedDatasetRejection:
+class TestUploadedDatasetStaging:
     def test_uploaded_dataset_fails_fast(self, job_manager):
         cfg = make_config()
         cfg.dataset.source.source_type = "upload"
@@ -382,6 +384,41 @@ class TestUploadedDatasetRejection:
         job = job_manager.get_job("job_1")
         assert job.status == "failed"
         assert provider.provisioned == []
+
+    def test_missing_uploaded_content_fails_before_provisioning(self, job_manager):
+        cfg = make_config()
+        cfg.dataset.source = SimpleNamespace(source_type="upload", dataset_id="expired")
+        provider = FakeProvider()
+        run(cfg, job_manager, provider=provider)
+        assert job_manager.get_job("job_1").status == "failed"
+        assert provider.provisioned == []
+
+    def test_upload_uses_portable_payload_before_provisioning(self, job_manager):
+        import base64
+        import json
+        cfg = make_config()
+        cfg.dataset.source = SimpleNamespace(source_type="upload", dataset_id="uploaded")
+        store = LocalArtifactStore(Path("store"))
+        provider = FakeProvider()
+        data = b'{"prompt":"hi","chosen":"hello"}'
+        def finished():
+            adapter = Path("adapter-source")
+            adapter.mkdir(exist_ok=True)
+            (adapter / "adapter_config.json").write_text("{}")
+            store.push_dir(adapter, "adapter")
+        worker = ScriptedWorker([WorkerStatus(state=STATE_DONE)], on_done=finished)
+        job_manager.create_job("job_1", cfg.model_dump())
+        run_training_remote("job_1", cfg, job_manager,
+                            {"uploaded": {"filename": "/private/customer.json", "content": data}},
+                            provider=provider, store=store,
+                            worker_client_factory=lambda *_: worker, poll_interval_s=0.01)
+        assert job_manager.get_job("job_1").status == "completed"
+        payload = json.loads(base64.b64decode(provider.provisioned[0].env["MERLINA_REMOTE_JOB_B64"]))
+        source = payload["config"]["dataset"]["source"]
+        assert source["file_path"].startswith("artifact://input-0-")
+        assert "dataset_id" not in source
+        assert "/private/customer" not in json.dumps(payload)
+        assert store.exists(source["file_path"].removeprefix("artifact://"))
 
 
 if __name__ == "__main__":

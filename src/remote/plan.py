@@ -42,9 +42,8 @@ def check_remote_compatible(config: Any) -> List[str]:
     """
     Return blocking problems that make a config unrunnable remotely.
 
-    Remote workers can only reach datasets that exist somewhere durable —
-    HuggingFace Hub datasets work; local files and in-memory uploads on
-    the control plane don't travel (yet).
+    HF sources load directly; other sources are snapshotted into the job's
+    artifact store before provisioning. Internal revisions must be pinned.
     """
     problems: List[str] = []
     dataset = getattr(config, "dataset", None)
@@ -52,13 +51,26 @@ def check_remote_compatible(config: Any) -> List[str]:
     if dataset is not None:
         sources.append(dataset.source)
         sources.extend(getattr(dataset, "additional_sources", []) or [])
+        if getattr(dataset, "eval_source", None) is not None:
+            sources.append(dataset.eval_source)
     for src in sources:
-        if getattr(src, "source_type", "huggingface") != "huggingface":
-            problems.append(
-                f"Dataset source type '{src.source_type}' is not available on remote "
-                "workers — push the dataset to the HuggingFace Hub and use a "
-                "'huggingface' source for remote runs."
-            )
+        kind = getattr(src, "source_type", "huggingface")
+        if kind == "internal":
+            from .inputs import pinned_internal_uri
+            try:
+                pinned_internal_uri(getattr(src, "uri", None) or "")
+                if getattr(src, "split", "train") != "train":
+                    problems.append("Remote internal datasets support only the train split.")
+            except ValueError:
+                problems.append("Internal datasets require a pinned swl://name@revision URI.")
+        elif kind == "local_file":
+            if not getattr(src, "file_path", None):
+                problems.append("local_file datasets require a file_path for staging.")
+        elif kind == "upload":
+            if not getattr(src, "dataset_id", None):
+                problems.append("upload datasets require a dataset_id for staging.")
+        elif kind != "huggingface":
+            problems.append("Unsupported remote dataset source type.")
     mode = (getattr(config, "training_mode", "") or "").lower()
     if mode.startswith("vlm_") or mode.startswith("diffusion_"):
         problems.append(

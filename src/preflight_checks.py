@@ -203,11 +203,23 @@ class PreflightValidator:
         for problem in check_remote_compatible(config):
             self.errors.append(problem)
 
-        if not config.hf_token and not config.remote.artifact_repo:
-            self.errors.append(
-                "Remote runs hand artifacts between stages through a private "
-                "HuggingFace repo — provide an HF token or set remote.artifact_repo."
-            )
+        artifact_kind = getattr(settings, "merlina_artifact_store", "hf_hub")
+        if artifact_kind == "s3":
+            # This branch only constructs a store; it never contacts storage or
+            # calls the Hub. Reuse address validation without requiring HF auth.
+            from src.remote.artifacts import ArtifactStoreError, store_for_job
+            try:
+                store_for_job(config, "preflight")
+            except ArtifactStoreError as error:
+                self.errors.append(str(error))
+        elif artifact_kind == "hf_hub":
+            if not config.hf_token and not config.remote.artifact_repo:
+                self.errors.append(
+                    "Configure S3 artifacts or provide an HF token / "
+                    "remote.artifact_repo for the private HuggingFace artifact store."
+                )
+        else:
+            self.errors.append("MERLINA_ARTIFACT_STORE must be s3 or hf_hub")
 
         if is_local_model_path(config.base_model):
             self.errors.append(
@@ -677,6 +689,9 @@ class PreflightValidator:
             if not dataset_source.dataset_id:
                 self.errors.append("Upload dataset requires dataset_id")
 
+        elif dataset_source.source_type == "internal":
+            self._check_internal_dataset_source(dataset_source, remote=self._is_remote(config))
+
         else:
             self.errors.append(f"Invalid dataset source_type: {dataset_source.source_type}")
 
@@ -699,6 +714,10 @@ class PreflightValidator:
                     self.errors.append("Additional local file dataset source requires file_path")
                 elif not Path(file_path).exists():
                     self.errors.append(f"Additional dataset file not found: {file_path}")
+            elif source_type == "internal":
+                self._check_internal_dataset_source(extra, remote=self._is_remote(config))
+            elif source_type == "upload" and not getattr(extra, "dataset_id", None):
+                self.errors.append("Additional upload dataset source requires dataset_id")
 
         # Check format
         dataset_format = config.dataset.format
@@ -711,6 +730,34 @@ class PreflightValidator:
             "source_type": dataset_source.source_type,
             "format_type": dataset_format.format_type
         }
+
+    def _check_internal_dataset_source(self, source: Any, *, remote: bool) -> None:
+        """Check availability and remote export policy without revealing store errors."""
+        from dataset_handlers.internal_store import parse_swl_uri, InternalStoreError
+        from dataset_handlers.factory import default_internal_store
+        from src.remote.inputs import pinned_internal_uri, RemoteInputError
+        uri = getattr(source, "uri", None) or getattr(source, "repo_id", None) or ""
+        try:
+            name, revision = pinned_internal_uri(uri) if remote else parse_swl_uri(uri)
+        except (InternalStoreError, RemoteInputError):
+            self.errors.append("Internal dataset requires a valid "
+                               + ("non-private pinned swl:// URI" if remote else "swl:// URI"))
+            return
+        try:
+            store = default_internal_store()
+            if store is None:
+                self.errors.append("Internal dataset storage is not configured")
+                return
+            manifest = store.get_manifest(name, revision)
+            if manifest.name != name or (remote and manifest.rev != revision):
+                self.errors.append("Internal dataset manifest does not match its requested revision")
+            if remote and manifest.is_private():
+                self.errors.append("Private internal datasets cannot be exported to remote workers")
+            if remote and manifest.format != "parquet":
+                self.errors.append("Remote internal datasets require Parquet format")
+        except Exception:
+            # Store exceptions can include source addresses, paths and keys.
+            self.errors.append("Internal dataset revision is unavailable")
 
     def _check_training_config(self, config: Any) -> Dict[str, Any]:
         """Validate training hyperparameters using configurable thresholds."""

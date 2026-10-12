@@ -105,7 +105,7 @@ class TestBuildRemotePlan:
     def test_incompatible_dataset_fails_planning(self):
         config = make_config(source_type="upload")
         specs = parse_model_specs("m/x", LLAMA_7B_CONFIG)
-        with pytest.raises(RemotePlanError, match="huggingface"):
+        with pytest.raises(RemotePlanError, match="dataset_id"):
             build_remote_plan(config, model_specs=specs)
 
     def test_plan_to_dict_is_json_safe(self):
