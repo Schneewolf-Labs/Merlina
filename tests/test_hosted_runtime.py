@@ -43,7 +43,7 @@ def test_runtime_builds_job_specific_broker_store(tmp_path, monkeypatch):
     captured = {}
     def install(app, factory):
         captured['factory'] = factory
-        return SimpleNamespace(tick=lambda: None)
+        return SimpleNamespace(tick=lambda: None, billing=SimpleNamespace(claim=lambda job_id: True))
     monkeypatch.setattr(remote_runtime, 'install_runtime', install)
     from src.hosted.billing import BillingService
     monkeypatch.setattr(BillingService, 'run', lambda self, job_id: {'quote': {'stages': [

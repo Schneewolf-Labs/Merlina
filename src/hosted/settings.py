@@ -11,6 +11,9 @@ class HostedSettings:
     session_ttl_seconds: int = 86400
     cors_origins: tuple[str, ...] = ()
     paid_execution_enabled: bool = False
+    # Incident switch: refuse new quotes/approvals and hold unclaimed approved runs.
+    # Cancellation, results, reconciliation and settlement keep running.
+    launches_paused: bool = False
     stripe_secret_key: str | None = None
     stripe_webhook_secret: str | None = None
     checkout_success_url: str | None = None
@@ -41,11 +44,12 @@ class HostedSettings:
             value = os.getenv(prefix + key.upper())
             if value is not None:
                 values[key] = int(value)
-        enabled = os.getenv(prefix + 'PAID_EXECUTION_ENABLED')
-        if enabled is not None:
-            if enabled.lower() not in ('true', 'false'):
-                raise ValueError('MERLINA_HOSTED_PAID_EXECUTION_ENABLED must be true or false')
-            values['paid_execution_enabled'] = enabled.lower() == 'true'
+        for key in ('paid_execution_enabled', 'launches_paused'):
+            value = os.getenv(prefix + key.upper())
+            if value is not None:
+                if value.lower() not in ('true', 'false'):
+                    raise ValueError(f'{prefix}{key.upper()} must be true or false')
+                values[key] = value.lower() == 'true'
         origins = os.getenv(prefix + 'CORS_ORIGINS')
         if origins is not None:
             values['cors_origins'] = tuple(item.strip() for item in origins.split(',') if item.strip())

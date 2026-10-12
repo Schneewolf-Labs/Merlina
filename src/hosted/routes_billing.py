@@ -40,6 +40,11 @@ def execution(request):
     return result
 
 
+def launches_open(request):
+    if getattr(request.app.state.settings, "launches_paused", False):
+        raise HTTPException(503, "New launches are paused by the operator; cancellation and results remain available")
+
+
 @router.get("/billing/balance")
 def balance(request: Request, principal: Principal = Depends(require_principal)):
     return service(request).balance(principal.account_id)
@@ -71,12 +76,14 @@ async def webhook(request: Request):
 
 @router.post("/projects/{project_id}/jobs/{job_id}/quote")
 def quote(project_id: str, job_id: str, request: Request, principal: Principal = Depends(require_principal)):
+    launches_open(request)
     return invoke(execution(request).quote, principal.account_id, project_id, job_id)
 
 
 @router.post("/projects/{project_id}/jobs/{job_id}/approve")
 def approve(project_id: str, job_id: str, body: ApprovalRequest, request: Request,
             principal: Principal = Depends(require_principal)):
+    launches_open(request)
     return invoke(execution(request).approve, principal.account_id, project_id, job_id, body.quote_id)
 
 

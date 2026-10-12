@@ -58,7 +58,27 @@ def configure_runtime(app):
             project_id=job['project_id'], job_id=job['id'],
             expires_at=time.time() + duration + 300, max_bytes=settings.max_artifact_bytes)
 
-    return install_runtime(app, scoped_store)
+    return gate_launches(install_runtime(app, scoped_store), settings)
+
+
+def gate_launches(execution, settings):
+    """Hold unclaimed approved runs while ``settings.launches_paused`` is set.
+
+    The dispatcher's durable claim precedes provisioning, so refusing the claim
+    stops new compute without touching cancel, reconcile or settlement. A run
+    whose cancel was requested may still be claimed: that path settles a
+    zero-resource run and releases the reservation without provisioning.
+    """
+    billing = execution.billing
+    claim = billing.claim
+
+    def gated_claim(job_id):
+        if getattr(settings, 'launches_paused', False) and not billing.run(job_id)['cancel_requested']:
+            return False
+        return claim(job_id)
+
+    billing.claim = gated_claim
+    return execution
 
 
 def tick(app):
