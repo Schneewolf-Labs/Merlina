@@ -177,22 +177,20 @@ def store_for_job(config, job_id: str, token: Optional[str] = None) -> ArtifactS
     from config import settings
     from .inputs import metadata_config
     from .s3_artifacts import S3ArtifactStore, artifact_metadata, safe_path
-    kind = settings.merlina_artifact_store
+    loc = settings.artifact_location()
     token = token or getattr(config, "hf_token", None)
-    if kind == "s3":
-        if not settings.merlina_artifact_s3_bucket:
-            raise ArtifactStoreError("MERLINA_ARTIFACT_S3_BUCKET is required for S3 artifacts")
-        prefix = "/".join(p for p in (settings.merlina_artifact_s3_prefix, safe_path(job_id)) if p)
+    if loc.error:
+        raise ArtifactStoreError(loc.error)
+    if loc.kind == "s3":
+        prefix = "/".join(p for p in (loc.prefix, safe_path(job_id)) if p)
         return S3ArtifactStore(
-            settings.merlina_artifact_s3_bucket, prefix,
-            endpoint_url=settings.merlina_artifact_s3_endpoint,
-            region_name=settings.merlina_artifact_s3_region,
+            loc.bucket, prefix,
+            endpoint_url=loc.endpoint_url,
+            region_name=loc.region,
             # Input snapshots are pushed with this metadata before staging
             # rewrites the config, so strip upload ids and local paths here.
             metadata=artifact_metadata(metadata_config(config.model_dump())),
         )
-    if kind != "hf_hub":
-        raise ArtifactStoreError("MERLINA_ARTIFACT_STORE must be s3 or hf_hub")
     repo_id = config.remote.artifact_repo
     if not repo_id:
         if not token:
@@ -215,10 +213,13 @@ def artifact_worker_env(description: dict) -> dict:
     env = {"MERLINA_CHECKPOINT_TIMEOUT_SECONDS": str(settings.merlina_checkpoint_timeout_seconds)}
     if description.get("credential_transport") == "broker":
         return env
-    env.update({name.upper(): value for name in (
-        "merlina_artifact_access_key", "merlina_artifact_secret_key",
-        "merlina_artifact_session_token",
-    ) if (value := getattr(settings, name))})
+    # Wire format: these exact names are what (old and new) workers read.
+    from config import artifact_credentials
+    access, secret, token = artifact_credentials(settings)
+    env.update({name: value for name, value in (
+        ("MERLINA_ARTIFACT_ACCESS_KEY", access), ("MERLINA_ARTIFACT_SECRET_KEY", secret),
+        ("MERLINA_ARTIFACT_SESSION_TOKEN", token),
+    ) if value})
     return env
 
 

@@ -73,12 +73,15 @@ run can prove what it trained on. Our own datasets omit the HF fields.
 Set in the server's `.env` (never in code or version control):
 
 ```
-S3_ENDPOINT_URL=http://sabre:9000
-S3_DATASET_BUCKET=datasets
-S3_ACCESS_KEY=...
-S3_SECRET_KEY=...
-S3_REGION=auto
+STORAGE_INTERNAL_ENDPOINT=http://minio.lan:9000
+STORAGE_INTERNAL_BUCKET=datasets
+STORAGE_INTERNAL_ACCESS_KEY=...
+STORAGE_INTERNAL_SECRET_KEY=...
+STORAGE_INTERNAL_REGION=auto
 ```
+
+(The older `S3_*` / `R2_*` / `DATASET_STORE` names still work as deprecated
+aliases; see [Storage tiers](storage-tiers.md#renamed-settings).)
 
 Leave unset to disable — Merlina then loads straight from HuggingFace as before.
 
@@ -86,22 +89,22 @@ Leave unset to disable — Merlina then loads straight from HuggingFace as befor
 
 The internal MinIO store is LAN-only, so a rented GPU box (RunPod) can't reach
 it. The **external tier** is a second S3 backend — same code, same `swl://`
-names — reachable off-LAN. It's configured with an `R2_*` block mirroring the
-`S3_*` one, and a per-process selector:
+names — reachable off-LAN. It's configured with a `STORAGE_EXTERNAL_*` block
+mirroring the internal one, and a per-process selector:
 
 ```
-R2_ENDPOINT_URL=https://<acct>.r2.cloudflarestorage.com
-R2_DATASET_BUCKET=merlina-datasets
-R2_ACCESS_KEY=...
-R2_SECRET_KEY=...
-R2_REGION=auto
+STORAGE_EXTERNAL_ENDPOINT=https://<acct>.r2.cloudflarestorage.com
+STORAGE_EXTERNAL_BUCKET=merlina-datasets
+STORAGE_EXTERNAL_ACCESS_KEY=...
+STORAGE_EXTERNAL_SECRET_KEY=...
+STORAGE_EXTERNAL_REGION=auto
 
-# which backend THIS process resolves swl:// against: internal (default) | external
-DATASET_STORE=internal
+# which tier THIS process resolves swl:// against: internal (default) | external
+DATASET_TIER=internal
 ```
 
 On sabre everything stays `internal` (MinIO). A rented GPU box sets
-`DATASET_STORE=external` and supplies the `R2_*` vars; the loaders, mirror, and
+`DATASET_TIER=external` and supplies the `STORAGE_EXTERNAL_*` vars; the loaders, mirror, and
 `swl://` names are unchanged — only the backend differs.
 
 Data reaches the external tier **only** via an explicit promote:
@@ -164,7 +167,7 @@ YAML
 docker compose -f /mnt/ZABA/minio/compose.yaml --env-file /mnt/ZABA/minio/.env up -d
 
 # create the bucket + a scoped access key via the console at http://sabre:9001
-# then put S3_* into the Merlina server's .env
+# then put STORAGE_INTERNAL_* into the Merlina server's .env
 ```
 
 Keep it LAN-only (like Forgejo). R2 is added later, as a second tier, only for

@@ -174,14 +174,13 @@ class FakeS3:
 
 def _settings(**over):
     base = dict(
-        s3_endpoint_url="http://minio.lan:9000", s3_dataset_bucket="datasets",
-        s3_access_key="INTERNAL_AK", s3_secret_key="INTERNAL_SECRET", s3_region="auto",
-        r2_endpoint_url="https://acct.r2.example.com", r2_dataset_bucket="shared",
-        r2_access_key="EXTERNAL_AK", r2_secret_key="EXTERNAL_SECRET", r2_region="auto",
-        merlina_artifact_s3_bucket=None, merlina_artifact_s3_endpoint=None,
-        merlina_artifact_s3_prefix="runs", merlina_artifact_s3_region=None,
-        merlina_artifact_access_key=None, merlina_artifact_secret_key=None,
-        merlina_artifact_session_token=None,
+        storage_internal_endpoint="http://minio.lan:9000", storage_internal_bucket="datasets",
+        storage_internal_access_key="INTERNAL_AK", storage_internal_secret_key="INTERNAL_SECRET",
+        storage_internal_region="auto",
+        storage_external_endpoint="https://acct.r2.cloudflarestorage.com", storage_external_bucket="shared",
+        storage_external_access_key="EXTERNAL_AK", storage_external_secret_key="EXTERNAL_SECRET",
+        storage_external_region="auto",
+        artifact_store=None, artifact_bucket=None, artifact_prefix="runs",
     )
     base.update(over)
     return SimpleNamespace(**base)
@@ -207,28 +206,42 @@ class TestRegistry:
         assert tiers["internal"].private and not tiers["external"].private
         assert tiers["internal"].configured and tiers["external"].configured
 
-    def test_artifacts_deduped_when_same_as_external(self):
-        t = st.build_tiers(_settings(
-            merlina_artifact_s3_bucket="shared",
-            merlina_artifact_s3_endpoint="https://ACCT.r2.example.com/",
-            merlina_artifact_access_key="A", merlina_artifact_secret_key="S"))
+    def test_artifacts_fold_into_their_tier(self):
+        t = st.build_tiers(_settings(artifact_store="external"))
         assert "artifacts" not in t
         assert t["external"].hint_prefix == "runs/"
+        assert t["external"].default_buckets == ("shared",)
 
-    def test_artifacts_listed_when_distinct(self):
+    def test_artifact_bucket_shows_as_default_bucket_of_its_tier(self):
+        t = st.build_tiers(_settings(artifact_store="external", artifact_bucket="artifact-bucket"))
+        assert "artifacts" not in t
+        assert t["external"].default_buckets == ("artifact-bucket", "shared")
+        assert t["external"].bucket_hints == {"artifact-bucket": "runs/"}
+        assert t["external"].describe()["bucket_hints"] == {"artifact-bucket": "runs/"}
+        assert t["external"].hint_prefix == ""
+
+    def test_legacy_artifact_block_matching_external_folds(self):
         t = st.build_tiers(_settings(
-            merlina_artifact_s3_bucket="artifact-bucket",
-            merlina_artifact_s3_endpoint="https://acct.r2.example.com",
-            merlina_artifact_access_key="A", merlina_artifact_secret_key="S"))
+            merlina_artifact_store="s3", merlina_artifact_s3_bucket="shared",
+            merlina_artifact_s3_endpoint="https://ACCT.r2.cloudflarestorage.com/",
+            merlina_artifact_access_key="EXTERNAL_AK", merlina_artifact_secret_key="EXTERNAL_SECRET"))
+        assert "artifacts" not in t and t["external"].hint_prefix == "runs/"
+
+    def test_legacy_custom_artifact_location_is_its_own_tier(self):
+        t = st.build_tiers(_settings(
+            merlina_artifact_store="s3", merlina_artifact_s3_bucket="artifact-bucket",
+            merlina_artifact_s3_endpoint="https://acct.r2.cloudflarestorage.com",
+            merlina_artifact_access_key="SCOPED", merlina_artifact_secret_key="SCOPED_S"))
         assert "artifacts" in t and not t["artifacts"].private
-        assert t["artifacts"].hint_prefix == "runs/"
+        assert t["artifacts"].hint_prefix == "runs/" and t["artifacts"].env_prefix == "MERLINA_ARTIFACT"
+        assert t["external"].default_buckets == ("artifact-bucket", "shared")
 
     def test_artifacts_absent_when_unconfigured(self, tiers):
         assert "artifacts" not in tiers
 
     def test_unconfigured_tier(self):
-        t = st.build_tiers(_settings(r2_dataset_bucket=None, r2_endpoint_url=None,
-                                     r2_access_key=None, r2_secret_key=None))
+        t = st.build_tiers(_settings(storage_external_bucket=None, storage_external_endpoint=None,
+                                     storage_external_access_key=None, storage_external_secret_key=None))
         assert not t["external"].configured
         with pytest.raises(st.StorageTierError, match="not configured"):
             st.get_tier("external", t)
@@ -288,11 +301,11 @@ class TestBuckets:
         assert not r["ok"] and "access denied" in r["message"] and "datasets" in r["message"]
         # the configured bucket is still offered, with a hint naming the admin key
         assert [b["name"] for b in r["buckets"]] == ["datasets"]
-        assert "S3_ADMIN_ACCESS_KEY" in r["hint"]
+        assert "STORAGE_INTERNAL_ADMIN_ACCESS_KEY" in r["hint"]
 
     def test_make_bucket_denied_and_invalid(self, tiers, fakes):
         r = st.make_bucket(tiers["internal"], "new-bucket")
-        assert not r["ok"] and "may not create" in r["message"] and "S3_ADMIN_ACCESS_KEY" in r["hint"] and "MinIO" in r["hint"]
+        assert not r["ok"] and "may not create" in r["message"] and "STORAGE_INTERNAL_ADMIN_ACCESS_KEY" in r["hint"] and "MinIO" in r["hint"]
         assert not st.make_bucket(tiers["internal"], "Bad_Name")["ok"]
         fakes["internal"].can_create_buckets = True
         assert st.make_bucket(tiers["internal"], "new-bucket")["ok"]
@@ -754,8 +767,10 @@ def admin_fakes(fakes):
 
 @pytest.fixture
 def admin_tiers(admin_fakes):
-    return st.build_tiers(_settings(s3_admin_access_key="INTERNAL_ADMIN_AK", s3_admin_secret_key="INTERNAL_ADMIN_SECRET",
-                                    r2_admin_access_key="EXTERNAL_ADMIN_AK", r2_admin_secret_key="EXTERNAL_ADMIN_SECRET"),
+    return st.build_tiers(_settings(storage_internal_admin_access_key="INTERNAL_ADMIN_AK",
+                                    storage_internal_admin_secret_key="INTERNAL_ADMIN_SECRET",
+                                    storage_external_admin_access_key="EXTERNAL_ADMIN_AK",
+                                    storage_external_admin_secret_key="EXTERNAL_ADMIN_SECRET"),
                           fs_overrides=admin_fakes)
 
 
@@ -774,7 +789,7 @@ class TestAdminCreds:
     def test_admin_used_for_bucket_ops_and_never_exposed(self, admin_tiers, admin_fakes):
         t = admin_tiers["internal"]
         d = t.describe()
-        assert d["admin_configured"] and d["env_prefix"] == "S3"
+        assert d["admin_configured"] and d["env_prefix"] == "STORAGE_INTERNAL"
         blob = json.dumps(d) + repr(t)
         assert "ADMIN_AK" not in blob and "ADMIN_SECRET" not in blob
         r = st.list_buckets(t)
@@ -789,12 +804,10 @@ class TestAdminCreds:
     def test_denied_with_admin_configured_says_so(self, admin_tiers, admin_fakes):
         admin_fakes["external_admin"].can_list_buckets = False
         r = st.list_buckets(admin_tiers["external"])
-        assert not r["ok"] and "R2_ADMIN_ACCESS_KEY" in r["hint"] and "is configured" in r["hint"]
+        assert not r["ok"] and "STORAGE_EXTERNAL_ADMIN_ACCESS_KEY" in r["hint"] and "is configured" in r["hint"]
 
     def test_artifact_bucket_is_a_default_on_its_endpoint(self):
-        t = st.build_tiers(_settings(merlina_artifact_s3_bucket="artifact-bucket",
-                                     merlina_artifact_s3_endpoint="https://acct.r2.example.com",
-                                     merlina_artifact_access_key="A", merlina_artifact_secret_key="S"))
+        t = st.build_tiers(_settings(artifact_store="external", artifact_bucket="artifact-bucket"))
         assert t["external"].default_buckets == ("artifact-bucket", "shared")
         assert t["internal"].default_buckets == ("datasets",)
 
@@ -893,7 +906,7 @@ class TestBucketLifecycle:
     def test_denied_delete_is_reported(self, tiers, fakes):
         fakes["internal"].buckets["blank"] = None
         r = st.delete_bucket(tiers["internal"], "blank", confirm_name="blank")
-        assert not r["ok"] and not r["deleted"] and "S3_ADMIN_ACCESS_KEY" in r["hint"]
+        assert not r["ok"] and not r["deleted"] and "STORAGE_INTERNAL_ADMIN_ACCESS_KEY" in r["hint"]
 
 
 class TestListingOptions:
@@ -1060,10 +1073,10 @@ class TestBucketAPI:
         client, _ = api
         fakes["external"].can_list_buckets = False
         r = client.get("/storage/buckets", params={"tier": "external"}).json()
-        assert not r["ok"] and r["buckets"][0]["name"] == "shared" and "R2_ADMIN_ACCESS_KEY" in r["hint"]
+        assert not r["ok"] and r["buckets"][0]["name"] == "shared" and "STORAGE_EXTERNAL_ADMIN_ACCESS_KEY" in r["hint"]
         assert "Admin Read & Write" in r["hint"] and "MinIO" not in r["hint"]
         r = client.post("/storage/buckets", json={"tier": "external", "name": "new-one"}).json()
-        assert not r["ok"] and "R2_ADMIN_ACCESS_KEY" in r["hint"]
+        assert not r["ok"] and "STORAGE_EXTERNAL_ADMIN_ACCESS_KEY" in r["hint"]
 
     def test_browse_preview_download_in_other_bucket(self, api, fakes):
         client, _ = api

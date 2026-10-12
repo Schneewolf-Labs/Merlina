@@ -60,6 +60,13 @@ export function parentPrefix(prefix) {
     return parts.length ? `${parts.join('/')}/` : '';
 }
 
+/** Where to start browsing a bucket: the artifact prefix if it hosts runs. */
+export function startPrefix(tier, bucket) {
+    if (!tier) return '';
+    if (tier.bucket_hints && tier.bucket_hints[bucket] !== undefined) return tier.bucket_hints[bucket];
+    return bucket === tier.bucket ? (tier.hint_prefix || '') : '';
+}
+
 /** True when copying from `src` to `dst` crosses from private to shared. */
 export function isGuarded(src, dst) {
     return !!(src && dst && src.private && !dst.private);
@@ -639,7 +646,7 @@ export class StorageManager {
         switch (d.action) {
             case 'open-bucket': {
                 const t = this._tier(d.tier);
-                return this.browse(d.tier, d.bucket, d.bucket === t?.bucket ? (t?.hint_prefix || '') : '');
+                return this.browse(d.tier, d.bucket, startPrefix(t, d.bucket));
             }
             case 'bucket-size': return this.sizeBucket(d.tier, d.bucket);
             case 'bucket-info': return this.showBucketInfo(d.tier, d.bucket);

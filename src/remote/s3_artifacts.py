@@ -112,11 +112,12 @@ class S3ArtifactStore(ArtifactStore):
     def fs(self):
         if self._fs is None:
             import s3fs
-            from config import settings
+            from config import artifact_credentials, settings
+            key, secret, token = artifact_credentials(settings)
             self._fs = s3fs.S3FileSystem(
-                key=settings.merlina_artifact_access_key,
-                secret=settings.merlina_artifact_secret_key,
-                token=settings.merlina_artifact_session_token,
+                key=key,
+                secret=secret,
+                token=token,
                 client_kwargs={k: v for k, v in {
                     "endpoint_url": self.endpoint_url, "region_name": self.region_name,
                 }.items() if v},

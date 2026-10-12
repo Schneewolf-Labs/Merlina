@@ -8,7 +8,7 @@ checks that each source can be staged; execution verifies availability and
 finishes staging before provisioning compute. Local training is unchanged.
 
 Uploaded, local and internal sources are staged only when the control plane
-uses an operator-controlled S3/R2 artifact store (`MERLINA_ARTIFACT_STORE=s3`);
+uses an operator-controlled S3 artifact store (`ARTIFACT_STORE=external`);
 with the HF artifact store they are refused, so operator data never lands in a
 third-party repo. Remote local files must resolve (symlinks followed) inside a
 directory listed in `REMOTE_LOCAL_DATA_ROOTS` (comma or `os.pathsep`

@@ -38,10 +38,10 @@ def _resolve_store(which: str):
 
     store = get_store(which)
     if store is None:
-        prefix = "S3_" if which == "internal" else "R2_"
+        prefix = f"STORAGE_{which.upper()}_"
         print(
             f"The '{which}' dataset store is not configured.\n"
-            f"Set {prefix}ENDPOINT_URL / {prefix}DATASET_BUCKET / {prefix}ACCESS_KEY / "
+            f"Set {prefix}ENDPOINT / {prefix}BUCKET / {prefix}ACCESS_KEY / "
             f"{prefix}SECRET_KEY in the server's .env.",
             file=sys.stderr,
         )
@@ -333,6 +333,20 @@ def _storage_rm(args: argparse.Namespace) -> int:
     return 0
 
 
+def _config_migrate_env(args: argparse.Namespace) -> int:
+    """Rename legacy storage variables in a .env (dry run unless --write).
+    Prints key names only, never values."""
+    from env_migration import format_plan, migrate_file
+
+    path = args.path or ".env"
+    if not os.path.isfile(path):
+        print(f"No such file: {path}", file=sys.stderr)
+        return 2
+    plan, backup = migrate_file(path, write=args.write)
+    print(format_plan(plan, write=args.write, backup=backup))
+    return 1 if plan.conflicts else 0
+
+
 def _serve(args: argparse.Namespace) -> int:
     if importlib.util.find_spec("torch") is None:
         print(TORCH_INSTALL_HINT, file=sys.stderr)
@@ -462,6 +476,18 @@ def main(argv=None) -> int:
     rm_p.add_argument("--bucket", default=None, help=bucket_help)
     rm_p.add_argument("--yes", action="store_true", help="Actually delete (without it: preview)")
 
+    # ── config: .env maintenance ──────────────────────────────────────────────
+    cfg_parser = subparsers.add_parser("config", help="Maintain the server's .env")
+    cfg_sub = cfg_parser.add_subparsers(dest="cfg_command")
+    mig_p = cfg_sub.add_parser(
+        "migrate-env",
+        help="Rename legacy storage variables (S3_*, R2_*, MERLINA_ARTIFACT_*, ...) "
+             "to STORAGE_*/DATASET_*/ARTIFACT_* (dry run unless --write)",
+    )
+    mig_p.add_argument("path", nargs="?", default=".env", help="The .env file (default: ./.env)")
+    mig_p.add_argument("--write", action="store_true",
+                       help="Apply the changes (writes a timestamped backup first)")
+
     args = parser.parse_args(argv)
 
     if args.command == "datasets":
@@ -470,6 +496,12 @@ def main(argv=None) -> int:
         if args.ds_command == "info":
             return _datasets_info(args)
         ds_parser.print_help()
+        return 2
+
+    if args.command == "config":
+        if args.cfg_command == "migrate-env":
+            return _config_migrate_env(args)
+        cfg_parser.print_help()
         return 2
 
     if args.command == "storage":

@@ -12,6 +12,8 @@ import os
 import logging
 from pathlib import Path
 from typing import Optional, List
+from dataclasses import dataclass
+from pydantic import PrivateAttr, model_validator
 from pydantic_settings import BaseSettings
 
 logger = logging.getLogger(__name__)
@@ -56,67 +58,80 @@ class Settings(BaseSettings):
     hf_token: Optional[str] = None
 
     # ==========================================
-    # Remote artifact store (credentials are never in store descriptions)
+    # Object storage tiers (S3-compatible)
     # ==========================================
-    merlina_artifact_store: str = "hf_hub"
+    # Two role-named tiers with one consistent shape. Each is any S3 API
+    # (self-hosted MinIO, Cloudflare R2, AWS, ...); only endpoint and keys
+    # differ. Leave a tier unset to disable it. Credentials belong in the
+    # server's .env, never in code or version control. See
+    # docs/storage-tiers.md.
+    #
+    # internal: the private primary (typically LAN-only). Private data never
+    #   leaves it: `merlina datasets promote` and `merlina storage sync` refuse
+    #   anything marked private.
+    storage_internal_endpoint: Optional[str] = None   # e.g. "http://minio.lan:9000"
+    storage_internal_bucket: Optional[str] = None     # e.g. "datasets"
+    storage_internal_access_key: Optional[str] = None
+    storage_internal_secret_key: Optional[str] = None
+    storage_internal_region: Optional[str] = None     # default "auto"
+    # Optional admin key, used only for bucket-level operations (list/create/
+    # delete buckets, browse non-default buckets). Falls back to the key above.
+    storage_internal_admin_access_key: Optional[str] = None
+    storage_internal_admin_secret_key: Optional[str] = None
+    # external: a shared tier reachable off-LAN (e.g. from a rented GPU box).
+    storage_external_endpoint: Optional[str] = None   # e.g. "https://<account>.r2.cloudflarestorage.com"
+    storage_external_bucket: Optional[str] = None
+    storage_external_access_key: Optional[str] = None
+    storage_external_secret_key: Optional[str] = None
+    storage_external_region: Optional[str] = None
+    storage_external_admin_access_key: Optional[str] = None
+    storage_external_admin_secret_key: Optional[str] = None
+
+    # Which tier THIS process resolves swl:// datasets against: "internal"
+    # (default) or "external" (a rented GPU box).
+    dataset_tier: Optional[str] = None
+    # Mirror "huggingface" sources into the internal tier on first use and
+    # serve them from there afterwards.
+    dataset_mirror: Optional[bool] = None
+
+    # Where remote/hosted runs keep artifacts: "hf_hub" (default; private HF
+    # repos), or a tier name ("external" / "internal"), which reuses that
+    # tier's endpoint and credentials. Remote (RunPod) runs need "external":
+    # the internal tier is LAN-only.
+    artifact_store: Optional[str] = None
+    artifact_bucket: Optional[str] = None   # default: the tier's bucket
+    artifact_prefix: Optional[str] = None   # default: "merlina/runs"
     merlina_checkpoint_timeout_seconds: int = 120
+
+    # ------------------------------------------------------------------
+    # Deprecated aliases (still honoured; the names above win). Resolved by
+    # _resolve_storage_aliases; a single warning lists any that are set.
+    # The MERLINA_ARTIFACT_ACCESS_KEY / _SECRET_KEY / _SESSION_TOKEN names are
+    # also the artifact *worker wire format*: the control plane forwards them
+    # to remote workers, which read them here (see src/remote/artifacts.py).
+    # ------------------------------------------------------------------
+    s3_endpoint_url: Optional[str] = None
+    s3_dataset_bucket: Optional[str] = None
+    s3_access_key: Optional[str] = None
+    s3_secret_key: Optional[str] = None
+    s3_region: Optional[str] = None
+    r2_endpoint_url: Optional[str] = None
+    r2_dataset_bucket: Optional[str] = None
+    r2_access_key: Optional[str] = None
+    r2_secret_key: Optional[str] = None
+    r2_region: Optional[str] = None
+    dataset_store: Optional[str] = None
+    prefer_internal: Optional[bool] = None
+    merlina_artifact_store: Optional[str] = None
     merlina_artifact_s3_bucket: Optional[str] = None
-    merlina_artifact_s3_prefix: str = "merlina/runs"
+    merlina_artifact_s3_prefix: Optional[str] = None
     merlina_artifact_s3_endpoint: Optional[str] = None
     merlina_artifact_s3_region: Optional[str] = None
     merlina_artifact_access_key: Optional[str] = None
     merlina_artifact_secret_key: Optional[str] = None
     merlina_artifact_session_token: Optional[str] = None
-    # Optional admin key for bucket-level operations in the storage UI (only
-    # used when the artifact store is a separate tier; see s3_admin_*).
-    merlina_artifact_admin_access_key: Optional[str] = None
-    merlina_artifact_admin_secret_key: Optional[str] = None
-
-    # ==========================================
-    # Internal Dataset Store (S3-compatible)
-    # ==========================================
-    # An S3-API object store (self-hosted MinIO, or Cloudflare R2) that Merlina
-    # can train from without the HuggingFace Hub. Backend-agnostic: only the
-    # endpoint and credentials differ. Leave unset to disable — Merlina then
-    # loads straight from HuggingFace as before. Datasets are addressed with
-    # swl:// URIs (see dataset_handlers/internal_store.py). Credentials belong in
-    # the server's .env, never in code or version control.
-    s3_endpoint_url: Optional[str] = None  # e.g. "http://sabre:9000" (MinIO) or the R2 endpoint
-    s3_dataset_bucket: Optional[str] = None  # e.g. "datasets"
-    s3_access_key: Optional[str] = None
-    s3_secret_key: Optional[str] = None
-    s3_region: str = "auto"
-    # Optional admin key for bucket-level operations only (list/create/delete
-    # buckets, browse buckets other than s3_dataset_bucket) in Merlina's
-    # Object storage UI / `merlina storage`. Falls back to the key above.
-    s3_admin_access_key: Optional[str] = None
-    s3_admin_secret_key: Optional[str] = None
-    # When true, a "huggingface" source is served from the internal store if a
-    # mirror of it exists there (mirror-on-first-use lands in a later phase).
-    prefer_internal: bool = False
-
-    # ------------------------------------------------------------------
-    # External tier (Cloudflare R2, or any S3 API reachable off-LAN).
-    # ------------------------------------------------------------------
-    # The internal MinIO store (s3_* above) is LAN-only, so a rented GPU box
-    # (e.g. RunPod) can't reach it. The external tier is a second S3 backend —
-    # same swl:// names, same code — that such a box CAN reach. Data gets there
-    # only via an explicit `merlina datasets promote` or `merlina storage sync`,
-    # both of which refuse anything marked private (west/IR data never leaves
-    # the private store). See docs/storage-tiers.md.
-    r2_endpoint_url: Optional[str] = None  # e.g. "https://<acct>.r2.cloudflarestorage.com"
-    r2_dataset_bucket: Optional[str] = None
-    r2_access_key: Optional[str] = None
-    r2_secret_key: Optional[str] = None
-    r2_region: str = "auto"
-    # Optional admin key for bucket-level operations (see s3_admin_* above).
-    r2_admin_access_key: Optional[str] = None
-    r2_admin_secret_key: Optional[str] = None
-    # Which backend THIS process resolves swl:// against: "internal" (MinIO, the
-    # private primary) or "external" (R2). A rented GPU box sets
-    # DATASET_STORE=external and supplies the r2_* vars; everything else — the
-    # swl:// names, mirror-on-first-use, the loaders — is unchanged.
-    dataset_store: str = "internal"
+    _deprecated_storage_names: list = PrivateAttr(default_factory=list)
+    _conflicting_storage_names: list = PrivateAttr(default_factory=list)
 
     # ==========================================
     # Training Defaults
@@ -214,6 +229,40 @@ class Settings(BaseSettings):
         case_sensitive = False
         extra = "ignore"  # Ignore unknown environment variables
 
+    @model_validator(mode="after")
+    def _resolve_storage_aliases(self):
+        """Fold deprecated storage names into the role-named ones (new wins)."""
+        used, conflicts = [], []
+        for new, old in STORAGE_ALIASES:
+            old_val = getattr(self, old)
+            if old_val is None:
+                continue
+            if old.startswith("merlina_artifact_") and not self.merlina_artifact_store:
+                # Bare credentials without MERLINA_ARTIFACT_STORE are the
+                # worker wire format (see artifact_location), not a config.
+                continue
+            used.append(old)
+            new_val = getattr(self, new)
+            if new_val is None:
+                setattr(self, new, old_val)
+            elif new_val != old_val:
+                conflicts.append(old)
+        if self.merlina_artifact_store:
+            used.append("merlina_artifact_store")
+            for name in ("merlina_artifact_s3_bucket", "merlina_artifact_s3_endpoint",
+                         "merlina_artifact_s3_region", "merlina_artifact_access_key",
+                         "merlina_artifact_secret_key", "merlina_artifact_session_token"):
+                if getattr(self, name) is not None:
+                    used.append(name)
+        self._deprecated_storage_names = used
+        self._conflicting_storage_names = conflicts
+        _warn_deprecated_storage_names(used, conflicts)
+        return self
+
+    def artifact_location(self) -> "ArtifactLocation":
+        """The resolved artifact store (see :func:`resolve_artifact_location`)."""
+        return resolve_artifact_location(self)
+
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         # Apply offline mode before any HF library reads the environment
@@ -236,6 +285,164 @@ class Settings(BaseSettings):
                 # Log error but don't crash - let training fail later with better context
                 for error in validation_result.get("errors", []):
                     logger.error(error)
+
+
+# ── storage settings: aliases and the resolved artifact location ─────────────
+# (new canonical attribute, deprecated alias attribute). Env names are the
+# upper-cased attribute names.
+STORAGE_ALIASES = (
+    ("storage_internal_endpoint", "s3_endpoint_url"),
+    ("storage_internal_bucket", "s3_dataset_bucket"),
+    ("storage_internal_access_key", "s3_access_key"),
+    ("storage_internal_secret_key", "s3_secret_key"),
+    ("storage_internal_region", "s3_region"),
+    ("storage_external_endpoint", "r2_endpoint_url"),
+    ("storage_external_bucket", "r2_dataset_bucket"),
+    ("storage_external_access_key", "r2_access_key"),
+    ("storage_external_secret_key", "r2_secret_key"),
+    ("storage_external_region", "r2_region"),
+    ("dataset_tier", "dataset_store"),
+    ("dataset_mirror", "prefer_internal"),
+    ("artifact_prefix", "merlina_artifact_s3_prefix"),
+)
+# Where the legacy MERLINA_ARTIFACT_* block maps (reported in the warning).
+_LEGACY_ARTIFACT_NOTE = {
+    "merlina_artifact_store": "ARTIFACT_STORE",
+    "merlina_artifact_s3_bucket": "ARTIFACT_STORE=<tier> (+ ARTIFACT_BUCKET)",
+    "merlina_artifact_s3_endpoint": "ARTIFACT_STORE=<tier>",
+    "merlina_artifact_s3_region": "ARTIFACT_STORE=<tier>",
+    "merlina_artifact_access_key": "ARTIFACT_STORE=<tier>",
+    "merlina_artifact_secret_key": "ARTIFACT_STORE=<tier>",
+    "merlina_artifact_session_token": "ARTIFACT_STORE=<tier>",
+}
+DEFAULT_ARTIFACT_PREFIX = "merlina/runs"
+STORAGE_TIER_NAMES = ("internal", "external")
+_DEPRECATION_WARNED = False
+
+
+def _warn_deprecated_storage_names(used, conflicts) -> None:
+    """One warning per process listing deprecated names (never values)."""
+    global _DEPRECATION_WARNED
+    if not used or _DEPRECATION_WARNED:
+        return
+    _DEPRECATION_WARNED = True
+    mapping = dict((old, new) for new, old in STORAGE_ALIASES)
+    parts = [f"{old.upper()} -> {(mapping[old].upper() if old in mapping else _LEGACY_ARTIFACT_NOTE.get(old, '?'))}"
+             for old in dict.fromkeys(used)]
+    msg = "Deprecated storage settings in use: " + "; ".join(parts) + "."
+    if conflicts:
+        msg += (" Both old and new names are set with different values for: "
+                + ", ".join(c.upper() for c in conflicts) + " (the new names win).")
+    msg += " Run `merlina config migrate-env` to rename them (dry run by default)."
+    logger.warning(msg)
+
+
+def _norm_endpoint(url) -> str:
+    return (url or "").strip().rstrip("/").lower()
+
+
+@dataclass(frozen=True)
+class ArtifactLocation:
+    """Where artifacts live, resolved from settings. ``kind`` is ``"hf_hub"``
+    or ``"s3"``; ``tier`` names the storage tier whose endpoint and keys are
+    used (``None`` for a legacy custom location)."""
+
+    kind: str
+    tier: Optional[str] = None
+    bucket: Optional[str] = None
+    prefix: str = DEFAULT_ARTIFACT_PREFIX
+    endpoint_url: Optional[str] = None
+    region: Optional[str] = None
+    access_key: Optional[str] = None
+    secret_key: Optional[str] = None
+    session_token: Optional[str] = None
+    error: Optional[str] = None  # set when the configuration is unusable
+
+    def __repr__(self) -> str:  # never print credentials
+        return (f"ArtifactLocation(kind={self.kind!r}, tier={self.tier!r}, bucket={self.bucket!r}, "
+                f"prefix={self.prefix!r}, error={self.error!r})")
+
+
+def tier_settings(settings, tier: str) -> dict:
+    """``{endpoint, bucket, access_key, secret_key, region, admin_*}`` for a tier."""
+    g = lambda k: getattr(settings, f"storage_{tier}_{k}", None)  # noqa: E731
+    return {"endpoint": g("endpoint"), "bucket": g("bucket"), "access_key": g("access_key"),
+            "secret_key": g("secret_key"), "region": g("region") or "auto",
+            "admin_access_key": g("admin_access_key"), "admin_secret_key": g("admin_secret_key")}
+
+
+def _legacy_artifact_tier(settings) -> Optional[str]:
+    """The tier a legacy MERLINA_ARTIFACT_STORE=s3 block points at: same
+    endpoint and the same credentials (or none given), and no session token.
+    ``None`` means a custom location (e.g. dedicated, prefix-scoped keys)."""
+    if getattr(settings, "merlina_artifact_session_token", None):
+        return None
+    endpoint = _norm_endpoint(getattr(settings, "merlina_artifact_s3_endpoint", None))
+    ak = getattr(settings, "merlina_artifact_access_key", None)
+    sk = getattr(settings, "merlina_artifact_secret_key", None)
+    for tier in ("external", "internal"):
+        t = tier_settings(settings, tier)
+        if not (t["endpoint"] and t["bucket"]) or _norm_endpoint(t["endpoint"]) != endpoint:
+            continue
+        if (ak is None and sk is None) or (ak == t["access_key"] and sk == t["secret_key"]):
+            return tier
+    return None
+
+
+def resolve_artifact_location(settings) -> ArtifactLocation:
+    """Resolve ``ARTIFACT_STORE`` (or the legacy ``MERLINA_ARTIFACT_*`` block)
+    into an :class:`ArtifactLocation`. Works on any settings-like object."""
+    prefix = (getattr(settings, "artifact_prefix", None)
+              or getattr(settings, "merlina_artifact_s3_prefix", None) or DEFAULT_ARTIFACT_PREFIX)
+    store = (getattr(settings, "artifact_store", None) or "").strip().lower()
+    legacy = (getattr(settings, "merlina_artifact_store", None) or "").strip().lower()
+    bucket_override = getattr(settings, "artifact_bucket", None)
+    if not store and legacy == "s3":
+        tier = _legacy_artifact_tier(settings)
+        if tier is None:
+            return ArtifactLocation(
+                kind="s3", tier=None, bucket=getattr(settings, "merlina_artifact_s3_bucket", None),
+                prefix=prefix, endpoint_url=getattr(settings, "merlina_artifact_s3_endpoint", None),
+                region=getattr(settings, "merlina_artifact_s3_region", None),
+                access_key=getattr(settings, "merlina_artifact_access_key", None),
+                secret_key=getattr(settings, "merlina_artifact_secret_key", None),
+                session_token=getattr(settings, "merlina_artifact_session_token", None),
+                error=None if getattr(settings, "merlina_artifact_s3_bucket", None)
+                else "MERLINA_ARTIFACT_S3_BUCKET is required for a custom S3 artifact location")
+        store = tier
+        legacy_bucket = getattr(settings, "merlina_artifact_s3_bucket", None)
+        if not bucket_override and legacy_bucket and legacy_bucket != tier_settings(settings, tier)["bucket"]:
+            bucket_override = legacy_bucket
+    elif not store:
+        store = legacy or "hf_hub"
+    if store == "hf_hub":
+        return ArtifactLocation(kind="hf_hub", prefix=prefix)
+    if store not in STORAGE_TIER_NAMES:
+        return ArtifactLocation(kind="invalid", prefix=prefix,
+                                error="ARTIFACT_STORE must be hf_hub, external or internal")
+    t = tier_settings(settings, store)
+    bucket = bucket_override or t["bucket"]
+    error = None
+    if not t["endpoint"] or not bucket:
+        error = (f"ARTIFACT_STORE={store} needs the {store} tier configured "
+                 f"(STORAGE_{store.upper()}_ENDPOINT / _BUCKET / keys)")
+    return ArtifactLocation(kind="s3", tier=store, bucket=bucket, prefix=prefix,
+                            endpoint_url=t["endpoint"], region=t["region"],
+                            access_key=t["access_key"], secret_key=t["secret_key"], error=error)
+
+
+def artifact_credentials(settings) -> tuple:
+    """``(access_key, secret_key, session_token)`` for the artifact store.
+
+    The control plane uses the resolved location (a tier's keys, or a legacy
+    custom block). A remote worker has no ARTIFACT_STORE; it receives the keys
+    under the MERLINA_ARTIFACT_* wire names, which are read here as-is."""
+    loc = resolve_artifact_location(settings)
+    if loc.kind == "s3":
+        return loc.access_key, loc.secret_key, loc.session_token
+    return (getattr(settings, "merlina_artifact_access_key", None),
+            getattr(settings, "merlina_artifact_secret_key", None),
+            getattr(settings, "merlina_artifact_session_token", None))
 
 
 def resolve_hf_token(token: Optional[str]) -> Optional[str]:

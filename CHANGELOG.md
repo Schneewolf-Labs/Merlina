@@ -30,6 +30,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   additive; hosted data is separate from the self-hosted API. Paid execution and
   advisor calls are disabled by default. Real infrastructure validation and the
   [pilot launch gates](docs/operations/hosted-pilot.md) remain outstanding.
+- **Storage settings are role-named** ([docs](docs/storage-tiers.md#renamed-settings)).
+  - Tiers: `STORAGE_INTERNAL_*` / `STORAGE_EXTERNAL_*` (endpoint, bucket, keys,
+    region, optional admin keys) replace `S3_*` / `R2_*`.
+  - Datasets: `DATASET_TIER` replaces `DATASET_STORE`, and `DATASET_MIRROR`
+    replaces `PREFER_INTERNAL`.
+  - Artifacts: `ARTIFACT_STORE=hf_hub|external|internal` plus `ARTIFACT_BUCKET`
+    / `ARTIFACT_PREFIX` point artifacts at a tier instead of repeating its keys
+    in `MERLINA_ARTIFACT_*`.
+  - The old names keep working as deprecated aliases, with one warning naming
+    them. `merlina config migrate-env` (dry run unless `--write`) renames them
+    in a `.env` and collapses duplicate artifact keys.
+  - Remote workers still receive `MERLINA_ARTIFACT_*` keys unchanged.
+  - Remote runs refuse `ARTIFACT_STORE=internal`, which is LAN-only.
 - Add **storage tiers** ([docs](docs/storage-tiers.md)): browse, measure, sync
   and prune the internal, external and artifact object stores through
   `merlina storage ...`, `/storage/*` and the web UI's Object storage section.
@@ -44,7 +57,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can browse any bucket on a tier's endpoint, with filter, sort and paging, and
   preview objects: text, safetensors headers and parquet heads, all read with
   range requests. Downloads stream through the server. Optional per-tier admin
-  keys (`S3_ADMIN_*`, `R2_ADMIN_*`, `MERLINA_ARTIFACT_ADMIN_*`) are used only
+  keys (`STORAGE_INTERNAL_ADMIN_*`, `STORAGE_EXTERNAL_ADMIN_*`) are used only
   for bucket-level operations.
 
 ### Changed

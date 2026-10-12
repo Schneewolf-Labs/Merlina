@@ -408,10 +408,10 @@ def test_non_s3_artifact_store_refuses_operator_data(tmp_path, monkeypatch):
     sources = [{"source_type": "local_file", "file_path": str(data)},
                {"source_type": "upload", "dataset_id": "u"},
                {"source_type": "internal", "uri": "swl://demo@rev"}]
-    monkeypatch.setattr(settings, "merlina_artifact_store", "hf_hub")
+    monkeypatch.setattr(settings, "artifact_store", "hf_hub")
     for source in sources:
-        assert any("S3/R2" in p for p in check_remote_compatible(_plan_config(source)))
-        with pytest.raises(RemoteInputError, match="S3/R2"):
+        assert any("operator-controlled S3" in p for p in check_remote_compatible(_plan_config(source)))
+        with pytest.raises(RemoteInputError, match="operator-controlled S3"):
             stage_remote_inputs(config(source), {"u": {"filename": "d.json", "content": b"[]"}}, store,
                                 internal_store=InternalStore(tmp_path))
     # HF sources need no operator store.
