@@ -178,12 +178,12 @@ export class ExportManager {
             this.llamaCppAvailable = !!data.available;
             if (data.available) {
                 if (availEl) {
-                    availEl.innerHTML = `<span style="color: #10b981;">✓ llama.cpp ready</span> <span style="color:#888;">(${data.source || 'resolver'})</span>`;
+                    availEl.innerHTML = `<span style="color: #10b981;">✓ llama.cpp ready</span> <span style="color:var(--text-muted);">(${data.source || 'resolver'})</span>`;
                 }
                 if (startBtn) startBtn.disabled = false;
             } else {
                 if (availEl) {
-                    availEl.innerHTML = `<span style="color: #ef4444;">⚠️ llama.cpp not detected.</span> <span style="color:#888;">${(data.warnings || []).join(' ')}</span>`;
+                    availEl.innerHTML = `<span style="color: var(--danger-dark);">⚠️ llama.cpp not detected.</span> <span style="color:var(--text-muted);">${(data.warnings || []).join(' ')}</span>`;
                 }
                 if (startBtn) startBtn.disabled = true;
             }
@@ -382,18 +382,18 @@ export class ExportManager {
             const last = state.last_upload;
             if (last) {
                 const url = last.repo_url
-                    ? `<a href="${last.repo_url}" target="_blank" style="color: #f97316;">${last.repo_id}</a>`
+                    ? `<a href="${last.repo_url}" target="_blank" style="color: var(--warning);">${last.repo_id}</a>`
                     : `<code>${last.repo_id}</code>`;
                 const staleness = state.local_is_newer
                     ? '<span style="color: #b45309;">⚠ local files modified since last upload</span>'
                     : '<span style="color: #10b981;">✓ in sync with last upload</span>';
                 banner.innerHTML = `
                     <div style="padding: 10px 14px; background: #fff; border: 1px solid #fed7aa; border-radius: 8px;">
-                        <strong>Last uploaded:</strong> ${url} · <span style="color:#888;">${staleness}</span>
+                        <strong>Last uploaded:</strong> ${url} · <span style="color:var(--text-muted);">${staleness}</span>
                     </div>`;
                 banner.style.display = 'block';
             } else {
-                banner.innerHTML = '<div style="padding: 10px 14px; background: #fff; border: 1px dashed #ccc; border-radius: 8px; color: #888;">No uploads yet.</div>';
+                banner.innerHTML = '<div style="padding: 10px 14px; background: #fff; border: 1px dashed var(--border-color); border-radius: 8px; color: var(--text-muted);">No uploads yet.</div>';
                 banner.style.display = 'block';
             }
 
@@ -405,16 +405,16 @@ export class ExportManager {
                     return `<tr>
                         <td>${icon}</td>
                         <td><code>${evt.repo_id || '—'}</code> ${privacy}</td>
-                        <td style="color:#888;">${evt.timestamp || ''}</td>
-                        <td style="color:#888;">${art}</td>
+                        <td style="color:var(--text-muted);">${evt.timestamp || ''}</td>
+                        <td style="color:var(--text-muted);">${art}</td>
                     </tr>`;
                 }).join('');
                 historyEl.innerHTML = `
                     <details>
-                        <summary style="cursor: pointer; color: #f97316;">History (${state.history.length})</summary>
+                        <summary style="cursor: pointer; color: var(--warning);">History (${state.history.length})</summary>
                         <table style="width: 100%; margin-top: 8px; border-collapse: collapse;">
                             <thead>
-                                <tr style="text-align: left; color: #888; font-size: 0.85em;">
+                                <tr style="text-align: left; color: var(--text-muted); font-size: 0.85em;">
                                     <th></th><th>Repo</th><th>When</th><th>Artifacts</th>
                                 </tr>
                             </thead>
@@ -469,11 +469,11 @@ export class ExportManager {
                         <tbody>
                         ${files.map(f => `
                             <tr>
-                                <td style="padding: 4px 0;"><code>${f.path}</code>${f.quant_type ? ` <span style="color:#8b5cf6;">${f.quant_type}</span>` : ''}</td>
-                                <td style="padding: 4px 0; text-align: right; color: #888; white-space: nowrap;">${formatBytes(f.size_bytes)}</td>
+                                <td style="padding: 4px 0;"><code>${f.path}</code>${f.quant_type ? ` <span style="color:var(--primary-purple);">${f.quant_type}</span>` : ''}</td>
+                                <td style="padding: 4px 0; text-align: right; color: var(--text-muted); white-space: nowrap;">${formatBytes(f.size_bytes)}</td>
                                 <td style="padding: 4px 0 4px 10px; text-align: right;">
                                     ${f.protected
-                                        ? '<span title="Protected — cannot delete via API" style="color:#888;">🔒</span>'
+                                        ? '<span title="Protected — cannot delete via API" style="color:var(--text-muted);">🔒</span>'
                                         : `<button type="button" class="action-button" data-artifact-delete="${encodeURIComponent(f.path)}" style="padding: 2px 8px; font-size: 0.85em; background: #fee2e2; color: #b91c1c;">delete</button>`
                                     }
                                 </td>
@@ -489,7 +489,7 @@ export class ExportManager {
                 btn.addEventListener('click', () => this._deleteArtifact(decodeURIComponent(btn.dataset.artifactDelete)));
             });
         } catch (err) {
-            listEl.innerHTML = `<span style="color:#ef4444;">Could not load artifacts: ${err.message}</span>`;
+            listEl.innerHTML = `<span style="color:var(--danger-dark);">Could not load artifacts: ${err.message}</span>`;
         }
     }
 

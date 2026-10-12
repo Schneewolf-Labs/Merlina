@@ -106,7 +106,7 @@ export class DiskManager {
     /** Fetch and render the read-only disk analysis. */
     async loadAnalysis() {
         const jobsEl = document.getElementById('cleanup-jobs');
-        if (jobsEl) jobsEl.innerHTML = '<p style="color: #888;">Loading…</p>';
+        if (jobsEl) jobsEl.innerHTML = '<p style="color: var(--text-muted);">Loading…</p>';
         try {
             const data = await MerlinaAPI.getDiskAnalysis(this._keep());
             this._renderFilesystem(data.filesystem);
@@ -114,7 +114,7 @@ export class DiskManager {
             this._renderJobs(data.results.jobs || []);
             this._renderModels(data.models || {});
         } catch (err) {
-            if (jobsEl) jobsEl.innerHTML = `<p style="color: #dc2626;">Failed to load: ${esc(err.message)}</p>`;
+            if (jobsEl) jobsEl.innerHTML = `<p style="color: var(--danger-dark);">Failed to load: ${esc(err.message)}</p>`;
             this.toast.show(`Disk analysis failed: ${err.message}`, 'error');
         }
     }
@@ -146,15 +146,15 @@ export class DiskManager {
         const el = document.getElementById('cleanup-jobs');
         if (!el) return;
         if (!jobs.length) {
-            el.innerHTML = '<p style="color: #888;">No training runs found in results/.</p>';
+            el.innerHTML = '<p style="color: var(--text-muted);">No training runs found in results/.</p>';
             return;
         }
         const rows = jobs.map(j => {
             const cks = j.checkpoints.map(c => esc(c.name)).join(', ') || '—';
             const lock = j.active ? ' 🔒' : '';
             const reclaim = j.reclaimable_bytes > 0
-                ? `<span style="color: #16a34a;">${esc(j.reclaimable_human)}</span>`
-                : '<span style="color: #888;">—</span>';
+                ? `<span style="color: var(--success);">${esc(j.reclaimable_human)}</span>`
+                : '<span style="color: var(--text-muted);">—</span>';
             return `<tr${j.active ? ' style="opacity: 0.7;"' : ''}>
                 <td style="padding: 6px 10px;">${esc(j.job_id)}${lock}</td>
                 <td style="padding: 6px 10px;">${esc(j.status)}</td>
@@ -164,7 +164,7 @@ export class DiskManager {
             </tr>`;
         }).join('');
         el.innerHTML = `<table style="width: 100%; border-collapse: collapse; font-size: 0.9em;">
-            <thead><tr style="text-align: left; border-bottom: 2px solid #e5e7eb;">
+            <thead><tr style="text-align: left; border-bottom: 2px solid var(--border-color);">
                 <th style="padding: 6px 10px;">Job</th>
                 <th style="padding: 6px 10px;">Status</th>
                 <th style="padding: 6px 10px; text-align: right;">Size</th>
@@ -189,7 +189,7 @@ export class DiskManager {
             const apply = document.getElementById('cleanup-apply-btn');
             if (apply) apply.disabled = summary.count === 0;
         } catch (err) {
-            if (result) result.innerHTML = `<p style="color: #dc2626;">Preview failed: ${esc(err.message)}</p>`;
+            if (result) result.innerHTML = `<p style="color: var(--danger-dark);">Preview failed: ${esc(err.message)}</p>`;
             this.toast.show(`Preview failed: ${err.message}`, 'error');
         } finally {
             if (btn) { btn.disabled = false; btn.textContent = '🔍 Preview (dry run)'; }
@@ -227,7 +227,7 @@ export class DiskManager {
         const el = document.getElementById('cleanup-result');
         if (!el) return;
         if (summary.count === 0) {
-            el.innerHTML = '<p style="color: #16a34a;">Nothing to prune — everything\'s already tidy. ✨</p>';
+            el.innerHTML = '<p style="color: var(--success);">Nothing to prune — everything\'s already tidy. ✨</p>';
             return;
         }
         const verb = applied ? 'Deleted' : 'Would delete';
@@ -250,12 +250,12 @@ export class DiskManager {
     /** Scan the HF cache and render the repo table. */
     async loadHfCache() {
         const table = document.getElementById('hf-cache-table');
-        if (table) table.innerHTML = '<p style="color: #888;">Scanning cache…</p>';
+        if (table) table.innerHTML = '<p style="color: var(--text-muted);">Scanning cache…</p>';
         try {
             const data = await MerlinaAPI.getHfCache(this._staleDays());
             this._renderHfCache(data);
         } catch (err) {
-            if (table) table.innerHTML = `<p style="color: #dc2626;">Scan failed: ${esc(err.message)}</p>`;
+            if (table) table.innerHTML = `<p style="color: var(--danger-dark);">Scan failed: ${esc(err.message)}</p>`;
             this.toast.show(`HF cache scan failed: ${err.message}`, 'error');
         }
     }
@@ -269,7 +269,7 @@ export class DiskManager {
         if (!data.available) {
             set('hf-cache-total', 'unavailable');
             set('hf-cache-stale', '—');
-            if (table) table.innerHTML = `<p style="color: #888;">No HuggingFace cache found${data.error ? ` (${esc(data.error)})` : ''}.</p>`;
+            if (table) table.innerHTML = `<p style="color: var(--text-muted);">No HuggingFace cache found${data.error ? ` (${esc(data.error)})` : ''}.</p>`;
             return;
         }
         set('hf-cache-total', data.total_human);
@@ -277,7 +277,7 @@ export class DiskManager {
         this._updateHfSelection();
 
         if (!data.repos.length) {
-            if (table) table.innerHTML = '<p style="color: #888;">Cache is empty.</p>';
+            if (table) table.innerHTML = '<p style="color: var(--text-muted);">Cache is empty.</p>';
             return;
         }
         const rows = data.repos.map(r => {
@@ -297,7 +297,7 @@ export class DiskManager {
         }).join('');
         if (table) {
             table.innerHTML = `<table style="width: 100%; border-collapse: collapse; font-size: 0.9em;">
-                <thead><tr style="text-align: left; border-bottom: 2px solid #e5e7eb;">
+                <thead><tr style="text-align: left; border-bottom: 2px solid var(--border-color);">
                     <th style="padding: 6px 10px;"></th>
                     <th style="padding: 6px 10px;">Repo</th>
                     <th style="padding: 6px 10px;">Type</th>
@@ -357,7 +357,7 @@ export class DiskManager {
             const res = await MerlinaAPI.deleteHfCache({ repos, apply: true });
             const result = document.getElementById('hf-result');
             if (result) {
-                result.innerHTML = `<p style="color: #16a34a; font-weight: 600;">Freed ${esc(res.freed_human)} across ${res.count} repo(s).</p>`;
+                result.innerHTML = `<p style="color: var(--success); font-weight: 600;">Freed ${esc(res.freed_human)} across ${res.count} repo(s).</p>`;
             }
             this.toast.show(`Freed ${res.freed_human} from HF cache ✨`, 'success');
             await this.loadHfCache();  // rescan
@@ -379,7 +379,7 @@ export class DiskManager {
         if (!table) return;
         const items = models.items || [];
         if (!items.length) {
-            table.innerHTML = '<p style="color: #888;">No saved models in ./models/.</p>';
+            table.innerHTML = '<p style="color: var(--text-muted);">No saved models in ./models/.</p>';
             this._updateModelsSelection();
             return;
         }
@@ -395,7 +395,7 @@ export class DiskManager {
             </tr>`;
         }).join('');
         table.innerHTML = `<table style="width: 100%; border-collapse: collapse; font-size: 0.9em;">
-            <thead><tr style="text-align: left; border-bottom: 2px solid #e5e7eb;">
+            <thead><tr style="text-align: left; border-bottom: 2px solid var(--border-color);">
                 <th style="padding: 6px 10px;"></th>
                 <th style="padding: 6px 10px;">Model</th>
                 <th style="padding: 6px 10px; text-align: right;">Size</th>
@@ -438,7 +438,7 @@ export class DiskManager {
             const res = await MerlinaAPI.deleteModels({ names, apply: true });
             const result = document.getElementById('models-result');
             if (result) {
-                let html = `<p style="color: #16a34a; font-weight: 600;">Freed ${esc(res.freed_human)} across ${res.count} model(s).</p>`;
+                let html = `<p style="color: var(--success); font-weight: 600;">Freed ${esc(res.freed_human)} across ${res.count} model(s).</p>`;
                 if (res.skipped && res.skipped.length) {
                     const sk = res.skipped.map(s => `<li>${esc(s.name)} — ${esc(s.reason)}</li>`).join('');
                     html += `<p style="color: #b45309;">Skipped:</p><ul style="font-size: 0.85em;">${sk}</ul>`;
@@ -459,13 +459,13 @@ export class DiskManager {
 
     async loadArtifacts() {
         const gt = document.getElementById('gguf-table');
-        if (gt) gt.innerHTML = '<p style="color: #888;">Loading…</p>';
+        if (gt) gt.innerHTML = '<p style="color: var(--text-muted);">Loading…</p>';
         try {
             const data = await MerlinaAPI.getDiskArtifacts();
             this._renderGguf(data.gguf || {});
             this._renderWandb(data.wandb || {});
         } catch (err) {
-            if (gt) gt.innerHTML = `<p style="color: #dc2626;">Failed to load: ${esc(err.message)}</p>`;
+            if (gt) gt.innerHTML = `<p style="color: var(--danger-dark);">Failed to load: ${esc(err.message)}</p>`;
             this.toast.show(`Artifact scan failed: ${err.message}`, 'error');
         }
     }
@@ -477,7 +477,7 @@ export class DiskManager {
         if (!table) return;
         const files = gguf.files || [];
         if (!files.length) {
-            table.innerHTML = '<p style="color: #888;">No GGUF exports found.</p>';
+            table.innerHTML = '<p style="color: var(--text-muted);">No GGUF exports found.</p>';
             this._updateGgufSelection();
             return;
         }
@@ -494,7 +494,7 @@ export class DiskManager {
             </tr>`;
         }).join('');
         table.innerHTML = `<table style="width: 100%; border-collapse: collapse; font-size: 0.9em;">
-            <thead><tr style="text-align: left; border-bottom: 2px solid #e5e7eb;">
+            <thead><tr style="text-align: left; border-bottom: 2px solid var(--border-color);">
                 <th style="padding: 6px 10px;"></th>
                 <th style="padding: 6px 10px;">Model</th>
                 <th style="padding: 6px 10px;">Quant</th>
@@ -536,7 +536,7 @@ export class DiskManager {
         try {
             const res = await MerlinaAPI.deleteGguf({ files, apply: true });
             const result = document.getElementById('gguf-result');
-            if (result) result.innerHTML = `<p style="color: #16a34a; font-weight: 600;">Freed ${esc(res.freed_human)} across ${res.count} file(s).</p>`;
+            if (result) result.innerHTML = `<p style="color: var(--success); font-weight: 600;">Freed ${esc(res.freed_human)} across ${res.count} file(s).</p>`;
             this.toast.show(`Freed ${res.freed_human} of GGUF ✨`, 'success');
             await this.loadArtifacts();
         } catch (err) {
@@ -565,7 +565,7 @@ export class DiskManager {
         try {
             const res = await MerlinaAPI.clearWandb({ apply: true });
             const result = document.getElementById('wandb-result');
-            if (result) result.innerHTML = `<p style="color: #16a34a; font-weight: 600;">Cleared ${res.count} run(s), freed ${esc(res.freed_human)}.</p>`;
+            if (result) result.innerHTML = `<p style="color: var(--success); font-weight: 600;">Cleared ${res.count} run(s), freed ${esc(res.freed_human)}.</p>`;
             this.toast.show(`Freed ${res.freed_human} of W&B logs ✨`, 'success');
             await this.loadArtifacts();
         } catch (err) {

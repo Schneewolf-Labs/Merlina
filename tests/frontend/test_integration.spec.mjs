@@ -15,7 +15,7 @@ test.describe('Page load', () => {
 
     test('displays header with logo and name', async ({ page }) => {
         await page.goto('/');
-        await expect(page.locator('h1')).toHaveText('Merlina');
+        await expect(page.locator('h1')).toContainText('Merlina');
         await expect(page.locator('.wizard-hat')).toBeVisible();
     });
 
@@ -26,19 +26,19 @@ test.describe('Page load', () => {
         await expect(version).toContainText(/v\d+\.\d+\.\d+/);
     });
 
-    test('all three main sections are visible', async ({ page }) => {
+    test('setup screens are reachable through studio navigation', async ({ page }) => {
         await page.goto('/');
         // Section headers (step-based navigation - only one visible at a time)
         // Step 1: Model (visible by default)
-        await expect(page.getByText('Select Your Base Model')).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Model studio', exact: true })).toBeVisible();
 
         // Step 2: Dataset (navigate to it)
         await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
-        await expect(page.getByText('Configure Your Dataset')).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Shape your dataset', exact: true })).toBeVisible();
 
         // Step 3: Training (navigate to it)
         await page.locator('.section-nav-btn[data-section="config-section"]').click();
-        await expect(page.getByText('Configure Training Parameters')).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Make it your own', exact: true })).toBeVisible();
     });
 
     test('has skip-to-content link for accessibility', async ({ page }) => {
@@ -481,7 +481,7 @@ test.describe('Cleanup section', () => {
         await page.goto('/');
         await page.locator('.section-nav-btn[data-section="cleanup-section"]').click();
         await expect(page.locator('#cleanup-section')).toBeVisible();
-        await expect(page.getByText('Tidy the Workshop')).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Room for your next idea' })).toBeVisible();
     });
 
     test('controls are present and Apply starts disabled', async ({ page }) => {

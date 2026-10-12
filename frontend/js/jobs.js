@@ -105,6 +105,13 @@ class JobManager {
                     const jobCard = JobCardRenderer.create(jobId, job, jobName);
                     jobsContainer.appendChild(jobCard);
                 }
+            } else {
+                jobsContainer.innerHTML = `<div class="empty-state" id="jobs-empty-state">
+                    <img src="merlina.png" alt="" width="81" height="90">
+                    <h3>Your next creation starts here</h3>
+                    <p>When you start a training run, its progress and results will appear here. Let’s put your first recipe together.</p>
+                    <button type="button" class="action-button primary-button" data-go-section="model-section">Create a training run <span aria-hidden="true">→</span></button>
+                </div>`;
             }
         } catch (error) {
             console.error('Failed to load jobs:', error);
