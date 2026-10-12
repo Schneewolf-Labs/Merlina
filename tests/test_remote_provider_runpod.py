@@ -202,3 +202,20 @@ class TestFactory:
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+class TestInventoryCleanup:
+    def test_inventory_preserves_discovery_label(self, provider, session):
+        session.routes[("GET", "/pods")] = FakeResponse(200, [
+            {"id": "pod", "name": "merlina-owned-train", "desiredStatus": "RUNNING"}])
+        instances = provider.list_instances()
+        assert instances[0].raw["name"] == "merlina-owned-train"
+
+    def test_malformed_inventory_is_not_empty_success(self, provider, session):
+        session.routes[("GET", "/pods")] = FakeResponse(200, {"unexpected": []})
+        with pytest.raises(ProviderError, match="inventory"):
+            provider.list_instances()
+
+    def test_termination_errors_propagate(self, provider, session):
+        session.routes[("DELETE", "/pods/pod")] = FakeResponse(503, {"error": "unavailable"})
+        with pytest.raises(ProviderError):
+            provider.terminate("pod")

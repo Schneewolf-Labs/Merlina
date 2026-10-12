@@ -117,3 +117,20 @@ def test_confirmed_termination_does_not_log_error(tmp_path, caplog):
     with caplog.at_level(logging.ERROR, logger='src.remote.lifecycle'):
         assert terminate_confirmed(lifecycle, Provider(), 'pod-123')
     assert not [r for r in caplog.records if r.levelno == logging.ERROR]
+
+
+@pytest.mark.parametrize('late_result', [{'error': 'stale timeout'}, {'retained': True}])
+def test_confirmed_cleanup_cannot_regress_from_late_result(tmp_path, late_result):
+    lifecycle = RemoteLifecycle(tmp_path / 'jobs.db')
+    owner = lifecycle.claim('job', 1)
+    label = lifecycle.intent('job', owner, 'train', 'runpod')
+    lifecycle.record_instance('job', 'train', label, RemoteInstance('pod', 'runpod'))
+    lifecycle.cleanup_result('runpod', 'pod', confirmed=True)
+    confirmed_at = lifecycle.resources('job')[0]['terminated_at']
+    # A parallel attempt started earlier, but its stale result arrives last.
+    restarted = RemoteLifecycle(tmp_path / 'jobs.db')
+    restarted.cleanup_result('runpod', 'pod', **late_result)
+    record = restarted.resources('job')[0]
+    assert record['cleanup_status'] == 'terminated'
+    assert record['terminated_at'] == confirmed_at
+    assert record['last_error'] is None

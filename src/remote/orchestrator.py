@@ -324,7 +324,7 @@ def _run_remote_stage(
         artifacts = _poll_stage_to_completion(
             client=client, stage=stage, job_id=job_id, job_manager=job_manager,
             event_loop=event_loop, poll_interval_s=poll_interval_s,
-            deadline=deadline, mirror_job_fields=mirror_job_fields, tick=tick,
+            deadline=deadline, mirror_job_fields=mirror_job_fields, tick=tick, lifecycle=lifecycle,
         )
         lifecycle.stage_state(job_id, stage.name, "completed", artifacts=artifacts)
     except BaseException as exc:
@@ -383,7 +383,7 @@ def _wait_for_worker(client, instance, provider, job_id, job_manager,
 
 
 def _poll_stage_to_completion(*, client, stage, job_id, job_manager, event_loop,
-                              poll_interval_s, deadline, mirror_job_fields, tick=lambda: None):
+                              poll_interval_s, deadline, mirror_job_fields, tick=lambda: None, lifecycle=None):
     """Poll worker status until a terminal state, mirroring progress home."""
     from config import settings
     stop_grace_s = getattr(settings, "remote_stop_grace_minutes", DEFAULT_STOP_GRACE_MIN) * 60
@@ -417,6 +417,9 @@ def _poll_stage_to_completion(*, client, stage, job_id, job_manager, event_loop,
 
         job = job_manager.get_job(job_id)
         if job and job.stop_requested:
+            stop_deadline = lifecycle.request_cancel(job_id, stop_grace_s) if lifecycle else None
+            if stop_deadline is not None and time.time() >= stop_deadline:
+                raise RemoteStopped()
             if stop_sent_at is None:
                 logger.info("Forwarding stop request to remote worker for job %s", job_id)
                 client.request_stop()

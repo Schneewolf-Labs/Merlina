@@ -142,12 +142,16 @@ class RunPodProvider(ComputeProvider):
         return self._to_instance(data)
 
     def terminate(self, instance_id: str) -> None:
-        try:
-            self._request("DELETE", f"/pods/{instance_id}")
-            logger.info("Terminated RunPod pod %s", instance_id)
-        except ProviderError as e:
-            # Idempotency: a pod that is already gone is success.
-            logger.warning("Terminate of pod %s reported: %s", instance_id, e)
+        # _request treats only 404 as already gone. Other failures must remain
+        # visible so the independent reconciler retries them.
+        self._request("DELETE", f"/pods/{instance_id}")
+        logger.info("Requested termination of RunPod pod %s", instance_id)
+
+    def list_instances(self) -> List[RemoteInstance]:
+        data = self._request("GET", "/pods")
+        if not isinstance(data, list) or any(not isinstance(item, dict) or not item.get("id") for item in data):
+            raise ProviderError("RunPod inventory returned an unexpected response; reconciliation incomplete")
+        return [self._to_instance(item) for item in data]
 
     def list_gpu_offers(self) -> List[GpuOffer]:
         data = self._graphql(_GPU_TYPES_QUERY)

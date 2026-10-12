@@ -44,6 +44,13 @@ class ComputeProvider(ABC):
     def terminate(self, instance_id: str) -> None:
         """Destroy an instance. Must be idempotent — safe on already-gone ids."""
 
+    def list_instances(self) -> List[RemoteInstance]:
+        """Complete account inventory, including each instance's raw name.
+
+        Unsupported inventory is an error, never an empty successful scan.
+        """
+        raise ProviderError(f"Provider {self.name} does not support inventory reconciliation")
+
     @abstractmethod
     def list_gpu_offers(self) -> List[GpuOffer]:
         """List rentable GPU types with pricing."""

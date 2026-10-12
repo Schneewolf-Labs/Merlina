@@ -224,6 +224,11 @@ async def _reconcile_jobs_after_restart():
             reattach_orphaned_workers(job_manager, event_loop=loop)
         except Exception as e:
             logger.warning(f"Worker reattach scan failed: {e}")
+        try:
+            from src.remote.cleanup import reconcile_startup
+            reconcile_startup(job_manager, settings)
+        except Exception:
+            logger.exception("Remote startup reconciliation failed; independent cleanup service must retry")
 
     threading.Thread(target=_run, name="WorkerReattach", daemon=True).start()
 
