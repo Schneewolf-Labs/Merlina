@@ -1,5 +1,10 @@
 # Remote Training on Rented Compute ☁️🧙‍♀️
 
+> This guide describes the current self-hosted workflow. The planned
+> [Merlina 3 hosted experience](../dev/merlina-3.md) will manage provider
+> setup and charge users for execution through Merlina. Hosted billing and
+> S3/R2 model artifact storage are not implemented yet.
+
 Train models bigger than your GPUs. Remote mode turns your local Merlina
 into a control plane: give it your RunPod API key and it provisions a GPU
 instance on **your** account, runs the training there, streams progress

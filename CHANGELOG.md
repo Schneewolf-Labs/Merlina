@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Merlina 3.0.0 — "Wishcraft" (development)
+
+- Start the 3.0.0 development cycle with the release name **Wishcraft** and
+  align the source package version with the shared `version.py` metadata.
+- Add the [Merlina 3 plan](docs/dev/merlina-3.md): reliable rented compute,
+  S3/R2 artifacts, a planned managed service at `merlina.swl.ai`, prepaid
+  execution, and an agent-guided model-building workflow.
+- This is a release identity and planning update, not a published 3.0.0 release.
+  Hosted accounts, billing, the built-in advisor, and S3/R2 model artifact
+  storage remain planned. No API or stored-config migration is introduced here.
+
 ### Changed
 - **Job execution core rewritten for correct concurrency** (`src/job_queue.py`, `src/job_manager.py`, `src/websocket_manager.py`, new `src/worker_monitor.py`, `src/worker_reattach.py`): the queue now keeps all state (pending + running) under a single condition variable instead of a `PriorityQueue` plus three separately-locked side tables. Cancelling or deleting a queued job is a plain removal — no tombstones left for a worker to skip, no stale config (with API tokens) kept alive. Submitting a job id that is already queued or running raises instead of silently overwriting the entry. `shutdown()` no longer deadlocks when work is still queued. `JobManager.update_job()` takes `**fields` validated against the schema (unknown columns raise), enables WAL once at init instead of on every connection, and schema migrations are table-driven. The WebSocket manager gains `bind_loop()` / `publish()` so worker threads and the subprocess monitor publish without threading an event-loop reference through every call.
 - **One worker monitor loop** (`src/worker_monitor.py`): the progress-tailing / stop-forwarding / exit-reconciling loop that `run_training_distributed` and the post-restart re-attach path each had their own copy of is now a single `monitor_worker()`. It survives transient DB errors while the worker is alive, escalates SIGTERM → SIGKILL after the grace window exactly once, and marks a job failed whenever its worker exits without a terminal status (the old distributed path only did this for a non-zero exit code, so a worker exiting 0 mid-run left the job "training" forever).
