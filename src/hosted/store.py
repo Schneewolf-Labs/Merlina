@@ -12,6 +12,14 @@ from .auth import hash_password, verify_password, token_hash
 SCHEMA_VERSION = 1
 # Run an equivalent scrypt operation for missing accounts, avoiding cheap enumeration.
 _DUMMY_HASH = hash_password('invalid-account-password')
+# Login throttling counts failures only, keyed by client IP and by client IP plus
+# email. A known email is never locked from everywhere: another address with
+# the right password still signs in. The table is bounded by evicting the
+# oldest buckets, so floods cannot refuse new clients.
+LOGIN_WINDOW_SECONDS = 900
+LOGIN_IP_FAILURES = 100
+LOGIN_IP_EMAIL_FAILURES = 10
+LOGIN_MAX_BUCKETS = 10000
 
 
 def new_id() -> str:
@@ -38,7 +46,7 @@ class HostedStore:
                 statements = [
                     'CREATE TABLE accounts (id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, password_hash TEXT NOT NULL, created_at REAL NOT NULL)',
                     'CREATE TABLE sessions (token_hash TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id), expires_at REAL NOT NULL)',
-                    'CREATE TABLE login_attempts (email TEXT PRIMARY KEY, failures INTEGER NOT NULL, window_start REAL NOT NULL)',
+                    'CREATE TABLE login_attempts (bucket TEXT PRIMARY KEY, failures INTEGER NOT NULL, window_start REAL NOT NULL)',
                     'CREATE TABLE projects (id TEXT PRIMARY KEY, account_id TEXT NOT NULL REFERENCES accounts(id), name TEXT NOT NULL, goal TEXT NOT NULL, created_at REAL NOT NULL, updated_at REAL NOT NULL)',
                     "CREATE TABLE jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), account_id TEXT NOT NULL REFERENCES accounts(id), config TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'draft', result TEXT NOT NULL DEFAULT '{}', created_at REAL NOT NULL, updated_at REAL NOT NULL)",
                     'CREATE TABLE events (id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), job_id TEXT REFERENCES jobs(id), kind TEXT NOT NULL, payload TEXT NOT NULL, created_at REAL NOT NULL)',
@@ -95,29 +103,31 @@ class HostedStore:
             db.execute('INSERT INTO accounts VALUES (?,?,?,?)', (account['id'], email, encoded, account['created_at']))
         return account
 
-    def login(self, email, password, ttl):
+    def login(self, email, password, ttl, client_ip=None):
         email = email.strip().lower()
         now = time.time()
-        # Reserve attempts atomically before the expensive KDF. Hashing the email
-        # bounds key length and separates caller-controlled values from global keys.
-        bucket = 'email:' + token_hash(email)
+        # Reserve a failure atomically before the expensive KDF so concurrent
+        # guesses cannot overshoot the limits; success refunds the reservation.
+        # Hashing bounds key length and separates caller-controlled values.
+        client = str(client_ip or 'unknown')
+        ip_bucket = 'ip:' + token_hash(client)
+        pair_bucket = 'ip-email:' + token_hash(client + '\n' + email)
         with self.transaction() as db:
-            db.execute('DELETE FROM login_attempts WHERE window_start<=?', (now - 900,))
-            global_attempt = db.execute("SELECT * FROM login_attempts WHERE email='global'").fetchone()
-            recent_global = global_attempt and now - global_attempt['window_start'] < 60
-            if recent_global and global_attempt['failures'] >= 240:
-                raise HTTPException(429, 'Login capacity reached; try again shortly')
-            attempt = db.execute('SELECT * FROM login_attempts WHERE email=?', (bucket,)).fetchone()
-            if attempt and attempt['failures'] >= 10:
-                raise HTTPException(429, 'Too many login attempts; try again in 15 minutes')
-            if not attempt and db.execute("SELECT COUNT(*) FROM login_attempts WHERE email != 'global'").fetchone()[0] >= 4096:
-                raise HTTPException(429, 'Login capacity reached; try again shortly')
-            db.execute('INSERT OR REPLACE INTO login_attempts VALUES (?,?,?)',
-                       ('global', global_attempt['failures'] + 1 if recent_global else 1,
-                        global_attempt['window_start'] if recent_global else now))
-            db.execute('INSERT OR REPLACE INTO login_attempts VALUES (?,?,?)',
-                       (bucket, attempt['failures'] + 1 if attempt else 1,
-                        attempt['window_start'] if attempt else now))
+            db.execute('DELETE FROM login_attempts WHERE window_start<=?', (now - LOGIN_WINDOW_SECONDS,))
+            buckets = {}
+            for bucket, limit in ((ip_bucket, LOGIN_IP_FAILURES), (pair_bucket, LOGIN_IP_EMAIL_FAILURES)):
+                attempt = db.execute('SELECT * FROM login_attempts WHERE bucket=?', (bucket,)).fetchone()
+                if attempt and attempt['failures'] >= limit:
+                    raise HTTPException(429, 'Too many failed login attempts; try again later')
+                buckets[bucket] = attempt
+            for bucket, attempt in buckets.items():
+                if attempt is None:
+                    excess = db.execute('SELECT COUNT(*) FROM login_attempts').fetchone()[0] - LOGIN_MAX_BUCKETS + 1
+                    if excess > 0:
+                        db.execute('DELETE FROM login_attempts WHERE bucket IN (SELECT bucket FROM login_attempts ORDER BY window_start LIMIT ?)', (excess,))
+                db.execute('INSERT OR REPLACE INTO login_attempts VALUES (?,?,?)',
+                           (bucket, attempt['failures'] + 1 if attempt else 1,
+                            attempt['window_start'] if attempt else now))
             row = db.execute('SELECT * FROM accounts WHERE email=?', (email,)).fetchone()
 
         # No database transaction or writer lock remains held while scrypt runs.
@@ -130,7 +140,10 @@ class HostedStore:
             current = db.execute('SELECT id,password_hash FROM accounts WHERE id=?', (row['id'],)).fetchone()
             if current is None or current['password_hash'] != row['password_hash']:
                 raise HTTPException(401, 'Invalid email or password')
-            db.execute('DELETE FROM login_attempts WHERE email=?', (bucket,))
+            # Only failures count: clear this client's email bucket and refund
+            # the reservation taken from its IP bucket.
+            db.execute('DELETE FROM login_attempts WHERE bucket=?', (pair_bucket,))
+            db.execute('UPDATE login_attempts SET failures=failures-1 WHERE bucket=? AND failures>0', (ip_bucket,))
             db.execute('DELETE FROM sessions WHERE expires_at<=?', (time.time(),))
             token = secrets.token_urlsafe(32)
             expires = time.time() + ttl

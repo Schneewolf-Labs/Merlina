@@ -20,6 +20,8 @@ class HostedSettings:
     billing_failure_policy: str | None = None
     billing_overage_policy: str | None = None
     max_dataset_bytes: int = 10 * 1024 * 1024
+    # Peer addresses allowed to set X-Forwarded-For (e.g. the local reverse proxy).
+    trusted_proxies: tuple[str, ...] = ()
 
     @classmethod
     def from_env(cls):
@@ -44,6 +46,9 @@ class HostedSettings:
         origins = os.getenv(prefix + 'CORS_ORIGINS')
         if origins is not None:
             values['cors_origins'] = tuple(item.strip() for item in origins.split(',') if item.strip())
+        proxies = os.getenv(prefix + 'TRUSTED_PROXIES')
+        if proxies is not None:
+            values['trusted_proxies'] = tuple(item.strip() for item in proxies.split(',') if item.strip())
         return cls(**values)
 
     def __post_init__(self):

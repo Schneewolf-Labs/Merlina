@@ -7,11 +7,24 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from .auth import Principal, bearer_token, require_principal
-from .schemas import DatasetUpload, JobRequest, ProjectRequest, SessionRequest
+from .schemas import DatasetUpload, JobRequest, ProjectRequest, ProjectUpdate, SessionRequest
 from .services import save_dataset, validate_job_config
 from .settings import HostedSettings
 from .store import HostedStore
 from version import __version__
+
+
+def client_ip(request, trusted_proxies=()):
+    """Peer address; X-Forwarded-For is honoured only from configured proxies."""
+    peer = request.client.host if request.client else 'unknown'
+    if peer not in trusted_proxies:
+        return peer
+    # Walk right to left past our own proxies; the first other hop is the client.
+    hops = [hop.strip() for hop in request.headers.get('x-forwarded-for', '').split(',') if hop.strip()]
+    for hop in reversed(hops):
+        if hop not in trusted_proxies:
+            return hop
+    return peer
 
 
 def create_hosted_app(settings=None):
@@ -67,8 +80,9 @@ def create_hosted_app(settings=None):
     prefix = '/api/hosted'
 
     @app.post(prefix + '/session')
-    def login(body: SessionRequest):
-        return app.state.store.login(body.email, body.password, settings.session_ttl_seconds)
+    def login(body: SessionRequest, request: Request):
+        return app.state.store.login(body.email, body.password, settings.session_ttl_seconds,
+                                     client_ip(request, settings.trusted_proxies))
 
     @app.get(prefix + '/session')
     def session(principal: Principal = Depends(require_principal)):
@@ -92,8 +106,8 @@ def create_hosted_app(settings=None):
         return app.state.store.require_project(principal.account_id, project_id)
 
     @app.patch(prefix + '/projects/{project_id}')
-    def update_project(project_id: str, body: ProjectRequest, principal: Principal = Depends(require_principal)):
-        return app.state.store.update_project(principal.account_id, project_id, **body.model_dump())
+    def update_project(project_id: str, body: ProjectUpdate, principal: Principal = Depends(require_principal)):
+        return app.state.store.update_project(principal.account_id, project_id, **body.model_dump(exclude_unset=True))
 
     @app.get(prefix + '/projects/{project_id}/datasets')
     def datasets(project_id: str, principal: Principal = Depends(require_principal)):

@@ -13,6 +13,7 @@ From a repository checkout, install the minimal control-plane dependencies:
 ```sh
 python -m pip install 'fastapi>=0.104.0' 'pydantic>=2.0.0' 'uvicorn>=0.24.0'
 export MERLINA_HOSTED_DATA_DIR=/var/lib/merlina-hosted
+export MERLINA_HOSTED_TRUSTED_PROXIES=127.0.0.1  # the local TLS reverse proxy
 python -m src.hosted.cli create-account pilot@example.com
 uvicorn src.hosted.app:create_hosted_app --factory --host 127.0.0.1 --port 8000 --workers 1
 ```
@@ -28,6 +29,8 @@ mount the local app under the same public origin or proxy its routes.
 The factory reads `HostedSettings.from_env()`. Settings use the
 `MERLINA_HOSTED_` prefix: `DATA_DIR`, `DATABASE_PATH`, `SESSION_TTL_SECONDS`,
 `MAX_DATASET_BYTES`, `CORS_ORIGINS` (comma-separated explicit origins),
+`TRUSTED_PROXIES` (comma-separated peer addresses whose `X-Forwarded-For` is
+honoured; empty by default, so the TCP peer address is used),
 `PAID_EXECUTION_ENABLED` (strict `true` or `false`, default false),
 `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `CHECKOUT_SUCCESS_URL`,
 `CHECKOUT_CANCEL_URL`, `BILLING_CURRENCY` (USD only), `BILLING_POLICY_VERSION`,
@@ -48,18 +51,25 @@ token. `GET /api/hosted/session` returns the authenticated account.
 
 All remaining API calls require `Authorization: Bearer TOKEN`. Cookies and
 URL query tokens are not accepted. Browser clients use session storage. The
-server atomically reserves login attempts before password verification (10 per
-email per 15 minutes, reset on successful login; 240 total per minute).
-Password verification runs outside database transactions so unauthenticated
-requests cannot hold the billing writer lock during the KDF. Hashed email
-throttle buckets expire after 15 minutes and are capped at 4096 plus one global
-bucket; random-email sprays cannot grow the throttle table without bound.
-Use a reverse proxy for per-IP/distributed brute-force limits. There is no public
+server atomically reserves a failure before password verification and refunds
+it on success, so only failed logins count. Limits are per client IP (100
+failures per 15 minutes) and per client IP plus email (10 per 15 minutes,
+cleared on success). A known email is never locked from everywhere: a correct
+password from an address that is not itself throttled still signs in. The
+client IP is the TCP peer unless that peer is listed in `TRUSTED_PROXIES`, in
+which case the rightmost untrusted `X-Forwarded-For` hop is used. Behind the
+recommended local reverse proxy, set `TRUSTED_PROXIES=127.0.0.1`; otherwise
+every client shares the proxy's bucket. Password verification runs outside
+database transactions so unauthenticated requests cannot hold the billing
+writer lock during the KDF. Hashed throttle buckets expire after 15 minutes
+and the table is capped at 10000 rows by evicting the oldest buckets, so
+sprays cannot grow it without bound or refuse new clients.
+Use a reverse proxy or WAF for distributed brute-force limits. There is no public
 signup, password-reset email, MFA or SSO yet. A public rollout requires an
 identity provider or those account lifecycle controls.
 
 - `/api/hosted/projects`: list or create `{name,goal}`.
-- `/api/hosted/projects/{project_id}`: retrieve or replace `{name,goal}` via PATCH.
+- `/api/hosted/projects/{project_id}`: retrieve, or PATCH any of `{name,goal}` (omitted fields are kept).
 - `/api/hosted/projects/{project_id}/datasets`: list or POST `{name,content}`,
   where `content` is JSONL, limited to 10 MiB UTF-8 by default.
 - `/api/hosted/projects/{project_id}/jobs`: list or POST `{config}` to save a draft.

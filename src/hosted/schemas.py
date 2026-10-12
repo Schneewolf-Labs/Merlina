@@ -20,6 +20,11 @@ class ProjectRequest(StrictModel):
     goal: str = Field(default='', max_length=10000)
 
 
+class ProjectUpdate(StrictModel):
+    name: str = Field(default=None, min_length=1, max_length=120)
+    goal: str = Field(default=None, max_length=10000)
+
+
 class DatasetUpload(StrictModel):
     name: str = Field(min_length=1, max_length=120)
     content: str = Field(min_length=1, max_length=10 * 1024 * 1024)

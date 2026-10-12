@@ -259,25 +259,100 @@ def test_login_throttle_bounded_pruned_and_reserved_before_kdf(hosted, monkeypat
     monkeypatch.setattr(store_module, 'verify_password', lambda *args: calls.append(args) or False)
     with store.transaction() as db:
         db.execute('DELETE FROM login_attempts')
-    for index in range(240):
+    for index in range(store_module.LOGIN_IP_FAILURES):
         with pytest.raises(HTTPException) as error:
-            store.login(f'random{index}@example.com', 'wrong', 60)
+            store.login(f'random{index}@example.com', 'wrong', 60, '203.0.113.9')
         assert error.value.status_code == 401
+    # The spraying IP is throttled before the KDF runs.
     with pytest.raises(HTTPException) as error:
-        store.login('another@example.com', 'wrong', 60)
+        store.login('another@example.com', 'wrong', 60, '203.0.113.9')
     assert error.value.status_code == 429
-    assert len(calls) == 240
+    assert len(calls) == store_module.LOGIN_IP_FAILURES
     with store.transaction() as db:
-        assert db.execute('SELECT COUNT(*) FROM login_attempts').fetchone()[0] == 241
         db.execute('UPDATE login_attempts SET window_start=?', (time.time() - 901,))
     with pytest.raises(HTTPException) as error:
-        store.login('new@example.com', 'wrong', 60)
+        store.login('new@example.com', 'wrong', 60, '203.0.113.9')
     assert error.value.status_code == 401
     with store.transaction() as db:
         assert db.execute('SELECT COUNT(*) FROM login_attempts').fetchone()[0] == 2
         db.executemany('INSERT INTO login_attempts VALUES (?,?,?)',
-                       [(f'old-{i}', 1, time.time()) for i in range(4095)])
+                       [(f'old-{i}', 1, time.time() - 600) for i in range(store_module.LOGIN_MAX_BUCKETS)])
+    # A full table evicts the oldest buckets instead of refusing new clients.
     with pytest.raises(HTTPException) as error:
-        store.login('over-cap@example.com', 'wrong', 60)
+        store.login('over-cap@example.com', 'wrong', 60, '198.51.100.7')
+    assert error.value.status_code == 401
+    with store.transaction() as db:
+        assert db.execute('SELECT COUNT(*) FROM login_attempts').fetchone()[0] == store_module.LOGIN_MAX_BUCKETS
+        assert db.execute("SELECT COUNT(*) FROM login_attempts WHERE bucket='old-0'").fetchone()[0] == 0
+
+
+def fast_verify(monkeypatch):
+    import src.hosted.store as store_module
+    monkeypatch.setattr(store_module, 'verify_password', lambda password, encoded: password == 'secure password 123')
+
+
+def test_login_flood_cannot_lock_out_other_clients(hosted, monkeypatch):
+    from fastapi import HTTPException
+    import src.hosted.store as store_module
+    _, store, accounts, _ = hosted
+    fast_verify(monkeypatch)
+    victim = accounts[0]['email']
+    # Junk flood from many addresses, plus targeted guesses at the victim.
+    for index in range(300):
+        with pytest.raises(HTTPException):
+            store.login(f'junk{index}@example.com', 'wrong', 60, f'10.0.{index // 250}.{index % 250}')
+    for _ in range(store_module.LOGIN_IP_EMAIL_FAILURES):
+        with pytest.raises(HTTPException) as error:
+            store.login(victim, 'guess', 60, '203.0.113.66')
+        assert error.value.status_code == 401
+    with pytest.raises(HTTPException) as error:
+        store.login(victim, 'secure password 123', 60, '203.0.113.66')
     assert error.value.status_code == 429
-    assert len(calls) == 241
+    assert store.login(victim, 'secure password 123', 60, '192.0.2.10')['account']['email'] == victim
+
+
+def test_successful_logins_do_not_consume_throttle(hosted, monkeypatch):
+    import src.hosted.store as store_module
+    _, store, accounts, _ = hosted
+    fast_verify(monkeypatch)
+    for _ in range(store_module.LOGIN_IP_FAILURES + 5):
+        store.login(accounts[0]['email'], 'secure password 123', 60, '192.0.2.10')
+    with store.transaction() as db:
+        assert db.execute('SELECT COALESCE(SUM(failures),0) FROM login_attempts').fetchone()[0] == 0
+
+
+def test_client_ip_trusts_forwarded_for_only_from_configured_proxy(tmp_path, monkeypatch):
+    from src.hosted.app import client_ip
+    from starlette.requests import Request
+
+    def request(peer, forwarded=None):
+        headers = [(b'x-forwarded-for', forwarded.encode())] if forwarded else []
+        return Request({'type': 'http', 'client': (peer, 1234), 'headers': headers})
+
+    assert client_ip(request('203.0.113.5', '1.2.3.4')) == '203.0.113.5'
+    assert client_ip(request('127.0.0.1', 'spoof, 198.51.100.2'), ('127.0.0.1',)) == '198.51.100.2'
+    assert client_ip(request('127.0.0.1'), ('127.0.0.1',)) == '127.0.0.1'
+    settings = HostedSettings(data_dir=tmp_path, trusted_proxies=('127.0.0.1',))
+    app = create_hosted_app(settings)
+    app.state.store.create_account('victim@example.com', 'secure password 123')
+    fast_verify(monkeypatch)
+    client = TestClient(app, client=('127.0.0.1', 5000))
+    for _ in range(10):
+        assert client.post('/api/hosted/session', json={'email': 'victim@example.com', 'password': 'x'},
+                           headers={'X-Forwarded-For': '203.0.113.66'}).status_code == 401
+    assert client.post('/api/hosted/session', json={'email': 'victim@example.com', 'password': 'secure password 123'},
+                       headers={'X-Forwarded-For': '203.0.113.66'}).status_code == 429
+    assert client.post('/api/hosted/session', json={'email': 'victim@example.com', 'password': 'secure password 123'},
+                       headers={'X-Forwarded-For': '192.0.2.10'}).status_code == 200
+
+
+def test_project_patch_is_partial(hosted):
+    *_, (alice, _) = hosted
+    pid = project(alice)
+    response = alice.patch(f'/api/hosted/projects/{pid}', json={'name': 'Renamed'})
+    assert response.status_code == 200
+    assert response.json()['name'] == 'Renamed' and response.json()['goal'] == 'Build a helper'
+    response = alice.patch(f'/api/hosted/projects/{pid}', json={'goal': 'New goal'})
+    assert response.json()['name'] == 'Renamed' and response.json()['goal'] == 'New goal'
+    assert alice.patch(f'/api/hosted/projects/{pid}', json={'name': ''}).status_code == 422
+    assert alice.patch(f'/api/hosted/projects/{pid}', json={'name': None}).status_code == 422
