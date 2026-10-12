@@ -111,3 +111,21 @@ Before advertising AWS/R2 support, run a real text training smoke test on each:
 use a pinned object-store dataset, interrupt and retry an upload, overwrite an
 existing artifact, download and verify it, and record cleanup plus observed
 compute/storage/transfer charges. No such paid run is part of the unit suite.
+
+## Hosted worker capabilities
+
+The hosted runtime creates a separate account/project/job prefix and issues an
+opaque, hashed, expiring broker token. The worker uses that token only at the
+hosted capability endpoint. The endpoint checks exact prefix ownership and a
+transactional cumulative byte quota before issuing a short-lived GET/PUT URL;
+the worker sends data directly to the bucket without forwarding the broker token.
+There is no worker list/delete permission or platform AWS key. Access may be
+revoked by job ID; already signed URLs remain valid until their short expiry.
+
+The current hosted transport uses single-object PUT, so individual files must
+fit the provider's single-PUT limit (5 GiB on S3). Configure checkpoint sharding
+accordingly before measuring a workload. Self-hosted s3fs transfers can use
+multipart uploads. Hosted quotas conservatively count allocated keys across
+checkpoint generations and failed attempts; they do not reclaim bytes during a
+run. Choose checkpoint cadence, shards and quota together. A full quota preserves
+prior committed artifacts and reports upload failure; it does not delete them.
