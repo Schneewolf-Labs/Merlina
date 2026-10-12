@@ -79,8 +79,31 @@ and never copies:
   `dataset_handlers/internal_store.PRIVATE_NAME_MARKERS`, for example
   `incident` or `private/`);
 - any key under `datasets/<name>/` when **any** revision manifest of `<name>`
-  has `"private": true`, or when a manifest cannot be read (the guard fails
+  has `"private": true`, or when a manifest can't be read (the guard fails
   closed). The `latest` pointer is refused too.
+- any key inside a **remote-training artifact** unless its manifest proves the
+  training data is shareable. This covers adapters, merged models, checkpoints
+  and staged inputs, for example under `runs/<job>/<artifact>/`. The artifact
+  root is the nearest ancestor directory whose `manifest.json` is in the
+  artifact-store format (`files` / `generation` / `metadata`, see
+  `src/remote/s3_artifacts.py`). Every key under that root is refused, including
+  the manifest itself and `generations/...`, when:
+  - any dataset source (`source`, `additional_sources[]`, `eval_source` in
+    `metadata.datasets` or `metadata.training_config.dataset`) has a `repo_id`,
+    `name`, `uri` or path that matches a private marker;
+  - an `internal` / `swl://` source points to a dataset that is private (by
+    manifest flag or name), or that is not in the source tier, so it can't be
+    checked;
+  - a source is `local_file` or `upload`. Their contents can't be known from the
+    artifact, so they are treated as private. Datasets staged for remote
+    workers are recorded this way, so artifacts trained on them are refused.
+  - the base model id matches a private marker;
+  - the manifest records no dataset metadata at all, or can't be read.
+
+  The only artifacts that can be shared are those whose sources are all
+  public HuggingFace repos or non-private internal datasets. Artifact
+  generation data with no manifest (for example, an orphaned upload) is
+  refused too.
 
 The only override is the CLI's `--allow-private` flag, which works like
 `merlina datasets promote --allow-private`. The API rejects an `allow_private`

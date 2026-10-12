@@ -78,10 +78,10 @@ class FakeS3:
             raise FileNotFoundError(path)
         return {"name": path, "type": "file", "size": len(self.objects[path])}
 
-    def cat_file(self, path):
+    def cat_file(self, path, start=None, end=None):
         if path not in self.objects:
             raise FileNotFoundError(path)
-        return self.objects[path]
+        return self.objects[path][start:end]
 
     def metadata(self, path):
         if path not in self.objects:
@@ -444,6 +444,147 @@ class TestPrivacyGuard:
         _dataset(fakes["external"], "secret-ds", "r1", private=True)
         res = st.sync(tiers["external"], tiers["internal"], "")
         assert not res.guarded and not res.refused and len(res.copied) == 3
+
+
+# ── privacy guard: remote-training artifacts ────────────────────────────────
+GEN = "0123456789abcdef0123456789abcdef"
+
+
+def _hf(repo="org/public-dpo"):
+    return {"source_type": "huggingface", "repo_id": repo, "split": "train"}
+
+
+def _artifact(fs, root, sources=None, *, eval_source=None, in_training_config=False,
+              model="org/base-model", raw_manifest=None):
+    """Write an artifact the way src/remote/s3_artifacts.py lays it out."""
+    files = ["adapter_model.safetensors", "adapter_config.json"]
+    for f in files:
+        fs.put(f"{root}/generations/{GEN}/{f}", b"weights-" + f.encode())
+    if raw_manifest is not None:
+        fs.put(f"{root}/manifest.json", raw_manifest)
+        return
+    dataset = {}
+    if sources is not None:
+        dataset = {"source": sources[0], "additional_sources": sources[1:], "eval_source": eval_source}
+    metadata = {"model": {"id": model, "revision": None}, "runtime": {"python": "3.10"}}
+    if in_training_config:
+        metadata.update(datasets={}, training_config={"dataset": dataset or None})
+    else:
+        metadata.update(datasets=dataset, training_config={"dataset": dataset or None})
+    doc = {"version": 1, "name": root.split("/", 1)[1], "generation": GEN,
+           "created_at": "2026-01-01T00:00:00+00:00", "checkpoints": [],
+           "files": [{"path": f, "size": 1, "sha256": "0" * 64} for f in files],
+           "metadata": metadata}
+    fs.put(f"{root}/manifest.json", json.dumps(doc))
+
+
+def _keys_under(fs, root):
+    return {k for k in fs.keys() if k.startswith(root + "/")}
+
+
+class TestArtifactGuard:
+    def _run(self, tiers, prefix="runs/", **kw):
+        return st.sync(tiers["internal"], tiers["external"], prefix, **kw)
+
+    def test_public_hf_artifact_is_allowed(self, tiers, fakes):
+        _artifact(fakes["internal"], "runs/job1/adapter", [_hf()])
+        res = self._run(tiers)
+        assert not res.refused and len(res.copied) == 3
+        assert fakes["external"].keys() == sorted(_keys_under(fakes["internal"], "runs/job1/adapter"))
+
+    def test_dataset_metadata_only_in_training_config(self, tiers, fakes):
+        _artifact(fakes["internal"], "runs/job1/adapter", [_hf()], in_training_config=True)
+        assert not self._run(tiers, dry_run=True).refused
+
+    def _assert_refused(self, tiers, fakes, root, needle):
+        res = self._run(tiers, dry_run=True)
+        refused = {r["key"]: r["reason"] for r in res.refused}
+        assert set(refused) == _keys_under(fakes["internal"], root), refused
+        assert f"{root}/manifest.json" in refused
+        assert any("/generations/" in k for k in refused)
+        assert all(needle in r for r in refused.values()), refused
+        assert not res.to_copy
+
+    def test_private_marker_in_hf_repo(self, tiers, fakes):
+        _artifact(fakes["internal"], "runs/j/adapter", [_hf("lab/schneewolf-west-logs")])
+        self._assert_refused(tiers, fakes, "runs/j/adapter", "private marker")
+
+    def test_private_marker_in_additional_and_eval_sources(self, tiers, fakes):
+        _artifact(fakes["internal"], "runs/a/adapter", [_hf(), _hf("lab/incident-notes")])
+        _artifact(fakes["internal"], "runs/b/adapter", [_hf()], eval_source=_hf("lab/private/eval"))
+        res = self._run(tiers, dry_run=True)
+        assert {r["key"].split("/")[1] for r in res.refused} == {"a", "b"}
+
+    @pytest.mark.parametrize("kind", ["local_file", "upload"])
+    def test_local_and_upload_sources_fail_closed(self, tiers, fakes, kind):
+        _artifact(fakes["internal"], "runs/j/merged", [_hf(), {"source_type": kind, "file_format": "jsonl"}])
+        self._assert_refused(tiers, fakes, "runs/j/merged", "cannot be verified")
+
+    def test_internal_source_private_dataset(self, tiers, fakes):
+        _dataset(fakes["internal"], "secret-ds", "r1", private=True)
+        _artifact(fakes["internal"], "runs/j/adapter", [{"source_type": "internal", "uri": "swl://secret-ds@r1"}])
+        self._assert_refused(tiers, fakes, "runs/j/adapter", "private internal dataset")
+
+    def test_internal_source_public_dataset_allowed(self, tiers, fakes):
+        _dataset(fakes["internal"], "open-ds", "r1")
+        _artifact(fakes["internal"], "runs/j/adapter", [{"source_type": "internal", "uri": "swl://open-ds"}])
+        res = self._run(tiers, dry_run=True)
+        assert not res.refused and len(res.to_copy) == 3
+
+    def test_internal_source_missing_dataset_fails_closed(self, tiers, fakes):
+        _artifact(fakes["internal"], "runs/j/adapter", [{"source_type": "internal", "uri": "swl://gone@r1"}])
+        self._assert_refused(tiers, fakes, "runs/j/adapter", "not in this tier")
+
+    def test_no_dataset_metadata_fails_closed(self, tiers, fakes):
+        _artifact(fakes["internal"], "runs/j/merged", None)
+        self._assert_refused(tiers, fakes, "runs/j/merged", "no dataset metadata")
+
+    def test_unreadable_manifest_fails_closed(self, tiers, fakes):
+        _artifact(fakes["internal"], "runs/j/merged", raw_manifest="{oops")
+        self._assert_refused(tiers, fakes, "runs/j/merged", "unreadable")
+
+    def test_orphan_generation_fails_closed(self, tiers, fakes):
+        fakes["internal"].put(f"runs/j/adapter/generations/{GEN}/w.bin", b"x")
+        res = self._run(tiers, dry_run=True)
+        assert [r["key"] for r in res.refused] == [f"runs/j/adapter/generations/{GEN}/w.bin"]
+        assert "without a manifest" in res.refused[0]["reason"]
+
+    def test_private_base_model(self, tiers, fakes):
+        _artifact(fakes["internal"], "runs/j/adapter", [_hf()], model="lab/vps-incident-tuned")
+        self._assert_refused(tiers, fakes, "runs/j/adapter", "base model")
+
+    def test_narrow_prefix_still_finds_root(self, tiers, fakes):
+        _artifact(fakes["internal"], "runs/j/merged", None)
+        res = self._run(tiers, prefix=f"runs/j/merged/generations/{GEN}/", dry_run=True)
+        assert len(res.refused) == 2 and not res.to_copy
+
+    def test_mixed_run_copies_only_shareable_artifact(self, tiers, fakes):
+        _artifact(fakes["internal"], "runs/j/adapter", [_hf()])
+        _artifact(fakes["internal"], "runs/j/merged", None)
+        res = self._run(tiers, move=True)
+        assert {k.split("/")[2] for k in fakes["external"].keys()} == {"adapter"}
+        assert {r["key"].split("/")[2] for r in res.refused} == {"merged"}
+        # move deletes only the verified, shareable copies
+        assert _keys_under(fakes["internal"], "runs/j/merged") and not _keys_under(fakes["internal"], "runs/j/adapter")
+
+    def test_allow_private_bypasses_artifact_guard(self, tiers, fakes):
+        _artifact(fakes["internal"], "runs/j/merged", [{"source_type": "upload"}])
+        res = self._run(tiers, allow_private=True)
+        assert not res.refused and len(res.copied) == 3
+
+    def test_no_artifact_guard_into_private_tier(self, tiers, fakes):
+        _artifact(fakes["external"], "runs/j/merged", None)
+        res = st.sync(tiers["external"], tiers["internal"], "runs/")
+        assert not res.refused and len(res.copied) == 3
+
+    def test_api_has_no_override_and_reports_refusal(self, api, fakes):
+        client, _ = api
+        _artifact(fakes["internal"], "runs/j/merged", None)
+        r = client.post("/storage/sync", json={"src": "internal", "dst": "external", "prefix": "runs/"})
+        assert r.json()["plan"]["counts"]["refused"] == 3
+        r = client.post("/storage/sync", json={"src": "internal", "dst": "external", "prefix": "runs/",
+                                               "dry_run": False, "allow_private": True})
+        assert r.status_code == 422 and fakes["external"].keys() == []
 
 
 # ── delete ──────────────────────────────────────────────────────────────────

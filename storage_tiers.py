@@ -43,6 +43,12 @@ When the source tier is private (``internal``) and the destination is shared,
 * matches a private marker (``PRIVATE_NAME_MARKERS``, e.g. incident data), or
 * lives under ``datasets/<name>/`` where any revision manifest of ``<name>`` is
   flagged ``private`` (or cannot be parsed — the guard fails closed).
+* lives inside a remote-training artifact (adapter, merged model, checkpoint,
+  staged input) whose manifest does not prove its training data shareable:
+  every recorded dataset source must be a public HuggingFace repo or a
+  non-private internal dataset present in the source tier. Local-file/upload
+  sources, missing dataset metadata and unreadable manifests are refused, as
+  is artifact generation data with no manifest at all.
 
 The only override is ``allow_private=True``, exposed solely as the CLI's
 ``--allow-private`` flag (mirroring ``merlina datasets promote``); the API and
@@ -401,17 +407,61 @@ def make_bucket(tier: Tier, name: str) -> dict:
 
 
 # ── privacy guard ─────────────────────────────────────────────────────────────
+_GENERATION_RE = re.compile(r"(^|/)generations/[0-9a-f]{32}/")
+# Artifact manifests are bounded by the artifact store; read no more than this.
+_MAX_ARTIFACT_MANIFEST = 16 * 1024 * 1024
+_KNOWN_SOURCE_TYPES = {"huggingface", "internal", "local_file", "upload"}
+
+
+def _is_artifact_manifest(doc: Any) -> bool:
+    """True for a manifest in the artifact-store format (src/remote/s3_artifacts.py)."""
+    return isinstance(doc, dict) and "files" in doc and ("generation" in doc or "metadata" in doc)
+
+
+def _dataset_sources(dataset_cfg: Any) -> list[dict]:
+    """``source``, ``additional_sources[]`` and ``eval_source`` of a dataset config."""
+    if not isinstance(dataset_cfg, dict):
+        return []
+    out = []
+    if isinstance(dataset_cfg.get("source"), dict):
+        out.append(dataset_cfg["source"])
+    for extra in dataset_cfg.get("additional_sources") or []:
+        if isinstance(extra, dict):
+            out.append(extra)
+    if isinstance(dataset_cfg.get("eval_source"), dict):
+        out.append(dataset_cfg["eval_source"])
+    return out
+
+
 class PrivacyGuard:
-    """Decides which keys of a private tier must not reach a shared tier."""
+    """Decides which keys of a private tier must not reach a shared tier.
+
+    Three rules, all failing closed:
+
+    * a path matching a private marker;
+    * a key under ``datasets/<name>/`` when any revision manifest of ``<name>`` is
+      private or unreadable;
+    * a key inside a remote-training artifact (the nearest ancestor directory
+      holding an artifact-store ``manifest.json``: adapters, merged models,
+      checkpoints, staged inputs) unless that artifact's recorded training data
+      is provably shareable — every dataset source a public HuggingFace repo, or
+      an internal dataset that exists here and is not private. Local-file and
+      upload sources, missing dataset metadata and unreadable manifests are
+      refused. Artifact generation data with no manifest is refused too.
+    """
 
     def __init__(self, tier: Tier):
         from dataset_handlers.internal_store import is_private_name  # lazy (pulls `datasets`)
         self.tier = tier
         self._is_private_name = is_private_name
-        self._private_dataset_dirs: Optional[set[str]] = None
         self._groups_scanned: set[str] = set()
         self._private_dirs: set[str] = set()
+        self._dataset_dirs: set[str] = set()
+        # dir -> parsed manifest.json, the string "unreadable", or None (absent)
+        self._manifests: dict[str, Any] = {}
+        self._artifact_verdicts: dict[str, Optional[str]] = {}
 
+    # ── datasets/<name>/ ──
     def _scan_group(self, group: str) -> None:
         """Read every manifest under ``datasets/<group>`` (``group`` is the first
         name segment; names may contain slashes) and record private dataset dirs."""
@@ -423,6 +473,7 @@ class PrivacyGuard:
                 continue
             rev_dir = key[: -len("/manifest.json")]
             dataset_dir = rev_dir.rsplit("/", 1)[0] if "/" in rev_dir[len("datasets/"):] else rev_dir
+            self._dataset_dirs.add(dataset_dir + "/")
             private = True  # fail closed on unreadable/invalid manifests
             try:
                 raw = self.tier.fs.cat_file(self.tier.path(key))
@@ -434,17 +485,118 @@ class PrivacyGuard:
             if private:
                 self._private_dirs.add(dataset_dir + "/")
 
+    def _dataset_refusal(self, key: str) -> Optional[str]:
+        rest = key[len("datasets/"):]
+        if "/" not in rest:
+            return None
+        self._scan_group(rest.split("/", 1)[0])
+        for d in self._private_dirs:
+            if key.startswith(d):
+                return f"dataset manifest is private ({d})"
+        return None
+
+    # ── remote-training artifacts ──
+    def _manifest_in(self, d: str) -> Any:
+        if d not in self._manifests:
+            path = self.tier.path(f"{d}/manifest.json" if d else "manifest.json")
+            try:
+                raw = self.tier.fs.cat_file(path, start=0, end=_MAX_ARTIFACT_MANIFEST + 1)
+                if len(raw) > _MAX_ARTIFACT_MANIFEST:
+                    raise ValueError("manifest too large")
+                self._manifests[d] = json.loads(raw)
+            except FileNotFoundError:
+                self._manifests[d] = None
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"privacy guard: unreadable {d}/manifest.json ({type(e).__name__})")
+                self._manifests[d] = "unreadable"
+        return self._manifests[d]
+
+    def _artifact_root(self, key: str) -> Optional[tuple[str, Any]]:
+        """Nearest ancestor dir whose manifest.json is an artifact manifest (or
+        is unreadable, which fails closed). ``None`` when there is none."""
+        parts = key.split("/")[:-1]
+        for i in range(len(parts), 0, -1):
+            d = "/".join(parts[:i])
+            doc = self._manifest_in(d)
+            if doc == "unreadable" or _is_artifact_manifest(doc):
+                return d, doc
+        return None
+
+    def _internal_dataset_refusal(self, uri: str) -> Optional[str]:
+        from dataset_handlers.internal_store import InternalStoreError, parse_swl_uri
+        try:
+            name, _rev = parse_swl_uri(uri)
+        except InternalStoreError:
+            return f"internal dataset reference {uri!r} is malformed"
+        if self._is_private_name(name):
+            return f"trained on internal dataset {name!r}, which matches a private marker"
+        self._scan_group(name.split("/", 1)[0])
+        d = f"datasets/{name}/"
+        if d not in self._dataset_dirs:
+            return f"trained on internal dataset {name!r}, which is not in this tier (cannot verify it is shareable)"
+        if d in self._private_dirs:
+            return f"trained on private internal dataset {name!r}"
+        return None
+
+    def _source_refusal(self, source: dict) -> Optional[str]:
+        kind = str(source.get("source_type") or "huggingface")
+        for field_name in ("repo_id", "name", "uri", "path", "file_path", "dataset_id"):
+            v = source.get(field_name)
+            if isinstance(v, str) and v and self._is_private_name(v):
+                return f"trained on dataset {v!r}, which matches a private marker"
+        if kind in ("local_file", "upload"):
+            return (f"trained on a {kind} dataset; its contents cannot be verified "
+                    f"from the artifact, so it is treated as private")
+        uri = source.get("uri")
+        if kind == "internal" or (isinstance(uri, str) and uri.startswith("swl://")):
+            if not isinstance(uri, str) or not uri:
+                return "trained on an internal dataset with no recorded uri"
+            return self._internal_dataset_refusal(uri)
+        if kind not in _KNOWN_SOURCE_TYPES:
+            return f"trained on an unknown dataset source type {kind!r}"
+        if not source.get("repo_id"):
+            return "trained on a HuggingFace source with no recorded repo_id"
+        return None
+
+    def _artifact_refusal(self, root: str, doc: Any) -> Optional[str]:
+        if root in self._artifact_verdicts:
+            return self._artifact_verdicts[root]
+        verdict = self._judge_artifact(root, doc)
+        self._artifact_verdicts[root] = verdict
+        return verdict
+
+    def _judge_artifact(self, root: str, doc: Any) -> Optional[str]:
+        where = f"artifact {root}/"
+        if doc == "unreadable":
+            return f"{where}: manifest unreadable (cannot verify its training data)"
+        metadata = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+        model = metadata.get("model") if isinstance(metadata.get("model"), dict) else {}
+        if isinstance(model.get("id"), str) and self._is_private_name(model["id"]):
+            return f"{where}: base model {model['id']!r} matches a private marker"
+        training_config = metadata.get("training_config") if isinstance(metadata.get("training_config"), dict) else {}
+        sources = _dataset_sources(metadata.get("datasets")) + _dataset_sources(training_config.get("dataset"))
+        if not sources:
+            return f"{where}: manifest records no dataset metadata (cannot verify its training data)"
+        for source in sources:
+            reason = self._source_refusal(source)
+            if reason:
+                return f"{where}: {reason}"
+        return None
+
+    # ── entry point ──
     def check(self, key: str) -> Optional[str]:
         """The refusal reason for ``key``, or ``None`` if it may be shared."""
         if self._is_private_name(key):
             return "path matches a private marker"
         if key.startswith("datasets/"):
-            rest = key[len("datasets/"):]
-            if "/" in rest:
-                self._scan_group(rest.split("/", 1)[0])
-                for d in self._private_dirs:
-                    if key.startswith(d):
-                        return f"dataset manifest is private ({d})"
+            reason = self._dataset_refusal(key)
+            if reason:
+                return reason
+        found = self._artifact_root(key)
+        if found is not None:
+            return self._artifact_refusal(*found)
+        if _GENERATION_RE.search(key):
+            return "artifact generation data without a manifest (cannot verify its training data)"
         return None
 
 

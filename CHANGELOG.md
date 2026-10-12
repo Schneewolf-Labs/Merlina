@@ -36,8 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Sync streams objects in chunks, stores a SHA-256 as object metadata, skips
   identical objects, and with `--move` deletes sources only after every copy is
   verified. Private data (private manifests or private-marker paths) is never
-  copied from the private tier to a shared one. The only override is the CLI's
-  `--allow-private`.
+  copied from the private tier to a shared one. This includes remote-training
+  artifacts whose recorded training data isn't provably public. The only
+  override is the CLI's `--allow-private`.
 
 ### Changed
 - **Job execution core rewritten for correct concurrency** (`src/job_queue.py`, `src/job_manager.py`, `src/websocket_manager.py`, new `src/worker_monitor.py`, `src/worker_reattach.py`): the queue now keeps all state (pending + running) under a single condition variable instead of a `PriorityQueue` plus three separately-locked side tables. Cancelling or deleting a queued job is a plain removal — no tombstones left for a worker to skip, no stale config (with API tokens) kept alive. Submitting a job id that is already queued or running raises instead of silently overwriting the entry. `shutdown()` no longer deadlocks when work is still queued. `JobManager.update_job()` takes `**fields` validated against the schema (unknown columns raise), enables WAL once at init instead of on every connection, and schema migrations are table-driven. The WebSocket manager gains `bind_loop()` / `publish()` so worker threads and the subprocess monitor publish without threading an event-loop reference through every call.
