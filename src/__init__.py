@@ -13,18 +13,28 @@ except ImportError:
     websocket_manager = None
     WebSocketManager = None
 
-from .preflight_checks import PreflightValidator, validate_config, ValidationError
-from .llama_cpp_resolver import resolve_llama_cpp, LlamaCppResolution
+# GPU-dependent modules load only when their public exports are requested.
+# This keeps remote services and the hosted API importable on CPU-only hosts.
+from importlib import import_module
 
-# Utility functions and constants
-from .utils import (
-    get_num_gpus,
-    calculate_effective_batch_size,
-    get_gpu_memory_gb,
-    get_current_gpu_memory_usage_gb,
-    get_torch_dtype,
-    supports_flash_attention,
-)
+_LAZY_EXPORTS = {
+    'PreflightValidator': 'preflight_checks', 'validate_config': 'preflight_checks',
+    'ValidationError': 'preflight_checks',
+    'resolve_llama_cpp': 'llama_cpp_resolver', 'LlamaCppResolution': 'llama_cpp_resolver',
+    'get_num_gpus': 'utils', 'calculate_effective_batch_size': 'utils',
+    'get_gpu_memory_gb': 'utils', 'get_current_gpu_memory_usage_gb': 'utils',
+    'get_torch_dtype': 'utils', 'supports_flash_attention': 'utils',
+}
+
+
+def __getattr__(name):
+    module = _LAZY_EXPORTS.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(f'.{module}', __name__), name)
+    globals()[name] = value
+    return value
+
 
 from .constants import (
     VRAM_ESTIMATES_4BIT,
