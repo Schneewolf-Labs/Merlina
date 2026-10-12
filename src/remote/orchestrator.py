@@ -31,7 +31,7 @@ from typing import Any, Callable, List, Optional
 from src.job_manager import JobManager
 from src.websocket_manager import websocket_manager
 
-from .artifacts import ArtifactStore, HFHubArtifactStore
+from .artifacts import ArtifactStore, HFHubArtifactStore, S3ArtifactStore
 from .plan import RemotePlanError, build_remote_plan
 from .providers import ComputeProvider, ProviderError, get_provider
 from .spec import InstanceSpec, RemotePlan, StagePlan
@@ -120,7 +120,10 @@ def run_training_remote(
 
         plan = build_remote_plan(config, offers=offers, job_id=job_id)
         if store is None:
-            store = _default_store(config, job_id)
+            store = _default_store(config, job_id, settings)
+        # Prove the store takes a write before renting anything: a store that
+        # only fails at the final push throws away the whole training run.
+        store.verify_writable()
         job_manager.update_job(job_id, metrics={
             "remote_plan": plan.to_dict(),
             "artifact_store": store.describe(),
@@ -414,10 +417,11 @@ def _stage_payload(job_id: str, stage: StagePlan, config: Any, store: ArtifactSt
     }
 
 
-def _worker_env(payload: dict, token: str, config: Any) -> dict:
+def _worker_env(payload: dict, token: str, config: Any, store: ArtifactStore) -> dict:
     env = {
         JOB_ENV_VAR: base64.b64encode(json.dumps(payload).encode()).decode(),
         TOKEN_ENV_VAR: token,
+        **store.worker_env(),
     }
     if config.hf_token:
         env["HF_TOKEN"] = config.hf_token
@@ -444,7 +448,7 @@ def _train_instance_spec(job_id: str, config: Any, plan: RemotePlan,
                           or max(int(sizing.disk_required_gb), 50),
         volume_gb=config.remote.volume_gb or 0,
         cloud_type=sizing.cloud_type,
-        env=_worker_env(payload, token, config),
+        env=_worker_env(payload, token, config, store),
         http_ports=[WORKER_PORT],
         docker_start_cmd=["python", "-m", "src.remote.worker_entry"],
     )
@@ -466,7 +470,7 @@ def _merge_instance_spec(job_id: str, config: Any, plan: RemotePlan,
         gpu_count=1,
         container_disk_gb=max(disk_gb, 100),
         cloud_type=config.remote.cloud_type,
-        env=_worker_env(payload, token, config),
+        env=_worker_env(payload, token, config, store),
         http_ports=[WORKER_PORT],
         docker_start_cmd=["python", "-m", "src.remote.worker_entry"],
     )
@@ -506,8 +510,26 @@ def _publish_dir_to_hub(local_dir: Path, *, repo_id: str,
     logger.info("Published %s to https://huggingface.co/%s", local_dir, repo_id)
 
 
-def _default_store(config: Any, job_id: str) -> ArtifactStore:
-    """Private HF repo per run: <user>/merlina-run-<job_id>."""
+def _default_store(config: Any, job_id: str, settings: Any = None) -> ArtifactStore:
+    """
+    The server's R2 bucket (``artifacts/<job_id>``) when ``artifact_store`` is
+    'r2', or 'auto' with R2 configured and no explicit ``artifact_repo``;
+    otherwise a private HF repo per run: <user>/merlina-run-<job_id>.
+    """
+    if settings is None:
+        from config import settings
+    choice = getattr(config.remote, "artifact_store", "auto")
+    if choice == "r2" or (choice == "auto" and not config.remote.artifact_repo):
+        r2 = S3ArtifactStore.from_r2_settings(settings, job_id)
+        if r2 is not None:
+            return r2
+        if choice == "r2":
+            raise RemotePlanError(
+                "remote.artifact_store is 'r2' but the server has no R2 config — "
+                "set R2_ENDPOINT_URL, R2_DATASET_BUCKET (or R2_ARTIFACT_BUCKET), "
+                "R2_ACCESS_KEY and R2_SECRET_KEY in its .env."
+            )
+
     repo_id = config.remote.artifact_repo
     if not repo_id:
         if not config.hf_token:

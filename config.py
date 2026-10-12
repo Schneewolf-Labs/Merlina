@@ -86,6 +86,10 @@ class Settings(BaseSettings):
     r2_access_key: Optional[str] = None
     r2_secret_key: Optional[str] = None
     r2_region: str = "auto"
+    # Bucket for remote-run artifacts (trained adapters, under artifacts/<job_id>).
+    # Defaults to r2_dataset_bucket. With R2 configured, remote runs hand off
+    # through it instead of an HF repo (see RemoteComputeConfig.artifact_store).
+    r2_artifact_bucket: Optional[str] = None
     # Which backend THIS process resolves swl:// against: "internal" (MinIO, the
     # private primary) or "external" (R2). A rented GPU box sets
     # DATASET_STORE=external and supplies the r2_* vars; everything else — the

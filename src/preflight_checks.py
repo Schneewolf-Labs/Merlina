@@ -203,10 +203,23 @@ class PreflightValidator:
         for problem in check_remote_compatible(config):
             self.errors.append(problem)
 
-        if not config.hf_token and not config.remote.artifact_repo:
+        from src.remote.artifacts import S3ArtifactStore
+        store_choice = getattr(config.remote, "artifact_store", "auto")
+        r2_ready = S3ArtifactStore.from_r2_settings(settings, "preflight") is not None
+        if store_choice == "r2" and not r2_ready:
             self.errors.append(
-                "Remote runs hand artifacts between stages through a private "
-                "HuggingFace repo — provide an HF token or set remote.artifact_repo."
+                "remote.artifact_store is 'r2' but the server has no R2 config — set "
+                "R2_ENDPOINT_URL, R2_DATASET_BUCKET (or R2_ARTIFACT_BUCKET), "
+                "R2_ACCESS_KEY and R2_SECRET_KEY in its .env."
+            )
+        uses_r2 = store_choice == "r2" or (
+            store_choice == "auto" and r2_ready and not config.remote.artifact_repo)
+        details["artifact_store"] = "r2" if uses_r2 else "hf_hub"
+        if not uses_r2 and not config.hf_token and not config.remote.artifact_repo:
+            self.errors.append(
+                "Remote runs hand artifacts between stages through R2 or a private "
+                "HuggingFace repo — configure R2_* on the server, provide an HF "
+                "token, or set remote.artifact_repo."
             )
 
         if is_local_model_path(config.base_model):

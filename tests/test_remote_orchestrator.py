@@ -379,3 +379,60 @@ class TestUploadedDatasetRejection:
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+class TestArtifactStoreSelection:
+    """Store choice, the pre-provision write probe, and credential forwarding."""
+
+    def test_auto_prefers_r2_when_configured(self):
+        from src.remote.orchestrator import _default_store
+        from src.remote.artifacts import S3ArtifactStore
+        from tests.test_remote_artifacts import r2_settings
+        store = _default_store(make_config(), "job_1", r2_settings())
+        assert isinstance(store, S3ArtifactStore)
+        assert store.prefix == "artifacts/job_1"
+
+    def test_auto_with_explicit_repo_uses_hf(self):
+        from src.remote.orchestrator import _default_store
+        from src.remote.artifacts import HFHubArtifactStore
+        from tests.test_remote_artifacts import r2_settings
+        cfg = make_config(remote=make_remote_cfg(artifact_repo="me/runs"))
+        assert isinstance(_default_store(cfg, "job_1", r2_settings()), HFHubArtifactStore)
+
+    def test_hf_hub_choice_ignores_r2(self):
+        from src.remote.orchestrator import _default_store
+        from src.remote.artifacts import HFHubArtifactStore
+        from tests.test_remote_artifacts import r2_settings
+        cfg = make_config(remote=make_remote_cfg(artifact_store="hf_hub",
+                                                 artifact_repo="me/runs"))
+        assert isinstance(_default_store(cfg, "job_1", r2_settings()), HFHubArtifactStore)
+
+    def test_r2_choice_without_config_is_plan_error(self):
+        from src.remote.orchestrator import _default_store
+        from src.remote.plan import RemotePlanError
+        from tests.test_remote_artifacts import r2_settings
+        cfg = make_config(remote=make_remote_cfg(artifact_store="r2"))
+        with pytest.raises(RemotePlanError, match="no R2 config"):
+            _default_store(cfg, "job_1", r2_settings(r2_endpoint_url=None))
+
+    def test_full_run_through_s3_store_forwards_credentials(self, job_manager):
+        from tests.test_remote_artifacts import make_s3_store
+        store = make_s3_store()
+        provider, _, _ = run(make_config(), job_manager, store=store)
+
+        assert job_manager.get_job("job_1").status == "completed"
+        assert Path("models/my-model/adapter_config.json").exists()
+        env = provider.provisioned[0].env
+        assert env["MERLINA_ARTIFACT_S3_ACCESS_KEY"] == "ak"
+        assert env["MERLINA_ARTIFACT_S3_SECRET_KEY"] == "sk"
+        assert job_manager.get_job("job_1").metrics["artifact_store"]["kind"] == "s3"
+
+    def test_unwritable_store_fails_before_provisioning(self, job_manager):
+        from tests.test_remote_artifacts import FakeS3FS, make_s3_store
+        store = make_s3_store(fs=FakeS3FS(fail_writes=True))
+        provider, _, _ = run(make_config(), job_manager, store=store)
+
+        job = job_manager.get_job("job_1")
+        assert job.status == "failed"
+        assert "not writable" in job.error
+        assert provider.provisioned == []

@@ -142,5 +142,28 @@ class TestPayloadDecoding:
             decode_job_payload({})
 
 
+
+class TestTrainStageStoreResolution:
+    def test_missing_store_credentials_fail_before_training(self, job_manager, monkeypatch):
+        from types import SimpleNamespace
+        from src.remote import worker_entry
+        from src.remote.artifacts import (ARTIFACT_S3_ACCESS_KEY_ENV,
+                                          ARTIFACT_S3_SECRET_KEY_ENV,
+                                          ArtifactStoreError)
+
+        monkeypatch.setattr(worker_entry, "_load_training_config",
+                            lambda d: SimpleNamespace(output_name="m"))
+        monkeypatch.delenv(ARTIFACT_S3_ACCESS_KEY_ENV, raising=False)
+        monkeypatch.delenv(ARTIFACT_S3_SECRET_KEY_ENV, raising=False)
+        # Any attempt to train would import this; make that loud.
+        monkeypatch.setitem(sys.modules, "src.training_runner", None)
+
+        state = WorkerState("job_1", "train")
+        payload = {"job_id": "job_1", "stage": "train", "config": {"output_name": "m"},
+                   "artifact_store": {"kind": "s3", "bucket": "b", "prefix": "artifacts/job_1"}}
+        with pytest.raises(ArtifactStoreError, match=ARTIFACT_S3_ACCESS_KEY_ENV):
+            worker_entry.run_train_stage(payload, job_manager, state)
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))

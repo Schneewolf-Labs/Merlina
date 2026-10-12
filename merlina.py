@@ -491,10 +491,17 @@ class RemoteComputeConfig(BaseModel):
                     "(separate big-disk instance), 'skip' (adapter-only), or 'auto' "
                     "(local for small bases, skip for very large ones)"
     )
+    artifact_store: Literal["auto", "r2", "hf_hub"] = Field(
+        "auto",
+        description="Where the trained adapter is handed off: 'r2' (the server's "
+                    "R2 bucket, under artifacts/<job_id>), 'hf_hub' (an HF repo), "
+                    "or 'auto' (R2 when the server has it configured and no "
+                    "artifact_repo is set, else HF)"
+    )
     artifact_repo: Optional[str] = Field(
         None,
-        description="HF repo for stage artifact handoff (default: private "
-                    "<you>/merlina-run-<job_id>)"
+        description="HF repo for stage artifact handoff when using the HF store "
+                    "(default: private <you>/merlina-run-<job_id>)"
     )
     worker_image: Optional[str] = Field(
         None, description="Worker container image override (default from settings)"

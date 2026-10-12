@@ -599,10 +599,14 @@ no form UI yet — `form_config.js` emits `remote: null`).
   (local / separate instance / skip). `merge_strategy="auto"` skips the
   merge above ~80 GB native weights (adapter-only is the practical format
   for 1T-class bases).
-- `artifacts.py` — `ArtifactStore` handoff between stages (`HFHubArtifactStore`:
-  private repo per run; `LocalArtifactStore` for tests). Stages never copy
-  files to each other directly, which is what lets them run on different
-  machines/providers.
+- `artifacts.py` — `ArtifactStore` handoff between stages (`S3ArtifactStore`:
+  R2 bucket under `artifacts/<job_id>/`, the default when R2_* is configured;
+  `HFHubArtifactStore`: private repo per run; `LocalArtifactStore` for tests).
+  Stages never copy files to each other directly, which is what lets them run
+  on different machines/providers. Credentials reach workers only via
+  `worker_env()` (instance env), never `describe()`; `verify_writable()` runs
+  before provisioning and the worker resolves its store before training, so a
+  bad store fails before any GPU time is spent.
 - `providers/` — `ComputeProvider` ABC + `RunPodProvider` (REST v1,
   defensive parsing). Termination is idempotent and always attempted in a
   `finally` (opt-out: `remote.keep_instance_on_failure`).

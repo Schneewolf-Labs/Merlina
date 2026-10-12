@@ -216,6 +216,9 @@ def run_train_stage(payload: Dict[str, Any], job_manager: JobManager,
     job_id = payload["job_id"]
     config = _load_training_config(payload["config"])
     job_manager.create_job(job_id, payload["config"])
+    # Resolve the store before training so missing credentials fail the
+    # stage in seconds, not after hours of GPU time.
+    store = _resolve_store(payload)
     state.set_state(STATE_RUNNING)
 
     from src.training_runner import (
@@ -239,7 +242,6 @@ def run_train_stage(payload: Dict[str, Any], job_manager: JobManager,
         raise RuntimeError(f"Training finished but no output at {output_dir}")
 
     state.set_state(STATE_PUSHING)
-    store = _resolve_store(payload)
     for artifact in payload.get("artifacts_out") or ["adapter"]:
         store.push_dir(output_dir, artifact)
         state.add_artifact(artifact)

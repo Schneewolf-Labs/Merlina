@@ -17,9 +17,20 @@ orchestrates.
 2. Add it to your `.env`:
    ```bash
    RUNPOD_API_KEY=rpa_...
-   HF_TOKEN=hf_...   # needed: artifacts travel via a private HF repo
+   HF_TOKEN=hf_...   # gated base models; also the artifact store if R2 isn't set
    ```
-3. Restart Merlina.
+3. Recommended: point Merlina at a Cloudflare R2 bucket so the trained
+   adapter lands there instead of an HF repo (no HF storage quota involved):
+   ```bash
+   R2_ENDPOINT_URL=https://<acct>.r2.cloudflarestorage.com
+   R2_DATASET_BUCKET=merlina      # or R2_ARTIFACT_BUCKET to keep artifacts separate
+   R2_ACCESS_KEY=...
+   R2_SECRET_KEY=...
+   ```
+   With these set, remote runs hand off through `<bucket>/artifacts/<job_id>/`.
+   The worker receives the R2 key through its instance env (never in the job
+   payload), so use a token scoped to that one bucket.
+4. Restart Merlina.
 
 ## Running a remote job
 
@@ -63,9 +74,14 @@ the worker checkpoints gracefully and the instance is terminated.
 ## The piecemeal pipeline
 
 A remote run is a plan of **stages** that hand artifacts to each other
-through a durable store (a private HF repo per run, e.g.
-`you/merlina-run-job_x`). Because stages only communicate through the
-store, each one can run on a different machine:
+through a durable store — the server's R2 bucket under
+`artifacts/<job_id>/` when R2 is configured, otherwise a private HF repo per
+run (e.g. `you/merlina-run-job_x`). Pick explicitly with
+`remote.artifact_store` (`auto` | `r2` | `hf_hub`); an explicit
+`remote.artifact_repo` keeps `auto` on HF. Merlina test-writes to the store
+before renting anything, so a full or misconfigured store fails the job
+up front instead of after training. Because stages only communicate through
+the store, each one can run on a different machine:
 
 | Stage | Runs on | Needs | Output |
 |---|---|---|---|
@@ -111,6 +127,6 @@ endpoint the worker exposes through the provider's port proxy — so your
 machine never needs to be reachable from the internet. On the instance,
 the worker runs the exact same training pipeline as local Merlina
 (including multi-GPU model-parallel sharding via `device_map=auto` for
-models that don't fit one GPU), pushes the adapter to the artifact repo,
+models that don't fit one GPU), pushes the adapter to the artifact store,
 and reports done; the control plane pulls the adapter into `./models/`,
 runs or skips the merge per plan, and tears everything down.
