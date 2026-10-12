@@ -15,8 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   S3/R2 artifacts, a planned managed service at `merlina.swl.ai`, prepaid
   execution, and an agent-guided model-building workflow.
 - This is a release identity and planning update, not a published 3.0.0 release.
-  Hosted accounts, billing, the built-in advisor, and S3/R2 model artifact
-  storage remain planned. No API or stored-config migration is introduced here.
+  Hosted accounts, billing, and the built-in advisor remain planned. No API or
+  stored-config migration is introduced here.
+- Add opt-in self-hosted S3/R2 artifact handoff with verified manifests and
+  durable remote checkpoints ([durable remote artifacts](docs/dev/artifact-storage.md)).
 
 ### Changed
 - **Job execution core rewritten for correct concurrency** (`src/job_queue.py`, `src/job_manager.py`, `src/websocket_manager.py`, new `src/worker_monitor.py`, `src/worker_reattach.py`): the queue now keeps all state (pending + running) under a single condition variable instead of a `PriorityQueue` plus three separately-locked side tables. Cancelling or deleting a queued job is a plain removal — no tombstones left for a worker to skip, no stale config (with API tokens) kept alive. Submitting a job id that is already queued or running raises instead of silently overwriting the entry. `shutdown()` no longer deadlocks when work is still queued. `JobManager.update_job()` takes `**fields` validated against the schema (unknown columns raise), enables WAL once at init instead of on every connection, and schema migrations are table-driven. The WebSocket manager gains `bind_loop()` / `publish()` so worker threads and the subprocess monitor publish without threading an event-loop reference through every call.

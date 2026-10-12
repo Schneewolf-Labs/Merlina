@@ -106,6 +106,7 @@ def build_status_payload(state: WorkerState, job_manager: Optional[JobManager],
                 "eval_loss": job.eval_loss,
                 "learning_rate": job.learning_rate,
                 "error": job.error,
+                "checkpoint_publication": (job.metrics or {}).get("checkpoint_publication"),
             }
         payload["new_metrics"] = [
             m for m in job_manager.get_metrics(state.job_id)
@@ -205,10 +206,14 @@ def _load_training_config(config_dict: Dict[str, Any]):
 
 
 def _resolve_store(payload: Dict[str, Any]):
-    return store_from_description(
+    store = store_from_description(
         payload["artifact_store"],
         token=payload["config"].get("hf_token") or os.environ.get("HF_TOKEN"),
     )
+    if store.kind == "s3":
+        from src.remote.s3_artifacts import artifact_metadata
+        store.metadata = artifact_metadata(payload["config"])
+    return store
 
 
 def run_train_stage(payload: Dict[str, Any], job_manager: JobManager,

@@ -1684,6 +1684,10 @@ def run_training_sync(
         )
 
         callbacks = [WebSocketCallback(job_id, job_manager, event_loop)]
+        from src.remote.checkpoints import remote_checkpoint_callback
+        durable_checkpoint = remote_checkpoint_callback(job_id, job_manager)
+        if durable_checkpoint is not None:
+            callbacks.append(durable_checkpoint)
         if memory_guard.active:
             callbacks.append(EvalMemoryTeardownCallback())
 

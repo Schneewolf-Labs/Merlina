@@ -142,5 +142,61 @@ class TestPayloadDecoding:
             decode_job_payload({})
 
 
+class TestMergeStagePublishing:
+    """push_to_hub publishes only to the Hub; otherwise the store gets it."""
+
+    def _run(self, tmp_path, monkeypatch, job_manager, push_to_hub):
+        import types
+        import huggingface_hub
+        from src.remote import worker_entry
+        from src.remote.artifacts import LocalArtifactStore
+
+        monkeypatch.chdir(tmp_path)
+        store = LocalArtifactStore(tmp_path / "store")
+        adapter = tmp_path / "adapter-src"
+        adapter.mkdir()
+        (adapter / "adapter_config.json").write_text("{}")
+        store.push_dir(adapter, "adapter")
+        monkeypatch.setattr(worker_entry, "_resolve_store", lambda payload: store)
+
+        def fake_merge(base, adapter_dir, merged_dir, model_type="auto"):
+            Path(merged_dir).mkdir(parents=True)
+            (Path(merged_dir) / "model.safetensors").write_text("merged")
+        monkeypatch.setitem(sys.modules, "src.gguf_exporter",
+                            types.SimpleNamespace(merge_lora_to_directory=fake_merge))
+        uploads = []
+
+        class FakeApi:
+            def __init__(self, token=None):
+                pass
+
+            def create_repo(self, *a, **kw):
+                pass
+
+            def upload_folder(self, *, folder_path, repo_id, **kw):
+                uploads.append(repo_id)
+        monkeypatch.setattr(huggingface_hub, "HfApi", FakeApi)
+
+        state = WorkerState("job_m", "merge")
+        worker_entry.run_merge_stage(
+            {"job_id": "job_m", "stage": "merge", "artifacts_out": ["merged"],
+             "config": {"base_model": "base", "output_name": "me/model",
+                        "push_to_hub": push_to_hub}},
+            job_manager, state)
+        return store, uploads, state.snapshot()["artifacts"]
+
+    def test_push_to_hub_skips_store_upload(self, tmp_path, monkeypatch, job_manager):
+        store, uploads, artifacts = self._run(tmp_path, monkeypatch, job_manager, True)
+        assert uploads == ["me/model"]
+        assert not store.exists("merged")
+        assert artifacts == ["hub:me/model"]
+
+    def test_without_hub_pushes_to_store(self, tmp_path, monkeypatch, job_manager):
+        store, uploads, artifacts = self._run(tmp_path, monkeypatch, job_manager, False)
+        assert uploads == []
+        assert store.exists("merged")
+        assert artifacts == ["merged"]
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
