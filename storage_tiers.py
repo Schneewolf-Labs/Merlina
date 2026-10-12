@@ -79,14 +79,41 @@ MAX_COPY_OBJECT = 5 * 1024 ** 3
 SHA_META = "sha256"
 # Parallelism for the metadata HEAD requests made while planning a sync.
 _HEAD_WORKERS = 8
-# Bucket names per the S3 naming rules (lower-case, 3-63 chars).
+# Bucket names per the S3 naming rules (lower-case, 3-63 chars) — for create.
 _BUCKET_RE = re.compile(r"^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$")
+# Looser rule for *addressing* existing buckets (legacy names may break the
+# modern rules); still no '/' so a bucket can never smuggle a path.
+_BUCKET_ACCESS_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,254}$")
 
 TIER_ORDER = ("internal", "external", "artifacts")
 
 
 class StorageTierError(Exception):
     """A tier is unknown/unconfigured, or a request was refused."""
+
+
+class StorageNotFound(StorageTierError):
+    """The requested bucket or object does not exist."""
+
+
+def validate_bucket_name(name: str) -> Optional[str]:
+    """Why ``name`` is not a valid new S3 bucket name, or ``None`` if it is.
+
+    Mirrors the S3 general-purpose bucket rules (and ``storage.js``)."""
+    if not isinstance(name, str) or not name:
+        return "Bucket name is required."
+    if not 3 <= len(name) <= 63:
+        return "Bucket names must be 3-63 characters long."
+    if not _BUCKET_RE.match(name):
+        return ("Use only lower-case letters, digits, '.' and '-', starting and "
+                "ending with a letter or digit.")
+    if ".." in name or ".-" in name or "-." in name:
+        return "Bucket names may not contain '..', '.-' or '-.'."
+    if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", name):
+        return "Bucket names may not look like an IP address."
+    if name.startswith(("xn--", "sthree-")) or name.endswith(("-s3alias", "--ol-s3", "--x-s3")):
+        return "Bucket names may not use a reserved prefix or suffix."
+    return None
 
 
 def human_bytes(n: Optional[float]) -> str:
@@ -104,7 +131,15 @@ def human_bytes(n: Optional[float]) -> str:
 @dataclass
 class Tier:
     """One bucket on one S3-compatible endpoint. Credentials never leave it:
-    they are excluded from ``repr`` and from :meth:`describe`."""
+    they are excluded from ``repr`` and from :meth:`describe`.
+
+    A tier is configured with one *default* bucket; :meth:`with_bucket` returns
+    a *view* of another bucket on the same endpoint that keeps the tier's name
+    and privacy, so every listing/sync/guard rule applies per bucket.
+
+    Optional admin credentials are used only for bucket-level operations
+    (list/create/delete buckets) and for reading buckets other than the
+    default one; without them the normal key is used."""
 
     name: str
     bucket: Optional[str]
@@ -113,15 +148,30 @@ class Tier:
     region: str = "auto"
     description: str = ""
     hint_prefix: str = ""  # where interesting things live (e.g. the artifact prefix)
+    env_prefix: str = ""   # settings prefix ("S3", "R2", ...) — for hints only
+    default_buckets: tuple = ()  # configured buckets on this endpoint (never deleted)
     access_key: Optional[str] = field(default=None, repr=False)
     secret_key: Optional[str] = field(default=None, repr=False)
     session_token: Optional[str] = field(default=None, repr=False)
+    admin_access_key: Optional[str] = field(default=None, repr=False)
+    admin_secret_key: Optional[str] = field(default=None, repr=False)
     fs_override: Any = field(default=None, repr=False)  # injectable for tests
+    admin_fs_override: Any = field(default=None, repr=False)  # injectable for tests
+    parent: Optional["Tier"] = field(default=None, repr=False, compare=False)
     _fs: Any = field(default=None, repr=False)
+    _admin_fs: Any = field(default=None, repr=False)
 
     @property
     def configured(self) -> bool:
         return bool(self.bucket) and (self.fs_override is not None or bool(self.endpoint_url) or bool(self.access_key))
+
+    @property
+    def admin_configured(self) -> bool:
+        return self.admin_fs_override is not None or bool(self.admin_access_key and self.admin_secret_key)
+
+    @property
+    def default_bucket(self) -> Optional[str]:
+        return self.parent.bucket if self.parent is not None else self.bucket
 
     @property
     def endpoint_host(self) -> Optional[str]:
@@ -137,14 +187,32 @@ class Tier:
     def describe(self) -> dict:
         return {
             "name": self.name,
-            "bucket": self.bucket,
+            "bucket": self.default_bucket,
             "endpoint_host": self.endpoint_host,
             "private": self.private,
             "privacy": "private" if self.private else "shared",
             "configured": self.configured,
             "description": self.description,
             "hint_prefix": self.hint_prefix,
+            "default_buckets": list(self.default_buckets),
+            "admin_configured": self.admin_configured,
+            "env_prefix": self.env_prefix,
         }
+
+    def _make_fs(self, key: Optional[str], secret: Optional[str], token: Optional[str]) -> Any:
+        try:
+            import s3fs
+        except ImportError as e:  # pragma: no cover - only without the dep
+            raise StorageTierError("s3fs is required for storage tiers: pip install s3fs") from e
+        client_kwargs = {"endpoint_url": self.endpoint_url}
+        if self.region:
+            client_kwargs["region_name"] = self.region
+        return s3fs.S3FileSystem(
+            key=key or None, secret=secret or None, token=token or None,
+            client_kwargs={k: v for k, v in client_kwargs.items() if v},
+            config_kwargs={"retries": {"max_attempts": 5, "mode": "standard"}},
+            skip_instance_cache=True,
+        )
 
     @property
     def fs(self) -> Any:
@@ -153,22 +221,38 @@ class Tier:
         if not self.configured:
             raise StorageTierError(f"Storage tier '{self.name}' is not configured")
         if self._fs is None:
-            try:
-                import s3fs
-            except ImportError as e:  # pragma: no cover - only without the dep
-                raise StorageTierError("s3fs is required for storage tiers: pip install s3fs") from e
-            client_kwargs = {"endpoint_url": self.endpoint_url}
-            if self.region:
-                client_kwargs["region_name"] = self.region
-            self._fs = s3fs.S3FileSystem(
-                key=self.access_key or None,
-                secret=self.secret_key or None,
-                token=self.session_token or None,
-                client_kwargs={k: v for k, v in client_kwargs.items() if v},
-                config_kwargs={"retries": {"max_attempts": 5, "mode": "standard"}},
-                skip_instance_cache=True,
-            )
+            self._fs = self._make_fs(self.access_key, self.secret_key, self.session_token)
         return self._fs
+
+    @property
+    def admin_fs(self) -> Any:
+        """Filesystem for bucket-level operations: the admin key if configured,
+        else the normal key."""
+        if self.admin_fs_override is not None:
+            return self.admin_fs_override
+        if not (self.admin_access_key and self.admin_secret_key):
+            return self.fs
+        if not self.configured:
+            raise StorageTierError(f"Storage tier '{self.name}' is not configured")
+        if self._admin_fs is None:
+            self._admin_fs = self._make_fs(self.admin_access_key, self.admin_secret_key, None)
+        return self._admin_fs
+
+    def with_bucket(self, bucket: Optional[str]) -> "Tier":
+        """A view of ``bucket`` on this tier's endpoint (same name and privacy).
+        ``None``/empty or the default bucket returns the tier itself."""
+        base = self.parent or self
+        if not bucket or bucket == base.bucket:
+            return base
+        if not _BUCKET_ACCESS_RE.match(bucket) or ".." in bucket:
+            raise StorageTierError(f"Invalid bucket name: {bucket!r}")
+        fs = base.admin_fs if base.admin_configured else base.fs
+        return Tier(
+            name=base.name, bucket=bucket, endpoint_url=base.endpoint_url, private=base.private,
+            region=base.region, description=base.description, hint_prefix="",
+            env_prefix=base.env_prefix, default_buckets=base.default_buckets,
+            fs_override=fs, admin_fs_override=base.admin_fs, parent=base,
+        )
 
     def path(self, key: str = "") -> str:
         """The fsspec path (``bucket/key``) for a key in this tier."""
@@ -207,15 +291,19 @@ def build_tiers(settings: Any, *, fs_overrides: Optional[dict] = None) -> dict[s
         name="internal", bucket=g("s3_dataset_bucket"), endpoint_url=g("s3_endpoint_url"),
         region=str(g("s3_region", "auto") or "auto"), private=True,
         description="Private store (LAN). Source of truth; private data never leaves it.",
-        access_key=g("s3_access_key"), secret_key=g("s3_secret_key"),
+        access_key=g("s3_access_key"), secret_key=g("s3_secret_key"), env_prefix="S3",
+        admin_access_key=g("s3_admin_access_key"), admin_secret_key=g("s3_admin_secret_key"),
         fs_override=fs_overrides.get("internal"),
+        admin_fs_override=fs_overrides.get("internal_admin"),
     )
     tiers["external"] = Tier(
         name="external", bucket=g("r2_dataset_bucket"), endpoint_url=g("r2_endpoint_url"),
         region=str(g("r2_region", "auto") or "auto"), private=False,
         description="Shared store reachable from rented GPU boxes.",
-        access_key=g("r2_access_key"), secret_key=g("r2_secret_key"),
+        access_key=g("r2_access_key"), secret_key=g("r2_secret_key"), env_prefix="R2",
+        admin_access_key=g("r2_admin_access_key"), admin_secret_key=g("r2_admin_secret_key"),
         fs_override=fs_overrides.get("external"),
+        admin_fs_override=fs_overrides.get("external_admin"),
     )
     artifact_prefix = str(g("merlina_artifact_s3_prefix", "") or "").strip("/")
     artifacts = Tier(
@@ -225,8 +313,11 @@ def build_tiers(settings: Any, *, fs_overrides: Optional[dict] = None) -> dict[s
         description="Remote-training artifacts (adapters, merged models).",
         hint_prefix=f"{artifact_prefix}/" if artifact_prefix else "",
         access_key=g("merlina_artifact_access_key"), secret_key=g("merlina_artifact_secret_key"),
-        session_token=g("merlina_artifact_session_token"),
+        session_token=g("merlina_artifact_session_token"), env_prefix="MERLINA_ARTIFACT",
+        admin_access_key=g("merlina_artifact_admin_access_key"),
+        admin_secret_key=g("merlina_artifact_admin_secret_key"),
         fs_override=fs_overrides.get("artifacts"),
+        admin_fs_override=fs_overrides.get("artifacts_admin"),
     )
     if artifacts.bucket:
         if tiers["external"].bucket and artifacts.same_location(tiers["external"]):
@@ -235,6 +326,15 @@ def build_tiers(settings: Any, *, fs_overrides: Optional[dict] = None) -> dict[s
                 tiers["external"].hint_prefix = artifacts.hint_prefix
         else:
             tiers["artifacts"] = artifacts
+    # Every configured bucket is a "default" (protected from deletion) for each
+    # tier on the same endpoint — e.g. the artifact bucket shows up starred on
+    # the external tier when both live on the same account.
+    configured = [t for t in (*tiers.values(), artifacts) if t.bucket and t.endpoint_url]
+    for t in tiers.values():
+        same = {c.bucket for c in configured if _norm_endpoint(c.endpoint_url) == _norm_endpoint(t.endpoint_url)}
+        if t.bucket:
+            same.add(t.bucket)
+        t.default_buckets = tuple(sorted(same))
     return tiers
 
 
@@ -289,10 +389,21 @@ def _mtime(info: dict) -> Optional[str]:
     return str(v)
 
 
-def ls(tier: Tier, prefix: str = "", *, limit: int = 1000) -> dict:
-    """Delimiter-style listing of one level under ``prefix``."""
+LS_SORTS = ("name", "size", "mtime")
+
+
+def ls(tier: Tier, prefix: str = "", *, search: str = "", sort: str = "name",
+       order: str = "asc", offset: int = 0, limit: int = 1000) -> dict:
+    """Delimiter-style listing of one level under ``prefix``.
+
+    ``search`` filters names (case-insensitive substring) within this level;
+    ``sort`` is name/size/mtime (folders always come first, by name);
+    ``offset``/``limit`` page through the combined folders+objects list."""
     prefix = norm_prefix(prefix)
     base = prefix.rstrip("/")
+    if sort not in LS_SORTS:
+        raise StorageTierError(f"sort must be one of {', '.join(LS_SORTS)}")
+    offset, limit = max(0, int(offset)), max(1, min(int(limit), 5000))
     try:
         entries = tier.fs.ls(tier.path(base), detail=True, refresh=True)
     except FileNotFoundError:
@@ -312,13 +423,27 @@ def ls(tier: Tier, prefix: str = "", *, limit: int = 1000) -> dict:
         else:
             objects.append({"key": key, "name": name, "size": int(e.get("size") or 0),
                             "mtime": _mtime(e)})
-    dirs.sort(key=lambda d: d["prefix"])
-    objects.sort(key=lambda o: o["key"])
-    truncated = len(objects) > limit
+    needle = (search or "").strip().lower()
+    if needle:
+        dirs = [d for d in dirs if needle in d["name"].lower()]
+        objects = [o for o in objects if needle in o["name"].lower()]
+    reverse = order == "desc"
+    dirs.sort(key=lambda d: d["prefix"], reverse=reverse and sort == "name")
+    if sort == "name":
+        objects.sort(key=lambda o: o["key"], reverse=reverse)
+    elif sort == "size":
+        objects.sort(key=lambda o: (o["size"], o["key"]), reverse=reverse)
+    else:
+        objects.sort(key=lambda o: (o["mtime"] or "", o["key"]), reverse=reverse)
+    combined = [("d", d) for d in dirs] + [("o", o) for o in objects]
+    page = combined[offset:offset + limit]
     return {
-        "tier": tier.name, "prefix": f"{base}/" if base else "",
-        "dirs": dirs, "objects": objects[:limit], "truncated": truncated,
-        "object_count": len(objects),
+        "tier": tier.name, "bucket": tier.bucket, "prefix": f"{base}/" if base else "",
+        "dirs": [x for k, x in page if k == "d"], "objects": [x for k, x in page if k == "o"],
+        "total_dirs": len(dirs), "total_objects": len(objects), "total": len(combined),
+        "offset": offset, "limit": limit, "has_more": offset + limit < len(combined),
+        "truncated": offset + limit < len(combined), "object_count": len(objects),
+        "search": needle, "sort": sort, "order": "desc" if reverse else "asc",
     }
 
 
@@ -347,8 +472,8 @@ def du(tier: Tier, prefix: str = "") -> dict:
     objs = iter_objects(tier, prefix)
     total = sum(o["size"] for o in objs.values())
     p = norm_prefix(prefix)
-    return {"tier": tier.name, "prefix": p, "objects": len(objs), "bytes": total,
-            "human": human_bytes(total)}
+    return {"tier": tier.name, "bucket": tier.bucket, "prefix": p, "objects": len(objs),
+            "bytes": total, "human": human_bytes(total)}
 
 
 # ── buckets ───────────────────────────────────────────────────────────────────
@@ -359,51 +484,345 @@ def _is_access_denied(exc: BaseException) -> bool:
     return any(s in text for s in ("AccessDenied", "Access Denied", "Forbidden", "403", "Unauthorized"))
 
 
+def admin_hint(tier: Tier, action: str) -> str:
+    """Which (optional) admin key would allow a bucket-level ``action``."""
+    p = tier.env_prefix or tier.name.upper()
+    if tier.admin_configured:
+        return (f"The admin key ({p}_ADMIN_ACCESS_KEY) is configured but was refused — "
+                f"grant it permission to {action}. See docs/storage-tiers.md.")
+    if p == "R2":
+        need = "an R2 account API token with Admin Read & Write"
+    elif p == "S3":
+        need = ("a MinIO service account whose policy allows s3:ListAllMyBuckets, "
+                "s3:CreateBucket, s3:DeleteBucket and s3:GetBucketLocation")
+    else:
+        need = "a key with bucket-level permissions"
+    return (f"Set {p}_ADMIN_ACCESS_KEY / {p}_ADMIN_SECRET_KEY to a key that may {action} "
+            f"({need}). See docs/storage-tiers.md.")
+
+
+def _bucket_entry(tier: Tier, name: str, created: Any = None) -> dict:
+    return {
+        "name": name,
+        "creation_date": created.isoformat() if isinstance(created, datetime) else (str(created) if created else None),
+        "default": name in tier.default_buckets,
+        "is_tier_bucket": name == tier.default_bucket,
+    }
+
+
 def list_buckets(tier: Tier) -> dict:
-    """List the buckets visible to this tier's credentials. Scoped keys
-    (limited to one bucket) usually can't — that is reported, not raised."""
+    """List the buckets visible to this tier's (admin, else normal) key.
+
+    Scoped keys usually can't list buckets; then the configured bucket(s) are
+    returned anyway with ``ok=False`` and a hint naming the key that would
+    allow it — reported, never raised."""
     try:
-        resp = tier.fs.call_s3("list_buckets")
-        names = sorted(b.get("Name") for b in resp.get("Buckets", []) if b.get("Name"))
-        return {"tier": tier.name, "ok": True, "buckets": names, "message": ""}
+        resp = tier.admin_fs.call_s3("list_buckets")
+        listed = {b.get("Name"): b.get("CreationDate") for b in resp.get("Buckets", []) if b.get("Name")}
+        buckets = [_bucket_entry(tier, n, c) for n, c in sorted(listed.items())]
+        # A configured bucket the key can't see (e.g. on a different account) still shows.
+        for d in tier.default_buckets:
+            if d not in listed:
+                buckets.append(_bucket_entry(tier, d))
+        return {"tier": tier.name, "ok": True, "buckets": buckets, "message": "", "hint": "",
+                "admin_configured": tier.admin_configured}
     except Exception as e:  # noqa: BLE001 - provider errors vary
+        buckets = [_bucket_entry(tier, d) for d in tier.default_buckets]
         if _is_access_denied(e):
             msg = (f"The '{tier.name}' credentials may not list buckets (access denied). "
                    f"That is normal for a key scoped to one bucket; this tier uses "
-                   f"'{tier.bucket}'.")
+                   f"'{tier.default_bucket}'.")
+            hint = admin_hint(tier, "list buckets")
         else:
             msg = f"Could not list buckets on '{tier.name}': {type(e).__name__}: {e}"
-        return {"tier": tier.name, "ok": False, "buckets": [], "message": msg}
+            hint = ""
+        return {"tier": tier.name, "ok": False, "buckets": buckets, "message": msg, "hint": hint,
+                "admin_configured": tier.admin_configured}
+
+
+def bucket_info(tier: Tier, name: str) -> dict:
+    """Region, creation date and flags for one bucket (best effort: each field
+    is ``None`` when the key may not read it)."""
+    view = tier.with_bucket(name)
+    fs = (tier.parent or tier).admin_fs
+    out = {"tier": tier.name, "bucket": view.bucket, "private": tier.private,
+           "default": view.bucket in tier.default_buckets, "region": None,
+           "creation_date": None, "exists": None, "notes": []}
+    try:
+        fs.call_s3("head_bucket", Bucket=view.bucket)
+        out["exists"] = True
+    except Exception as e:  # noqa: BLE001
+        text = f"{type(e).__name__} {e}"
+        if isinstance(e, FileNotFoundError) or "404" in text or "NoSuchBucket" in text or "Not Found" in text:
+            raise StorageNotFound(f"Bucket '{view.bucket}' does not exist") from None
+        out["notes"].append("bucket existence could not be checked (access denied)"
+                            if _is_access_denied(e) else f"head_bucket failed: {type(e).__name__}")
+    try:
+        loc = fs.call_s3("get_bucket_location", Bucket=view.bucket).get("LocationConstraint")
+        out["region"] = loc or "us-east-1 (default)"
+    except Exception as e:  # noqa: BLE001
+        out["notes"].append("region unavailable (access denied)" if _is_access_denied(e)
+                            else f"region unavailable ({type(e).__name__})")
+    listing = list_buckets(tier)
+    for b in listing["buckets"]:
+        if b["name"] == view.bucket:
+            out["creation_date"] = b["creation_date"]
+    if not listing["ok"]:
+        out["notes"].append("creation date unavailable (this key may not list buckets)")
+    return out
 
 
 def make_bucket(tier: Tier, name: str) -> dict:
-    """Create a bucket on this tier's endpoint. Reports (doesn't raise) when the
-    credentials aren't allowed to — the usual case for scoped keys."""
+    """Create a bucket on this tier's endpoint (admin key if configured).
+    Reports (doesn't raise) when the key isn't allowed to."""
     name = (name or "").strip()
-    if not _BUCKET_RE.match(name) or ".." in name:
+    problem = validate_bucket_name(name)
+    if problem:
         return {"tier": tier.name, "ok": False, "bucket": name,
-                "message": f"Invalid bucket name {name!r} (3-63 chars: a-z, 0-9, '.', '-')."}
+                "message": f"Invalid bucket name {name!r}: {problem}", "hint": ""}
     params: dict[str, Any] = {"Bucket": name}
     if tier.region and tier.region not in ("auto", "us-east-1"):
         params["CreateBucketConfiguration"] = {"LocationConstraint": tier.region}
+    fs = (tier.parent or tier).admin_fs
     try:
-        tier.fs.call_s3("create_bucket", **params)
+        fs.call_s3("create_bucket", **params)
         try:
-            tier.fs.invalidate_cache("")
+            fs.invalidate_cache("")
         except Exception:  # noqa: BLE001
             pass
-        return {"tier": tier.name, "ok": True, "bucket": name, "message": f"Created bucket '{name}'."}
+        return {"tier": tier.name, "ok": True, "bucket": name, "message": f"Created bucket '{name}'.", "hint": ""}
     except Exception as e:  # noqa: BLE001
         text = f"{type(e).__name__} {e}"
+        hint = ""
         if "BucketAlreadyOwnedByYou" in text or "BucketAlreadyExists" in text or isinstance(e, FileExistsError):
             msg = f"Bucket '{name}' already exists."
         elif _is_access_denied(e):
-            msg = (f"The '{tier.name}' credentials may not create buckets (access denied). "
-                   f"Create it with an admin key in the provider's console/CLI, then grant "
-                   f"this key access to it.")
+            msg = f"The '{tier.name}' credentials may not create buckets (access denied)."
+            hint = admin_hint(tier, "create buckets")
         else:
             msg = f"Could not create bucket '{name}': {type(e).__name__}: {e}"
-        return {"tier": tier.name, "ok": False, "bucket": name, "message": msg}
+        return {"tier": tier.name, "ok": False, "bucket": name, "message": msg, "hint": hint}
+
+
+def delete_bucket(tier: Tier, name: str, *, confirm_name: Optional[str] = None,
+                  empty_first: bool = False, dry_run: bool = False) -> dict:
+    """Delete a bucket. Refuses configured (dataset/artifact) buckets, requires
+    the bucket name typed back as ``confirm_name``, and refuses a non-empty
+    bucket unless ``empty_first`` (which deletes its objects first).
+
+    ``dry_run`` only reports the object count and size. Access-denied is
+    reported (``ok=False``) rather than raised."""
+    base = tier.parent or tier
+    if name in base.default_buckets:
+        raise StorageTierError(f"Refusing to delete '{name}': it is a configured Merlina bucket")
+    view = base.with_bucket(name)
+    if view is base:  # pragma: no cover - default bucket is always in default_buckets
+        raise StorageTierError("Refusing to delete the tier's configured bucket")
+    try:
+        objs = iter_objects(view, "")
+    except Exception as e:  # noqa: BLE001
+        if _is_access_denied(e):
+            return {"tier": tier.name, "bucket": name, "ok": False, "objects": None, "bytes": None,
+                    "human": "unknown", "emptied": False, "deleted": False,
+                    "message": f"The '{tier.name}' credentials may not read bucket '{name}'.",
+                    "hint": admin_hint(tier, "read and delete buckets")}
+        raise
+    total = sum(o["size"] for o in objs.values())
+    out = {"tier": tier.name, "bucket": name, "ok": True, "objects": len(objs), "bytes": total,
+           "human": human_bytes(total), "emptied": False, "deleted": False, "message": "", "hint": ""}
+    if dry_run:
+        return out
+    if confirm_name != name:
+        raise StorageTierError("Type the bucket name exactly to confirm deletion")
+    if objs and not empty_first:
+        raise StorageTierError(
+            f"Bucket '{name}' is not empty ({len(objs)} object(s), {human_bytes(total)}); "
+            f"empty it first (empty_first) to delete it")
+    try:
+        if objs:
+            _rm_keys(view, sorted(objs))
+            out["emptied"] = True
+        base.admin_fs.call_s3("delete_bucket", Bucket=name)
+        try:
+            base.admin_fs.invalidate_cache("")
+        except Exception:  # noqa: BLE001
+            pass
+        out["deleted"] = True
+        out["message"] = f"Deleted bucket '{name}'."
+    except Exception as e:  # noqa: BLE001
+        out["ok"] = False
+        if _is_access_denied(e):
+            out["message"] = f"The '{tier.name}' credentials may not delete bucket '{name}' (access denied)."
+            out["hint"] = admin_hint(tier, "delete buckets")
+        else:
+            out["message"] = f"Could not delete bucket '{name}': {type(e).__name__}: {e}"
+    return out
+
+
+# ── objects: info, preview, download ──────────────────────────────────────────
+PREVIEW_MAX = 256 * 1024
+PARQUET_ROWS = 20
+MAX_SAFETENSORS_HEADER = 100 * 1024 * 1024
+TEXT_EXTS = {
+    ".json", ".jsonl", ".md", ".markdown", ".txt", ".jinja", ".j2", ".yaml", ".yml",
+    ".csv", ".tsv", ".py", ".toml", ".cfg", ".ini", ".log", ".xml", ".html", ".sh",
+    ".model_card", ".gitattributes", ".gitignore",
+}
+
+
+def _ext(key: str) -> str:
+    name = key.rsplit("/", 1)[-1].lower()
+    return "." + name.rsplit(".", 1)[-1] if "." in name.lstrip(".") else ""
+
+
+def _object_key(key: Optional[str]) -> str:
+    k = norm_prefix(key)
+    if not k or k.endswith("/"):
+        raise StorageTierError("An object key is required")
+    return k
+
+
+def object_info(tier: Tier, key: str) -> dict:
+    """Size, mtime, content type, ETag and user metadata (incl. our sha256)."""
+    key = _object_key(key)
+    try:
+        # refresh: a listing fills s3fs' cache with entries that lack ContentType.
+        info = tier.fs.info(tier.path(key), refresh=True)
+    except FileNotFoundError:
+        raise StorageNotFound(f"No object '{key}' in {tier.name}:{tier.bucket}") from None
+    if info.get("type") == "directory":
+        raise StorageTierError(f"'{key}' is a folder, not an object")
+    return {
+        "tier": tier.name, "bucket": tier.bucket, "key": key, "name": key.rsplit("/", 1)[-1],
+        "size": int(info.get("size") or 0), "human": human_bytes(int(info.get("size") or 0)),
+        "mtime": _mtime(info), "content_type": info.get("ContentType"),
+        "etag": (info.get("ETag") or "").strip('"') or None,
+        "metadata": _meta(tier, key), "preview_kind": preview_kind(key),
+    }
+
+
+def preview_kind(key: str) -> str:
+    ext = _ext(key)
+    if ext == ".parquet":
+        return "parquet"
+    if ext == ".safetensors":
+        return "safetensors"
+    if ext in TEXT_EXTS or ext == "":
+        return "text"
+    return "binary"
+
+
+def _jsonable(v: Any, limit: int = 300) -> Any:
+    if v is None or isinstance(v, (bool, int, float)):
+        return v
+    if isinstance(v, str):
+        return v if len(v) <= limit else v[:limit] + "…"
+    if isinstance(v, bytes):
+        return f"<{len(v)} bytes>"
+    try:
+        text = json.dumps(v, default=str, ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        text = str(v)
+    return text if len(text) <= limit else text[:limit] + "…"
+
+
+def preview(tier: Tier, key: str, *, max_bytes: int = PREVIEW_MAX) -> dict:
+    """An inline preview of an object, reading as little as possible:
+
+    * text-like files: the first ``max_bytes`` (JSON pretty-printed when whole);
+    * ``.safetensors``: only the header (two range reads) — tensor names,
+      dtypes, shapes and the total parameter count;
+    * ``.parquet``: schema + the first rows, via pyarrow over range reads
+      (footer + the first pages), never the whole file;
+    * anything else: no preview (download it)."""
+    key = _object_key(key)
+    path = tier.path(key)
+    kind = preview_kind(key)
+    out: dict[str, Any] = {"tier": tier.name, "bucket": tier.bucket, "key": key, "kind": kind}
+    try:
+        if kind == "text":
+            raw = tier.fs.cat_file(path, start=0, end=max_bytes + 1)
+            truncated = len(raw) > max_bytes
+            raw = raw[:max_bytes]
+            if b"\x00" in raw[:8192]:
+                out.update(kind="binary", message="Looks like a binary file; download it instead.")
+                return out
+            text = raw.decode("utf-8", errors="replace")
+            fmt = _ext(key).lstrip(".") or "text"
+            if fmt == "json" and not truncated:
+                try:
+                    text = json.dumps(json.loads(text), indent=2, ensure_ascii=False)
+                except ValueError:
+                    pass
+            out.update(format=fmt, text=text, truncated=truncated, bytes_shown=len(raw))
+        elif kind == "safetensors":
+            out.update(_safetensors_header(tier, path))
+        elif kind == "parquet":
+            out.update(_parquet_preview(tier, path))
+        else:
+            out["message"] = "No inline preview for this file type; download it instead."
+    except FileNotFoundError:
+        raise StorageNotFound(f"No object '{key}' in {tier.name}:{tier.bucket}") from None
+    return out
+
+
+def _safetensors_header(tier: Tier, path: str) -> dict:
+    head = tier.fs.cat_file(path, start=0, end=8)
+    if len(head) < 8:
+        raise StorageTierError("Not a safetensors file (too short)")
+    n = int.from_bytes(head, "little")
+    if n <= 0 or n > MAX_SAFETENSORS_HEADER:
+        raise StorageTierError(f"Implausible safetensors header length ({n} bytes)")
+    doc = json.loads(tier.fs.cat_file(path, start=8, end=8 + n))
+    meta = doc.pop("__metadata__", None)
+    tensors, dtypes, total = [], {}, 0
+    for name in sorted(doc):
+        t = doc[name] or {}
+        shape = [int(x) for x in t.get("shape") or []]
+        count = 1
+        for d in shape:
+            count *= d
+        total += count
+        dtype = str(t.get("dtype"))
+        dtypes[dtype] = dtypes.get(dtype, 0) + count
+        tensors.append({"name": name, "dtype": dtype, "shape": shape, "params": count})
+    return {"header_bytes": n, "metadata": meta, "tensor_count": len(tensors),
+            "total_params": total, "dtypes": dtypes, "tensors": tensors[:2000],
+            "tensors_truncated": len(tensors) > 2000}
+
+
+def _parquet_preview(tier: Tier, path: str, rows: int = PARQUET_ROWS) -> dict:
+    try:
+        import pyarrow.parquet as pq
+    except ImportError:  # pragma: no cover - pyarrow ships with `datasets`
+        return {"message": "pyarrow is not installed; download the file to inspect it."}
+    with tier.fs.open(path, "rb", block_size=1024 * 1024) as f:
+        # buffer_size: stream pages instead of pre-loading whole column chunks.
+        pf = pq.ParquetFile(f, buffer_size=1024 * 1024, pre_buffer=False)
+        schema = [{"name": fld.name, "type": str(fld.type)} for fld in pf.schema_arrow]
+        md = pf.metadata
+        first = []
+        if md.num_rows:
+            batch = next(pf.iter_batches(batch_size=rows), None)
+            if batch is not None:
+                first = [{k: _jsonable(v) for k, v in r.items()} for r in batch.to_pylist()[:rows]]
+    return {"schema": schema, "num_rows": md.num_rows, "num_row_groups": md.num_row_groups,
+            "num_columns": md.num_columns, "rows": first}
+
+
+def open_download(tier: Tier, key: str, chunk: int = 8 * 1024 * 1024):
+    """``(info, iterator)`` streaming an object in chunks (for downloads)."""
+    info = object_info(tier, key)
+
+    def gen():
+        with tier.fs.open(tier.path(info["key"]), "rb", block_size=chunk) as f:
+            while True:
+                b = f.read(chunk)
+                if not b:
+                    break
+                yield b
+
+    return info, gen()
 
 
 # ── privacy guard ─────────────────────────────────────────────────────────────
@@ -453,6 +872,10 @@ class PrivacyGuard:
     def __init__(self, tier: Tier):
         from dataset_handlers.internal_store import is_private_name  # lazy (pulls `datasets`)
         self.tier = tier
+        # swl:// datasets live in the tier's configured bucket, whichever bucket
+        # is being synced.
+        base = tier.parent or tier
+        self._swl = self if base is tier else PrivacyGuard(base)
         self._is_private_name = is_private_name
         self._groups_scanned: set[str] = set()
         self._private_dirs: set[str] = set()
@@ -530,11 +953,12 @@ class PrivacyGuard:
             return f"internal dataset reference {uri!r} is malformed"
         if self._is_private_name(name):
             return f"trained on internal dataset {name!r}, which matches a private marker"
-        self._scan_group(name.split("/", 1)[0])
+        store = self._swl
+        store._scan_group(name.split("/", 1)[0])
         d = f"datasets/{name}/"
-        if d not in self._dataset_dirs:
+        if d not in store._dataset_dirs:
             return f"trained on internal dataset {name!r}, which is not in this tier (cannot verify it is shareable)"
-        if d in self._private_dirs:
+        if d in store._private_dirs:
             return f"trained on private internal dataset {name!r}"
         return None
 
@@ -621,6 +1045,8 @@ class SyncResult:
     deleted: list[str] = field(default_factory=list)
     meta_missing: list[str] = field(default_factory=list)
     guarded: bool = False  # src private -> dst shared
+    src_bucket: Optional[str] = None
+    dst_bucket: Optional[str] = None
     move_aborted: str = ""
 
     @property
@@ -643,7 +1069,8 @@ class SyncResult:
         def cap(items):
             return items[:max_items]
         return {
-            "src": self.src, "dst": self.dst, "prefix": self.prefix,
+            "src": self.src, "dst": self.dst, "src_bucket": self.src_bucket,
+            "dst_bucket": self.dst_bucket, "prefix": self.prefix,
             "dry_run": self.dry_run, "move": self.move, "verify": self.verify,
             "overwrite": self.overwrite, "guarded": self.guarded, "ok": self.ok,
             "counts": {
@@ -749,13 +1176,14 @@ def sync(
     every skipped "already there" object) has been verified by SHA-256 and the
     run had no errors. Refused (private) objects are never copied or deleted.
     """
-    if src.same_location(dst) or src.name == dst.name:
+    if src.same_location(dst) or (src.name == dst.name and src.bucket == dst.bucket):
         raise StorageTierError("Source and destination are the same bucket")
     prefix = norm_prefix(prefix)
     if move:
         verify = True
     res = SyncResult(src=src.name, dst=dst.name, prefix=prefix, dry_run=dry_run, move=move,
-                     verify=verify, overwrite=overwrite, guarded=src.private and not dst.private)
+                     verify=verify, overwrite=overwrite, guarded=src.private and not dst.private,
+                     src_bucket=src.bucket, dst_bucket=dst.bucket)
 
     state = {"phase": "planning", "objects_done": 0, "objects_total": 0,
              "bytes_done": 0, "bytes_total": 0, "current_key": None}
@@ -912,7 +1340,7 @@ def delete(tier: Tier, prefix: str, *, confirm: bool = False, dry_run: bool = Fa
         raise StorageTierError("Deletion requires confirm=True")
     objs = iter_objects(tier, p)
     total = sum(o["size"] for o in objs.values())
-    out = {"tier": tier.name, "prefix": p, "objects": len(objs), "bytes": total,
+    out = {"tier": tier.name, "bucket": tier.bucket, "prefix": p, "objects": len(objs), "bytes": total,
            "human": human_bytes(total), "dry_run": dry_run, "deleted": False}
     if dry_run or not objs:
         return out

@@ -416,25 +416,66 @@ class MerlinaAPI {
         }, LONG_TIMEOUT);
     }
 
-    // Object-storage tiers (browse / sync / delete)
+    // Object-storage tiers (buckets / browse / preview / sync / delete)
     static async getStorageTiers(usage = false) {
         return this.fetch(`/storage/tiers?usage=${usage ? 'true' : 'false'}`, {}, LONG_TIMEOUT);
     }
 
-    static async storageLs(tier, prefix = '') {
-        const q = new URLSearchParams({ tier, prefix });
+    static _storageQuery(params) {
+        const q = new URLSearchParams();
+        for (const [k, v] of Object.entries(params)) {
+            if (v !== undefined && v !== null && v !== '') q.set(k, String(v));
+        }
+        return q.toString();
+    }
+
+    static async storageBuckets(tier) {
+        return this.fetch(`/storage/buckets?${this._storageQuery({ tier })}`, {}, LONG_TIMEOUT);
+    }
+
+    static async storageBucketInfo(tier, bucket) {
+        return this.fetch(`/storage/buckets/info?${this._storageQuery({ tier, bucket })}`, {}, LONG_TIMEOUT);
+    }
+
+    static async storageCreateBucket(tier, name) {
+        return this.fetch('/storage/buckets', {
+            method: 'POST',
+            body: JSON.stringify({ tier, name })
+        }, LONG_TIMEOUT);
+    }
+
+    static async storageDeleteBucket({ tier, name, confirm_name = null, empty_first = false, dry_run = false } = {}) {
+        return this.fetch('/storage/buckets/delete', {
+            method: 'POST',
+            body: JSON.stringify({ tier, name, confirm_name, empty_first, dry_run })
+        }, LONG_TIMEOUT);
+    }
+
+    static async storageLs({ tier, bucket = null, prefix = '', search = '', sort = 'name', order = 'asc', offset = 0, limit = 100 } = {}) {
+        const q = this._storageQuery({ tier, bucket, prefix, search, sort, order, offset, limit });
         return this.fetch(`/storage/ls?${q}`, {}, LONG_TIMEOUT);
     }
 
-    static async storageDu(tier, prefix = '') {
-        const q = new URLSearchParams({ tier, prefix });
-        return this.fetch(`/storage/du?${q}`, {}, LONG_TIMEOUT);
+    static async storageDu(tier, prefix = '', bucket = null) {
+        return this.fetch(`/storage/du?${this._storageQuery({ tier, prefix, bucket })}`, {}, LONG_TIMEOUT);
     }
 
-    static async storageSync({ src, dst, prefix = '', dry_run = true, move = false, verify = false, overwrite = false } = {}) {
+    static async storageObject(tier, key, bucket = null) {
+        return this.fetch(`/storage/object?${this._storageQuery({ tier, key, bucket })}`, {}, LONG_TIMEOUT);
+    }
+
+    static async storagePreview(tier, key, bucket = null) {
+        return this.fetch(`/storage/preview?${this._storageQuery({ tier, key, bucket })}`, {}, LONG_TIMEOUT);
+    }
+
+    static storageDownloadUrl(tier, key, bucket = null) {
+        return `/storage/download?${this._storageQuery({ tier, key, bucket })}`;
+    }
+
+    static async storageSync({ src, dst, src_bucket = null, dst_bucket = null, prefix = '', dry_run = true, move = false, verify = false, overwrite = false } = {}) {
         return this.fetch('/storage/sync', {
             method: 'POST',
-            body: JSON.stringify({ src, dst, prefix, dry_run, move, verify, overwrite })
+            body: JSON.stringify({ src, dst, src_bucket, dst_bucket, prefix, dry_run, move, verify, overwrite })
         }, LONG_TIMEOUT);
     }
 
@@ -446,10 +487,10 @@ class MerlinaAPI {
         return this.fetch(`/storage/sync/${encodeURIComponent(id)}/cancel`, { method: 'POST' });
     }
 
-    static async storageDelete({ tier, prefix, confirm = false, dry_run = false } = {}) {
+    static async storageDelete({ tier, bucket = null, prefix, confirm = false, dry_run = false } = {}) {
         return this.fetch('/storage/delete', {
             method: 'POST',
-            body: JSON.stringify({ tier, prefix, confirm, dry_run })
+            body: JSON.stringify({ tier, bucket, prefix, confirm, dry_run })
         }, LONG_TIMEOUT);
     }
 

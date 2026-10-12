@@ -67,6 +67,10 @@ class Settings(BaseSettings):
     merlina_artifact_access_key: Optional[str] = None
     merlina_artifact_secret_key: Optional[str] = None
     merlina_artifact_session_token: Optional[str] = None
+    # Optional admin key for bucket-level operations in the storage UI (only
+    # used when the artifact store is a separate tier; see s3_admin_*).
+    merlina_artifact_admin_access_key: Optional[str] = None
+    merlina_artifact_admin_secret_key: Optional[str] = None
 
     # ==========================================
     # Internal Dataset Store (S3-compatible)
@@ -82,6 +86,11 @@ class Settings(BaseSettings):
     s3_access_key: Optional[str] = None
     s3_secret_key: Optional[str] = None
     s3_region: str = "auto"
+    # Optional admin key for bucket-level operations only (list/create/delete
+    # buckets, browse buckets other than s3_dataset_bucket) in Merlina's
+    # Object storage UI / `merlina storage`. Falls back to the key above.
+    s3_admin_access_key: Optional[str] = None
+    s3_admin_secret_key: Optional[str] = None
     # When true, a "huggingface" source is served from the internal store if a
     # mirror of it exists there (mirror-on-first-use lands in a later phase).
     prefer_internal: bool = False
@@ -100,6 +109,9 @@ class Settings(BaseSettings):
     r2_access_key: Optional[str] = None
     r2_secret_key: Optional[str] = None
     r2_region: str = "auto"
+    # Optional admin key for bucket-level operations (see s3_admin_* above).
+    r2_admin_access_key: Optional[str] = None
+    r2_admin_secret_key: Optional[str] = None
     # Which backend THIS process resolves swl:// against: "internal" (MinIO, the
     # private primary) or "external" (R2). A rented GPU box sets
     # DATASET_STORE=external and supplies the r2_* vars; everything else — the

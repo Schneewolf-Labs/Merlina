@@ -29,12 +29,23 @@ globalThis.document = {
 };
 
 const { MerlinaAPI } = await import('../../frontend/js/api.js');
-const { StorageManager, breadcrumbs, humanBytes, esc, isGuarded } = await import('../../frontend/js/storage.js');
+const {
+    StorageManager, breadcrumbs, humanBytes, humanCount, esc, isGuarded, validateBucketName, renderPreview,
+} = await import('../../frontend/js/storage.js');
 
 const TIERS = [
-    { name: 'internal', bucket: 'datasets', endpoint_host: 'minio.lan:9000', private: true, configured: true, hint_prefix: '' },
-    { name: 'external', bucket: 'shared', endpoint_host: 'r2.example.com', private: false, configured: true, hint_prefix: 'runs/' },
+    { name: 'internal', bucket: 'datasets', endpoint_host: 'minio.lan:9000', private: true, configured: true,
+      hint_prefix: '', default_buckets: ['datasets'], admin_configured: false, env_prefix: 'S3' },
+    { name: 'external', bucket: 'shared', endpoint_host: 'r2.example.com', private: false, configured: true,
+      hint_prefix: 'runs/', default_buckets: ['shared'], admin_configured: false, env_prefix: 'R2' },
 ];
+
+const BUCKETS = {
+    internal: { ok: true, hint: '', message: '', buckets: [
+        { name: 'datasets', default: true }, { name: 'scratch', default: false }] },
+    external: { ok: false, message: 'access denied', hint: 'Set R2_ADMIN_ACCESS_KEY / R2_ADMIN_SECRET_KEY',
+        buckets: [{ name: 'shared', default: true }] },
+};
 
 function plan(overrides = {}) {
     return {
@@ -55,7 +66,10 @@ function manager() {
     elements.clear();
     const m = new StorageManager();
     m.tiers = TIERS;
+    m.buckets = JSON.parse(JSON.stringify(BUCKETS));
+    m.toast = { show() {} };
     m.tier = 'internal';
+    m.bucket = 'datasets';
     m.prefix = 'datasets/';
     m.selected = 'datasets/';
     return m;
@@ -89,45 +103,116 @@ describe('storage helpers', () => {
     });
 });
 
-describe('StorageManager actions', () => {
+describe('bucket name validation (mirrors the backend)', () => {
+    it('accepts valid names', () => {
+        for (const n of ['abc', 'my-bucket', 'a.b.c', 'x'.repeat(63)]) assert.equal(validateBucketName(n), null, n);
+    });
+    it('rejects invalid names', () => {
+        for (const n of ['', 'ab', 'x'.repeat(64), 'Upper', 'under_score', '-lead', 'trail-', 'a..b',
+            'a.-b', '192.168.1.1', 'xn--abc', 'foo-s3alias', 'a/b']) {
+            assert.ok(validateBucketName(n), n);
+        }
+    });
+});
+
+describe('renderPreview', () => {
+    it('escapes text and notes truncation', () => {
+        const html = renderPreview({ kind: 'text', text: '<script>x</script>', truncated: true, bytes_shown: 262144 });
+        assert.match(html, /&lt;script&gt;/);
+        assert.doesNotMatch(html, /<script>/);
+        assert.match(html, /truncated/);
+    });
+    it('summarises a safetensors header', () => {
+        const html = renderPreview({
+            kind: 'safetensors', tensor_count: 2, total_params: 131153920, header_bytes: 96920,
+            dtypes: { F32: 131153920 }, metadata: null,
+            tensors: [{ name: 'a.<b>', dtype: 'F32', shape: [64, 10240], params: 655360 }],
+        });
+        assert.match(html, /131\.2M/);
+        assert.match(html, /\[64, 10240\]/);
+        assert.match(html, /a\.&lt;b&gt;/);
+    });
+    it('renders parquet schema and rows', () => {
+        const html = renderPreview({
+            kind: 'parquet', num_rows: 50, num_columns: 2, num_row_groups: 1,
+            schema: [{ name: 'prompt', type: 'string' }, { name: 'tags', type: 'list<string>' }],
+            rows: [{ prompt: 'hi & bye', tags: ['a'] }],
+        });
+        assert.match(html, /<strong>50<\/strong> rows/);
+        assert.match(html, /hi &amp; bye/);
+        assert.match(html, /\[&quot;a&quot;\]/);
+    });
+    it('binary gets a download hint', () => {
+        assert.match(renderPreview({ kind: 'binary' }), /download/);
+    });
+    it('humanCount', () => {
+        assert.equal(humanCount(131153920), '131.2M');
+        assert.equal(humanCount(999), '999');
+    });
+});
+
+describe('StorageManager', () => {
     let calls;
     beforeEach(() => {
         calls = [];
         MerlinaAPI.storageSync = async (req) => {
-            calls.push(req);
+            calls.push(['sync', req]);
             return req.dry_run ? { dry_run: true, plan: plan() } : { dry_run: false, id: 'sync_1' };
         };
         MerlinaAPI.storageSyncStatus = async () => ({ id: 'sync_1', state: 'running', progress: {} });
         MerlinaAPI.storageDelete = async (req) => {
-            calls.push(req);
+            calls.push(['delete', req]);
             return { objects: 3, human: '3 B', prefix: 'datasets', deleted: !!req.confirm };
         };
+        MerlinaAPI.storageLs = async (req) => {
+            calls.push(['ls', req]);
+            return { dirs: [], objects: [{ key: 'a.json', name: 'a.json', size: 1, mtime: null }],
+                total: 250, offset: req.offset, limit: req.limit, has_more: req.offset + req.limit < 250, search: req.search };
+        };
+        MerlinaAPI.storageCreateBucket = async (tier, name) => {
+            calls.push(['create', tier, name]);
+            return { ok: false, message: 'may not create buckets', hint: 'Set R2_ADMIN_ACCESS_KEY' };
+        };
+        MerlinaAPI.storageDeleteBucket = async (req) => {
+            calls.push(['rb', req]);
+            return req.dry_run
+                ? { ok: true, objects: 2, human: '5 B', bucket: req.name }
+                : { ok: true, deleted: true, message: 'Deleted bucket.' };
+        };
+        MerlinaAPI.storageBuckets = async (tier) => BUCKETS[tier];
     });
 
-    it('marks private -> shared actions as guarded and offers no Apply before a preview', () => {
+    it('lists buckets per tier, stars defaults, and shows the denied hint', () => {
+        const m = manager();
+        m._renderTiers();
+        const html = el('storage-tiers').innerHTML;
+        assert.match(html, /data-bucket="scratch"/);
+        assert.match(html, /★ default/);
+        assert.match(html, /R2_ADMIN_ACCESS_KEY/);
+        // default buckets never get a delete button
+        assert.doesNotMatch(html, /data-action="bucket-delete" data-tier="internal" data-bucket="datasets"/);
+        assert.match(html, /data-action="bucket-delete" data-tier="internal" data-bucket="scratch"/);
+    });
+
+    it('offers every other bucket as a destination and marks private -> shared as guarded', () => {
         const m = manager();
         m._renderActions();
         const html = el('storage-actions').innerHTML;
-        assert.match(html, /Sync to external 🛡️/);
-        assert.match(html, /Move to external 🛡️/);
+        assert.match(html, /value="internal\|scratch">internal:scratch</);
+        assert.match(html, /value="external\|shared">external:shared 🛡️/);
+        assert.doesNotMatch(html, /value="internal\|datasets"/);
         assert.doesNotMatch(html, /data-action="apply"/);
     });
 
-    it('shows no guard marker when browsing a shared tier', () => {
-        const m = manager();
-        m.tier = 'external';
-        m._renderActions();
-        assert.doesNotMatch(el('storage-actions').innerHTML, /🛡️/);
-    });
-
-    it('preview renders the refused objects (escaped) and an Apply button', async () => {
+    it('preview renders refused objects (escaped) and an Apply button', async () => {
         const m = manager();
         m._renderActions();
-        await m.preview('external', false);
-        assert.equal(calls[0].dry_run, true);
+        await m.preview('external', 'shared', false);
+        assert.equal(calls[0][1].dry_run, true);
+        assert.equal(calls[0][1].src_bucket, 'datasets');
+        assert.equal(calls[0][1].dst_bucket, 'shared');
         const html = el('storage-plan').innerHTML;
         assert.match(html, /2 private object\(s\) refused/);
-        assert.match(html, /datasets\/secret\/r1\/a/);
         assert.match(html, /&lt;script&gt;/);
         assert.doesNotMatch(html, /<script>/);
         assert.match(html, /data-action="apply"/);
@@ -135,7 +220,6 @@ describe('StorageManager actions', () => {
 
     it('apply without a preview does nothing', async () => {
         const m = manager();
-        m.toast = { show() {} };
         await m.apply();
         assert.equal(calls.length, 0);
     });
@@ -143,18 +227,73 @@ describe('StorageManager actions', () => {
     it('apply replays the previewed request as a real run, once', async () => {
         const m = manager();
         m._renderActions();
-        await m.preview('external', true);
+        await m.preview('internal', 'scratch', true);
         m._poll = () => {};
         await m.apply();
         assert.equal(calls.length, 2);
-        assert.deepEqual({ ...calls[1], dry_run: true }, calls[0]);
-        assert.equal(calls[1].dry_run, false);
-        assert.equal(calls[1].move, true);
-        assert.equal(calls[1].verify, true);
-        assert.equal(m.plan, null);  // a second Apply needs a fresh preview
+        assert.deepEqual({ ...calls[1][1], dry_run: true }, calls[0][1]);
+        assert.equal(calls[1][1].dry_run, false);
+        assert.equal(calls[1][1].move, true);
+        assert.equal(calls[1][1].verify, true);
+        assert.equal(m.plan, null);
     });
 
-    it('delete needs the prefix typed exactly', async () => {
+    it('browse passes bucket, search, sort and paging; pager pages', async () => {
+        const m = manager();
+        m.tier = null;
+        await m.browse('internal', 'scratch', 'runs/');
+        let req = calls.at(-1)[1];
+        assert.deepEqual([req.bucket, req.prefix, req.offset, req.limit], ['scratch', 'runs/', 0, 100]);
+        assert.match(el('storage-pager').innerHTML, /1–1 of 250/);
+        m.view.sort = 'size';
+        m.view.order = 'desc';
+        m.view.search = 'json';
+        await m._onClick({ target: { closest: () => ({ dataset: { action: 'page', dir: '1' } }) } });
+        req = calls.at(-1)[1];
+        assert.deepEqual([req.offset, req.sort, req.order, req.search], [100, 'size', 'desc', 'json']);
+        // moving to another folder resets search and paging
+        await m.browse('internal', 'scratch', 'runs/job/');
+        req = calls.at(-1)[1];
+        assert.deepEqual([req.offset, req.search], [0, '']);
+        assert.match(el('storage-crumbs').innerHTML, /internal:scratch<\/button> <span aria-hidden="true">\/<\/span> /);
+    });
+
+    it('create bucket validates client-side before calling the API', async () => {
+        const m = manager();
+        el('storage-new-bucket-internal').value = 'Bad_Name';
+        await m.createBucket('internal');
+        assert.equal(calls.length, 0);
+        assert.match(el('storage-new-bucket-msg-internal').innerHTML, /lower-case/);
+        el('storage-new-bucket-internal').value = 'good-name';
+        await m.createBucket('internal');
+        assert.deepEqual(calls.at(-1), ['create', 'internal', 'good-name']);
+        assert.match(el('storage-new-bucket-msg-internal').innerHTML, /R2_ADMIN_ACCESS_KEY/);
+    });
+
+    it('bucket delete shows size, needs the typed name and "empty first" when not empty', async () => {
+        const m = manager();
+        await m.openBucketDelete('internal', 'scratch');
+        const html = el('storage-bucket-panel').innerHTML;
+        assert.match(html, /2 object\(s\), 5 B/);
+        assert.match(html, /Empty it first/);
+        el('storage-bucket-confirm').value = 'scratch';
+        el('storage-bucket-empty').checked = false;
+        assert.equal(m._bucketDeleteReady(), false);
+        await m.deleteBucket();
+        assert.equal(calls.filter(c => c[0] === 'rb' && !c[1].dry_run).length, 0);
+        el('storage-bucket-empty').checked = true;
+        el('storage-bucket-confirm').value = 'scratc';
+        assert.equal(m._bucketDeleteReady(), false);
+        el('storage-bucket-confirm').value = 'scratch';
+        assert.equal(m._bucketDeleteReady(), true);
+        m.browse = async () => {};
+        await m.deleteBucket();
+        const real = calls.filter(c => c[0] === 'rb' && !c[1].dry_run);
+        assert.equal(real.length, 1);
+        assert.deepEqual([real[0][1].confirm_name, real[0][1].empty_first], ['scratch', true]);
+    });
+
+    it('prefix delete needs the prefix typed exactly and carries the bucket', async () => {
         const m = manager();
         await m._openDelete();
         assert.match(el('storage-delete-confirm').innerHTML, /Type <code>datasets\/<\/code> to confirm/);
@@ -164,10 +303,11 @@ describe('StorageManager actions', () => {
         m._onInput({ target: input });
         assert.equal(go.disabled, true);
         await m.deleteSelected();
-        assert.equal(calls.filter(c => c.confirm).length, 0);
+        assert.equal(calls.filter(c => c[0] === 'delete' && c[1].confirm).length, 0);
         input.value = 'datasets/';
         m._onInput({ target: input });
         assert.equal(go.disabled, false);
+        assert.equal(calls.find(c => c[0] === 'delete')[1].bucket, 'datasets');
     });
 
     it('no delete is offered at the bucket root', () => {

@@ -2566,26 +2566,55 @@ def disk_wandb_clear(req: WandbClearRequest):
 
 
 # ── Storage tiers (object storage) ──────────────────────────────────────────
-# Sync runs are background threads tracked in memory; one per (src, dst) pair.
+# Sync runs are background threads tracked in memory; one per
+# (src tier, src bucket, dst tier, dst bucket).
 _storage_jobs: dict[str, dict] = {}
 _storage_active_pairs: dict[tuple, str] = {}
 _storage_lock = threading.Lock()
 _STORAGE_JOBS_KEEP = 50
 
 
-def _storage_tier_or_400(name: str):
+def _storage_http(e: Exception) -> HTTPException:
+    """Map a storage-layer exception to an HTTP error (no credentials are ever
+    part of these messages)."""
     import storage_tiers
+    if isinstance(e, (storage_tiers.StorageNotFound, FileNotFoundError)):
+        return HTTPException(status_code=404, detail=str(e) or "Not found")
+    if isinstance(e, storage_tiers.StorageTierError):
+        return HTTPException(status_code=400, detail=str(e))
+    if storage_tiers._is_access_denied(e):
+        return HTTPException(status_code=403, detail="Access denied by the storage provider")
+    return HTTPException(status_code=502, detail=f"Storage error: {type(e).__name__}: {e}")
+
+
+def _storage_call(fn, *args, **kwargs):
     try:
-        return storage_tiers.get_tier(name)
-    except storage_tiers.StorageTierError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        return fn(*args, **kwargs)
+    except HTTPException:
+        raise
+    except Exception as e:  # noqa: BLE001 — mapped to a clean HTTP error
+        raise _storage_http(e)
+
+
+def _storage_tier_or_400(name: str, bucket: Optional[str] = None):
+    import storage_tiers
+    return _storage_call(lambda: storage_tiers.get_tier(name).with_bucket(bucket or None))
+
+
+def _storage_busy(tier: str, bucket: str) -> Optional[str]:
+    """Id of a running sync touching ``tier``/``bucket``, if any."""
+    with _storage_lock:
+        for (st_, sb, dt, db), jid in _storage_active_pairs.items():
+            if (st_, sb) == (tier, bucket) or (dt, db) == (tier, bucket):
+                return jid
+    return None
 
 
 @app.get("/storage/tiers", tags=["Storage"], summary="List object-storage tiers")
 def storage_tiers_list(usage: bool = False):
-    """Configured tiers with bucket, endpoint host and privacy. Never returns
-    credentials. ``usage=true`` also totals each configured tier (lists every
-    object, so it can take a moment on large buckets)."""
+    """Configured tiers with default bucket(s), endpoint host, privacy and
+    whether an admin key is configured. Never returns credentials.
+    ``usage=true`` also totals each tier's default bucket (lists every object)."""
     import storage_tiers
     out = []
     for tier in storage_tiers.get_tiers().values():
@@ -2599,25 +2628,109 @@ def storage_tiers_list(usage: bool = False):
     return {"tiers": out}
 
 
-@app.get("/storage/ls", tags=["Storage"], summary="List one level of a tier")
-def storage_ls(tier: str, prefix: str = ""):
-    """Delimiter-style listing: sub-prefixes plus objects (size, mtime)."""
+@app.get("/storage/buckets", tags=["Storage"], summary="List buckets on a tier's endpoint")
+def storage_buckets(tier: str):
+    """Buckets visible to the tier's admin key (or normal key). When listing is
+    denied, the configured bucket(s) are returned with ``ok=false`` and a
+    ``hint`` naming the setting that would allow it."""
     import storage_tiers
-    t = _storage_tier_or_400(tier)
-    try:
-        return storage_tiers.ls(t, prefix)
-    except storage_tiers.StorageTierError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    return _storage_call(storage_tiers.list_buckets, _storage_tier_or_400(tier))
+
+
+@app.get("/storage/buckets/info", tags=["Storage"], summary="Bucket region, creation date and flags")
+def storage_bucket_info(tier: str, bucket: str):
+    import storage_tiers
+    return _storage_call(storage_tiers.bucket_info, _storage_tier_or_400(tier), bucket)
+
+
+class StorageBucketCreateRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    tier: str
+    name: str = Field(..., description="New bucket name (S3 naming rules)")
+
+
+@app.post("/storage/buckets", tags=["Storage"], summary="Create a bucket")
+def storage_bucket_create(req: StorageBucketCreateRequest):
+    """Uses the tier's admin key when configured. Returns ``ok=false`` with a
+    message (and a ``hint``) when the name is invalid or the key may not."""
+    import storage_tiers
+    return _storage_call(storage_tiers.make_bucket, _storage_tier_or_400(req.tier), req.name)
+
+
+class StorageBucketDeleteRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    tier: str
+    name: str
+    confirm_name: Optional[str] = Field(None, description="The bucket name, typed back")
+    empty_first: bool = Field(False, description="Delete all objects first if not empty")
+    dry_run: bool = Field(False, description="Only report object count and size")
+
+
+@app.post("/storage/buckets/delete", tags=["Storage"], summary="Delete a bucket")
+def storage_bucket_delete(req: StorageBucketDeleteRequest):
+    """Refuses configured Merlina buckets. Requires ``confirm_name`` to equal
+    the bucket name, and refuses a non-empty bucket unless ``empty_first``.
+    ``dry_run`` returns the object count and size for the confirmation."""
+    import storage_tiers
+    t = _storage_tier_or_400(req.tier)
+    if not req.dry_run:
+        busy = _storage_busy(t.name, req.name)
+        if busy:
+            raise HTTPException(status_code=409, detail=f"A sync involving this bucket is running ({busy})")
+    return _storage_call(storage_tiers.delete_bucket, t, req.name, confirm_name=req.confirm_name,
+                         empty_first=req.empty_first, dry_run=req.dry_run)
+
+
+@app.get("/storage/ls", tags=["Storage"], summary="List one level of a bucket")
+def storage_ls(tier: str, prefix: str = "", bucket: Optional[str] = None, search: str = "",
+               sort: Literal["name", "size", "mtime"] = "name",
+               order: Literal["asc", "desc"] = "asc", offset: int = 0, limit: int = 200):
+    """Delimiter-style listing (sub-prefixes + objects with size and mtime),
+    filtered by ``search`` within this level, sorted and paginated."""
+    import storage_tiers
+    t = _storage_tier_or_400(tier, bucket)
+    return _storage_call(storage_tiers.ls, t, prefix, search=search, sort=sort, order=order,
+                         offset=offset, limit=limit)
 
 
 @app.get("/storage/du", tags=["Storage"], summary="Object count and bytes under a prefix")
-def storage_du(tier: str, prefix: str = ""):
+def storage_du(tier: str, prefix: str = "", bucket: Optional[str] = None):
     import storage_tiers
-    t = _storage_tier_or_400(tier)
-    try:
-        return storage_tiers.du(t, prefix)
-    except storage_tiers.StorageTierError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    return _storage_call(storage_tiers.du, _storage_tier_or_400(tier, bucket), prefix)
+
+
+@app.get("/storage/object", tags=["Storage"], summary="Object details")
+def storage_object(tier: str, key: str, bucket: Optional[str] = None):
+    """Size, mtime, content type, ETag and user metadata (including the
+    ``sha256`` written by sync)."""
+    import storage_tiers
+    return _storage_call(storage_tiers.object_info, _storage_tier_or_400(tier, bucket), key)
+
+
+@app.get("/storage/preview", tags=["Storage"], summary="Inline preview of an object")
+def storage_preview(tier: str, key: str, bucket: Optional[str] = None):
+    """Text (first 256 KiB), safetensors header, or parquet schema + first
+    rows — each read with range requests, never the whole object."""
+    import storage_tiers
+    return _storage_call(storage_tiers.preview, _storage_tier_or_400(tier, bucket), key)
+
+
+@app.get("/storage/download", tags=["Storage"], summary="Download an object")
+def storage_download(tier: str, key: str, bucket: Optional[str] = None):
+    """Streams the object through the server in chunks. Always proxied (no
+    presigned URLs): the private tier is LAN-only, and a presigned URL would
+    hand the browser the key id."""
+    from urllib.parse import quote
+    from fastapi.responses import StreamingResponse
+    import storage_tiers
+    info, chunks = _storage_call(storage_tiers.open_download, _storage_tier_or_400(tier, bucket), key)
+    fallback = "".join(c if c.isalnum() or c in "._-" else "_" for c in info["name"]) or "download"
+    headers = {
+        "Content-Disposition": f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(info['name'])}",
+        "Content-Length": str(info["size"]),
+    }
+    return StreamingResponse(chunks, media_type=info.get("content_type") or "application/octet-stream",
+                             headers=headers)
 
 
 class StorageSyncRequest(BaseModel):
@@ -2626,6 +2739,8 @@ class StorageSyncRequest(BaseModel):
 
     src: str = Field(..., description="Source tier")
     dst: str = Field(..., description="Destination tier")
+    src_bucket: Optional[str] = Field(None, description="Source bucket (default: the tier's)")
+    dst_bucket: Optional[str] = Field(None, description="Destination bucket (default: the tier's)")
     prefix: str = Field("", description="Key prefix to sync ('' = whole bucket)")
     dry_run: bool = Field(True, description="Plan only (returned synchronously)")
     move: bool = Field(False, description="Delete sources after every copy is verified")
@@ -2661,40 +2776,37 @@ def _storage_run_sync(job_id: str, src, dst, req: StorageSyncRequest, pair: tupl
                 del _storage_active_pairs[pair]
 
 
-@app.post("/storage/sync", tags=["Storage"], summary="Plan or start a sync between tiers")
+@app.post("/storage/sync", tags=["Storage"], summary="Plan or start a sync between tiers/buckets")
 def storage_sync(req: StorageSyncRequest):
     """``dry_run`` (the default) returns the plan — to_copy / skipped / refused
     with byte totals — synchronously. A real run starts a background job and
     returns its id; poll ``GET /storage/sync/{id}``. Only one sync may run per
-    source/destination pair. Objects refused by the private guard are reported
-    and never copied; there is no override here."""
+    source/destination bucket pair. Objects refused by the private guard (any
+    bucket on a private tier -> any bucket on a shared tier) are reported and
+    never copied; there is no override here."""
     import storage_tiers
-    src, dst = _storage_tier_or_400(req.src), _storage_tier_or_400(req.dst)
-    if src.name == dst.name:
-        raise HTTPException(status_code=400, detail="Source and destination tiers must differ")
-    try:
-        storage_tiers.norm_prefix(req.prefix)
-    except storage_tiers.StorageTierError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+    src = _storage_tier_or_400(req.src, req.src_bucket)
+    dst = _storage_tier_or_400(req.dst, req.dst_bucket)
+    if src.name == dst.name and src.bucket == dst.bucket:
+        raise HTTPException(status_code=400, detail="Source and destination must differ (tier or bucket)")
+    _storage_call(storage_tiers.norm_prefix, req.prefix)
     if req.dry_run:
-        try:
-            res = storage_tiers.sync(src, dst, req.prefix, dry_run=True, move=req.move,
-                                     verify=req.verify, overwrite=req.overwrite)
-        except storage_tiers.StorageTierError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+        res = _storage_call(storage_tiers.sync, src, dst, req.prefix, dry_run=True, move=req.move,
+                            verify=req.verify, overwrite=req.overwrite)
         return {"dry_run": True, "plan": res.to_dict()}
 
     import uuid
-    pair = (src.name, dst.name)
+    pair = (src.name, src.bucket, dst.name, dst.bucket)
     with _storage_lock:
         running = _storage_active_pairs.get(pair)
         if running:
             raise HTTPException(status_code=409,
-                                detail=f"A {src.name} -> {dst.name} sync is already running ({running})")
+                                detail=f"A {src.name}:{src.bucket} -> {dst.name}:{dst.bucket} sync is already running ({running})")
         job_id = f"sync_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
         cancel = threading.Event()
         _storage_jobs[job_id] = {
             "id": job_id, "state": "running", "src": src.name, "dst": dst.name,
+            "src_bucket": src.bucket, "dst_bucket": dst.bucket,
             "prefix": req.prefix, "move": req.move, "verify": req.verify or req.move,
             "overwrite": req.overwrite, "started_at": datetime.now().isoformat(),
             "finished_at": None, "progress": {"phase": "planning"}, "result": None,
@@ -2746,6 +2858,7 @@ def storage_sync_cancel(job_id: str):
 
 class StorageDeleteRequest(BaseModel):
     tier: str
+    bucket: Optional[str] = Field(None, description="Bucket (default: the tier's)")
     prefix: str = Field(..., description="Non-empty prefix; the whole bucket is refused")
     confirm: bool = Field(False, description="Must be true to delete")
     dry_run: bool = Field(False, description="Preview what would be deleted")
@@ -2755,19 +2868,15 @@ class StorageDeleteRequest(BaseModel):
 def storage_delete(req: StorageDeleteRequest):
     """Permanently deletes objects under ``prefix``. Requires ``confirm: true``
     (or ``dry_run: true`` for a preview). An empty prefix is always refused.
-    Refused while a sync involving the tier is running."""
+    Refused while a sync involving the bucket is running."""
     import storage_tiers
-    t = _storage_tier_or_400(req.tier)
+    t = _storage_tier_or_400(req.tier, req.bucket)
     if not req.dry_run:
-        with _storage_lock:
-            busy = [jid for pair, jid in _storage_active_pairs.items() if t.name in pair]
+        busy = _storage_busy(t.name, t.bucket)
         if busy:
             raise HTTPException(status_code=409,
-                                detail=f"A sync involving '{t.name}' is running ({busy[0]})")
-    try:
-        return storage_tiers.delete(t, req.prefix, confirm=req.confirm, dry_run=req.dry_run)
-    except storage_tiers.StorageTierError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+                                detail=f"A sync involving '{t.name}:{t.bucket}' is running ({busy})")
+    return _storage_call(storage_tiers.delete, t, req.prefix, confirm=req.confirm, dry_run=req.dry_run)
 
 
 @app.get("/queue/status", tags=["Queue"], summary="Get queue status and statistics")

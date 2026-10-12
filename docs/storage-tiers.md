@@ -2,8 +2,9 @@
 
 Merlina can talk to up to three S3-compatible object stores. The storage-tiers
 feature lets you manage them from one place, through the `merlina storage` CLI,
-the `/storage/*` API or the web UI's **Object storage** section. You can browse
-buckets, check usage, copy or move prefixes between tiers, and delete prefixes.
+the `/storage/*` API or the web UI's **Object storage** section. You can list,
+create and delete buckets, browse and preview their contents, check usage, copy
+or move prefixes between tiers and buckets, and delete prefixes.
 
 | Tier        | Settings              | Privacy | Typical backend          | Holds                                    |
 |-------------|-----------------------|---------|--------------------------|------------------------------------------|
@@ -15,18 +16,33 @@ buckets, check usage, copy or move prefixes between tiers, and delete prefixes.
 endpoint or bucket than `external`. When both use the same bucket (a common
 setup), `external` already covers the artifact prefix and the UI opens it there.
 
-There are no new settings. The tiers reuse the variables described in
+The tiers reuse the variables described in
 [internal-dataset-store.md](internal-dataset-store.md) and
-[dev/artifact-storage.md](dev/artifact-storage.md). Credentials are never
-returned by the API or printed by the CLI.
+[dev/artifact-storage.md](dev/artifact-storage.md). The only new settings are
+the optional admin keys described under [Buckets](#buckets). Credentials are
+never returned by the API or printed by the CLI.
+
+A tier is one endpoint plus one **default bucket** (its configured dataset or
+artifact bucket). Every command, route and UI action can also target **any
+other bucket on the same endpoint**. That bucket keeps the tier's privacy: any
+bucket on the internal endpoint counts as private and any bucket on the
+external one as shared. So the privacy guard also covers cross-bucket syncs.
 
 ## CLI
 
 ```bash
 merlina storage tiers [--usage]                  # configured tiers (+ object count / bytes)
 merlina storage ls internal datasets/            # one level: sub-prefixes and objects
+merlina storage ls internal runs/ --sort size --desc --search adapter --limit 50
 merlina storage du external runs/                # object count and total bytes
-merlina storage buckets external [--create NAME] # list or create buckets (see "Buckets")
+merlina storage buckets internal [--sizes]       # buckets on the endpoint (* = default)
+merlina storage mb internal scratch-bucket       # make a bucket
+merlina storage rb internal scratch-bucket       # preview: object count and size
+merlina storage rb internal scratch-bucket --yes [--empty]   # remove (--empty if not empty)
+
+# Any command can target another bucket on the tier's endpoint
+merlina storage ls internal --bucket scratch-bucket
+merlina storage sync internal external runs/ --src-bucket scratch-bucket --dst-bucket other-bucket
 
 # Copy everything under runs/ from the shared tier down into the private one
 merlina storage sync external internal runs/ --dry-run
@@ -121,15 +137,76 @@ deletes refused objects.
 - treat the prefix as a directory, so `runs/a` matches `runs/a` and `runs/a/...`
   but not `runs/ab`.
 
-In the web UI, you confirm by typing the prefix. While a sync involving a tier
-is running, the API refuses deletes on that tier.
+In the web UI, you confirm by typing the prefix. While a sync involving a bucket
+is running, the API refuses deletes in that bucket.
 
 ## Buckets
 
-`buckets` lists the buckets the tier's key can see, and `--create` makes one.
-Keys scoped to a single bucket usually can't do either. Merlina then reports
-that access was denied and doesn't raise an error. Create buckets with an admin
-key in the provider's console or CLI, then grant the scoped key access.
+`buckets` lists the buckets visible to the tier's key, marking the configured
+**default** buckets. That includes the artifact bucket when it lives on the
+same endpoint. `mb` creates a bucket. New names are checked against the S3
+naming rules, in both the backend and the UI. `rb` deletes a bucket, with these
+guards:
+
+- **configured buckets** (dataset or artifact) are always refused;
+- the **bucket name must be typed back** (`confirm_name`; the CLI's `--yes`
+  stands in for it);
+- a **non-empty bucket** is refused unless you choose to empty it first
+  (`empty_first` / `--empty`). The confirmation shows its object count and size
+  before you do.
+
+The API refuses a bucket delete while a sync involving that bucket is running.
+
+### Admin keys (optional)
+
+The normal keys are usually scoped to one bucket, so they can't list, create or
+delete buckets. When that happens, Merlina still shows the configured bucket
+and an inline hint naming the setting that would allow it. You can add an
+optional **admin key per tier**. It is used **only** for bucket-level
+operations: listing, creating and deleting buckets, and browsing buckets other
+than the default. Everything else keeps using the normal key, which is also the
+fallback when no admin key is set.
+
+| Tier | Settings |
+|------|----------|
+| `internal` | `S3_ADMIN_ACCESS_KEY`, `S3_ADMIN_SECRET_KEY` |
+| `external` | `R2_ADMIN_ACCESS_KEY`, `R2_ADMIN_SECRET_KEY` |
+| `artifacts` | `MERLINA_ARTIFACT_ADMIN_ACCESS_KEY`, `MERLINA_ARTIFACT_ADMIN_SECRET_KEY` |
+
+What each key needs:
+
+- **MinIO:** a service account (for example from `mc admin user svcacct add`)
+  whose policy allows `s3:ListAllMyBuckets`, `s3:CreateBucket`,
+  `s3:DeleteBucket` and `s3:GetBucketLocation`. To browse or empty other
+  buckets, it also needs object operations on them: `s3:ListBucket`,
+  `s3:GetObject`, `s3:PutObject` and `s3:DeleteObject`.
+- **Cloudflare R2:** an account API token with **Admin Read & Write**. Bucket
+  creation and deletion are account-level operations, which a token scoped to
+  one bucket can't do.
+
+The API reports only whether an admin key is configured
+(`admin_configured`), never the key itself.
+
+## Browsing and previews
+
+The web UI lists one folder level at a time, with breadcrumbs, a filter for the
+current folder, sorting by name, size or modified time, and pagination (100
+entries per page). The API equivalent is `GET /storage/ls`, with `search`,
+`sort`, `order`, `offset` and `limit`. Clicking an object opens its details:
+
+- size, modified time, content type, ETag and user metadata, including the
+  `sha256` written by sync;
+- an **inline preview**, read with range requests and never the whole object:
+  - **text-like files** (json, jsonl, md, txt, jinja, yaml, csv, and files with
+    no extension): the first 256 KiB, with JSON pretty-printed when it's
+    complete; larger files show a "truncated" note;
+  - **`.safetensors`**: only the header (an 8-byte length read, then the header
+    itself), showing tensor names, dtypes, shapes and total parameters;
+  - **`.parquet`**: the schema and the first 20 rows, read through pyarrow over
+    range requests (the footer plus the first pages);
+- a **download** button. Downloads are always streamed through the Merlina
+  server, never through a presigned URL. The private tier is LAN-only, and a
+  presigned URL would hand the browser the key ID.
 
 ## API
 
@@ -137,16 +214,23 @@ All routes are under the **Storage** tag (see `/docs`).
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET  | `/storage/tiers?usage=` | tiers with bucket, endpoint host, privacy, `configured` (+ usage) |
-| GET  | `/storage/ls?tier=&prefix=` | delimiter-style listing |
-| GET  | `/storage/du?tier=&prefix=` | object count and bytes |
-| POST | `/storage/sync` | `{src, dst, prefix, dry_run=true, move, verify, overwrite}`. A dry run returns `{plan}`; a real run returns `{id}` |
+| GET  | `/storage/tiers?usage=` | tiers with default bucket(s), endpoint host, privacy, `configured`, `admin_configured` (+ usage) |
+| GET  | `/storage/buckets?tier=` | buckets on the endpoint (`default` flagged). If listing is denied: the configured bucket(s), `ok: false` and a `hint` |
+| GET  | `/storage/buckets/info?tier=&bucket=` | region, creation date, default flag (each best effort) |
+| POST | `/storage/buckets` | `{tier, name}`: create a bucket |
+| POST | `/storage/buckets/delete` | `{tier, name, confirm_name, empty_first, dry_run}` |
+| GET  | `/storage/ls?tier=&bucket=&prefix=&search=&sort=&order=&offset=&limit=` | one folder level, filtered, sorted, paged |
+| GET  | `/storage/du?tier=&bucket=&prefix=` | object count and bytes |
+| GET  | `/storage/object?tier=&bucket=&key=` | object details and user metadata |
+| GET  | `/storage/preview?tier=&bucket=&key=` | text, safetensors header or parquet head |
+| GET  | `/storage/download?tier=&bucket=&key=` | streamed download |
+| POST | `/storage/sync` | `{src, src_bucket, dst, dst_bucket, prefix, dry_run=true, move, verify, overwrite}`. A dry run returns `{plan}`; a real run returns `{id}` |
 | GET  | `/storage/sync` | recent sync jobs |
 | GET  | `/storage/sync/{id}` | `state`, `progress` (phase, objects and bytes done/total, current key), `result` |
 | POST | `/storage/sync/{id}/cancel` | stops after the current object; a move then deletes nothing |
-| POST | `/storage/delete` | `{tier, prefix, confirm, dry_run}` |
+| POST | `/storage/delete` | `{tier, bucket, prefix, confirm, dry_run}` |
 
-Only one sync runs at a time per source/destination pair. A second request gets
+Only one sync runs at a time per source/destination bucket pair. A second request gets
 HTTP 409. Sync jobs live in memory and are lost when the server restarts. A
 restart mid-copy leaves no partial object, because an interrupted multipart
 upload is never completed. Re-running the sync skips everything already copied.

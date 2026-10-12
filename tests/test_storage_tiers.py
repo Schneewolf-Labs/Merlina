@@ -25,26 +25,41 @@ import storage_tiers as st  # noqa: E402
 
 # ── an in-memory s3fs-like filesystem ───────────────────────────────────────
 class FakeS3:
-    """Objects keyed by fsspec path ('bucket/key') with bytes + user metadata."""
+    """Objects keyed by fsspec path ('bucket/key') with bytes + user metadata.
 
-    def __init__(self, bucket, *, can_list_buckets=True, can_create_buckets=False):
+    Several buckets can live in one fake; ``shared=`` makes a second fake (e.g.
+    an admin key) see the same objects with different permissions."""
+
+    def __init__(self, bucket, *, can_list_buckets=True, can_create_buckets=False,
+                 can_delete_buckets=False, shared=None):
         self.bucket = bucket
-        self.objects: dict[str, bytes] = {}
-        self.meta: dict[str, dict] = {}
+        if shared is not None:
+            self.objects, self.meta, self.buckets = shared.objects, shared.meta, shared.buckets
+            self.content_types = shared.content_types
+        else:
+            self.objects: dict[str, bytes] = {}
+            self.meta: dict[str, dict] = {}
+            self.buckets = {bucket: "2026-01-02T03:04:05+00:00"}
+            self.content_types: dict[str, str] = {}
         self.setxattr_calls = []
+        self.cat_calls = []
         self.fail_writes: set[str] = set()  # paths whose write "succeeds" truncated
         self.can_list_buckets = can_list_buckets
         self.can_create_buckets = can_create_buckets
-        self.buckets = {bucket}
+        self.can_delete_buckets = can_delete_buckets
 
     # helpers
-    def put(self, key, data, meta=None):
-        path = f"{self.bucket}/{key}"
+    def put(self, key, data, meta=None, bucket=None, content_type=None):
+        path = f"{bucket or self.bucket}/{key}"
+        self.buckets.setdefault(bucket or self.bucket, None)
         self.objects[path] = data if isinstance(data, bytes) else data.encode()
         self.meta[path] = dict(meta or {})
+        if content_type:
+            self.content_types[path] = content_type
 
-    def keys(self):
-        return sorted(p.split("/", 1)[1] for p in self.objects)
+    def keys(self, bucket=None):
+        b = (bucket or self.bucket) + "/"
+        return sorted(p[len(b):] for p in self.objects if p.startswith(b))
 
     # fsspec surface
     def find(self, path, detail=False):
@@ -68,19 +83,22 @@ class FakeS3:
                     entries[d] = {"name": d, "type": "directory", "size": 0}
                 else:
                     entries[p] = {"name": p, "type": "file", "size": len(data),
-                                  "LastModified": "2026-01-01T00:00:00"}
-        if not entries and path != self.bucket:
+                                  "LastModified": f"2026-01-01T00:00:{len(data) % 60:02d}"}
+        if not entries and path not in self.buckets:
             raise FileNotFoundError(path)
         return list(entries.values()) if detail else sorted(entries)
 
-    def info(self, path):
+    def info(self, path, refresh=False):
         if path not in self.objects:
             raise FileNotFoundError(path)
-        return {"name": path, "type": "file", "size": len(self.objects[path])}
+        return {"name": path, "type": "file", "size": len(self.objects[path]),
+                "LastModified": "2026-01-01T00:00:00", "ETag": '"abc123"',
+                "ContentType": self.content_types.get(path, "binary/octet-stream")}
 
     def cat_file(self, path, start=None, end=None):
         if path not in self.objects:
             raise FileNotFoundError(path)
+        self.cat_calls.append((path, start, end))
         return self.objects[path][start:end]
 
     def metadata(self, path):
@@ -122,14 +140,31 @@ class FakeS3:
             self.meta.pop(p, None)
 
     def call_s3(self, method, **kw):
+        from datetime import datetime as _dt
         if method == "list_buckets":
             if not self.can_list_buckets:
                 raise PermissionError("AccessDenied: Access Denied")
-            return {"Buckets": [{"Name": b} for b in sorted(self.buckets)]}
+            return {"Buckets": [{"Name": b, "CreationDate": _dt.fromisoformat(c) if c else None}
+                                for b, c in sorted(self.buckets.items())]}
         if method == "create_bucket":
             if not self.can_create_buckets:
                 raise PermissionError("AccessDenied: Access Denied")
-            self.buckets.add(kw["Bucket"])
+            if kw["Bucket"] in self.buckets:
+                raise RuntimeError("BucketAlreadyOwnedByYou")
+            self.buckets[kw["Bucket"]] = "2026-02-01T00:00:00+00:00"
+            return {}
+        if method == "head_bucket":
+            if kw["Bucket"] not in self.buckets:
+                raise FileNotFoundError(kw["Bucket"])
+            return {}
+        if method == "get_bucket_location":
+            return {"LocationConstraint": None}
+        if method == "delete_bucket":
+            if not self.can_delete_buckets:
+                raise PermissionError("AccessDenied: Access Denied")
+            if any(p.startswith(kw["Bucket"] + "/") for p in self.objects):
+                raise RuntimeError("BucketNotEmpty")
+            self.buckets.pop(kw["Bucket"], None)
             return {}
         raise NotImplementedError(method)
 
@@ -244,19 +279,25 @@ class TestBrowse:
 class TestBuckets:
     def test_list(self, tiers):
         r = st.list_buckets(tiers["external"])
-        assert r["ok"] and r["buckets"] == ["shared"]
+        assert r["ok"] and [b["name"] for b in r["buckets"]] == ["shared"]
+        assert r["buckets"][0]["default"] and r["buckets"][0]["creation_date"].startswith("2026-01-02")
 
     def test_list_access_denied_is_reported(self, tiers, fakes):
         fakes["internal"].can_list_buckets = False
         r = st.list_buckets(tiers["internal"])
         assert not r["ok"] and "access denied" in r["message"] and "datasets" in r["message"]
+        # the configured bucket is still offered, with a hint naming the admin key
+        assert [b["name"] for b in r["buckets"]] == ["datasets"]
+        assert "S3_ADMIN_ACCESS_KEY" in r["hint"]
 
     def test_make_bucket_denied_and_invalid(self, tiers, fakes):
         r = st.make_bucket(tiers["internal"], "new-bucket")
-        assert not r["ok"] and "may not create" in r["message"]
+        assert not r["ok"] and "may not create" in r["message"] and "S3_ADMIN_ACCESS_KEY" in r["hint"] and "MinIO" in r["hint"]
         assert not st.make_bucket(tiers["internal"], "Bad_Name")["ok"]
         fakes["internal"].can_create_buckets = True
         assert st.make_bucket(tiers["internal"], "new-bucket")["ok"]
+        r = st.make_bucket(tiers["internal"], "new-bucket")
+        assert not r["ok"] and "already exists" in r["message"]
 
 
 # ── sync ────────────────────────────────────────────────────────────────────
@@ -681,7 +722,7 @@ class TestAPI:
 
     def test_one_sync_per_pair(self, api):
         client, merlina = api
-        merlina._storage_active_pairs[("external", "internal")] = "sync_busy"
+        merlina._storage_active_pairs[("external", "shared", "internal", "datasets")] = "sync_busy"
         r = client.post("/storage/sync", json={"src": "external", "dst": "internal", "dry_run": False})
         assert r.status_code == 409
         # deletes on an involved tier are refused while it runs
@@ -697,6 +738,362 @@ class TestAPI:
         assert prev["objects"] == 1 and fakes["external"].keys() == ["tmp/a"]
         r = client.post("/storage/delete", json={"tier": "external", "prefix": "tmp/", "confirm": True})
         assert r.status_code == 200 and r.json()["deleted"] and fakes["external"].keys() == []
+
+
+# ── bucket management, bucket views, browsing & previews ────────────────────
+@pytest.fixture
+def admin_fakes(fakes):
+    """Scoped keys that can't list/create/delete buckets + admin keys that can."""
+    for f in fakes.values():
+        f.can_list_buckets = False
+    out = dict(fakes)
+    for name, f in fakes.items():
+        out[f"{name}_admin"] = FakeS3(f.bucket, shared=f, can_create_buckets=True, can_delete_buckets=True)
+    return out
+
+
+@pytest.fixture
+def admin_tiers(admin_fakes):
+    return st.build_tiers(_settings(s3_admin_access_key="INTERNAL_ADMIN_AK", s3_admin_secret_key="INTERNAL_ADMIN_SECRET",
+                                    r2_admin_access_key="EXTERNAL_ADMIN_AK", r2_admin_secret_key="EXTERNAL_ADMIN_SECRET"),
+                          fs_overrides=admin_fakes)
+
+
+class TestBucketNames:
+    @pytest.mark.parametrize("name", ["abc", "my-bucket", "a.b.c", "x" * 63, "merlina-runs-2026"])
+    def test_valid(self, name):
+        assert st.validate_bucket_name(name) is None
+
+    @pytest.mark.parametrize("name", ["", "ab", "x" * 64, "Upper", "under_score", "-lead", "trail-",
+                                      "a..b", "a.-b", "192.168.1.1", "xn--abc", "sthree-x", "foo-s3alias", "a/b"])
+    def test_invalid(self, name):
+        assert st.validate_bucket_name(name)
+
+
+class TestAdminCreds:
+    def test_admin_used_for_bucket_ops_and_never_exposed(self, admin_tiers, admin_fakes):
+        t = admin_tiers["internal"]
+        d = t.describe()
+        assert d["admin_configured"] and d["env_prefix"] == "S3"
+        blob = json.dumps(d) + repr(t)
+        assert "ADMIN_AK" not in blob and "ADMIN_SECRET" not in blob
+        r = st.list_buckets(t)
+        assert r["ok"] and r["admin_configured"]
+        assert st.make_bucket(t, "fresh-bucket")["ok"]
+        assert "fresh-bucket" in admin_fakes["internal"].buckets
+
+    def test_falls_back_to_normal_key(self, tiers, fakes):
+        assert not tiers["internal"].admin_configured
+        assert tiers["internal"].admin_fs is fakes["internal"]
+
+    def test_denied_with_admin_configured_says_so(self, admin_tiers, admin_fakes):
+        admin_fakes["external_admin"].can_list_buckets = False
+        r = st.list_buckets(admin_tiers["external"])
+        assert not r["ok"] and "R2_ADMIN_ACCESS_KEY" in r["hint"] and "is configured" in r["hint"]
+
+    def test_artifact_bucket_is_a_default_on_its_endpoint(self):
+        t = st.build_tiers(_settings(merlina_artifact_s3_bucket="artifact-bucket",
+                                     merlina_artifact_s3_endpoint="https://acct.r2.example.com",
+                                     merlina_artifact_access_key="A", merlina_artifact_secret_key="S"))
+        assert t["external"].default_buckets == ("artifact-bucket", "shared")
+        assert t["internal"].default_buckets == ("datasets",)
+
+
+class TestBucketViews:
+    def test_view_keeps_name_and_privacy(self, tiers):
+        v = tiers["internal"].with_bucket("scratch")
+        assert (v.name, v.bucket, v.private, v.default_bucket) == ("internal", "scratch", True, "datasets")
+        assert tiers["internal"].with_bucket("datasets") is tiers["internal"]
+        assert tiers["internal"].with_bucket(None) is tiers["internal"]
+
+    @pytest.mark.parametrize("bad", ["a/b", "../x", "x", "-bad", "a..b"])
+    def test_invalid_bucket_rejected(self, tiers, bad):
+        with pytest.raises(st.StorageTierError):
+            tiers["internal"].with_bucket(bad)
+
+    def test_ls_du_other_bucket(self, tiers, fakes):
+        fakes["internal"].put("a/x.bin", b"12345", bucket="scratch")
+        v = tiers["internal"].with_bucket("scratch")
+        assert st.ls(v, "a/")["objects"][0]["key"] == "a/x.bin"
+        assert st.du(v)["bytes"] == 5 and st.du(tiers["internal"])["objects"] == 0
+
+    def test_view_uses_admin_key_when_configured(self, admin_tiers, admin_fakes):
+        v = admin_tiers["internal"].with_bucket("scratch")
+        assert v.fs is admin_fakes["internal_admin"]
+
+    def test_sync_between_buckets_of_one_tier(self, tiers, fakes):
+        fakes["internal"].put("runs/a.bin", b"abc", bucket="scratch")
+        src = tiers["internal"].with_bucket("scratch")
+        res = st.sync(src, tiers["internal"], "runs/")
+        assert res.ok and not res.guarded and fakes["internal"].keys() == ["runs/a.bin"]
+        assert res.to_dict()["src_bucket"] == "scratch" and res.to_dict()["dst_bucket"] == "datasets"
+        with pytest.raises(st.StorageTierError):
+            st.sync(src, tiers["internal"].with_bucket("scratch"), "")
+
+    def test_guard_applies_to_any_private_bucket(self, tiers, fakes):
+        # an artifact with no dataset metadata in a non-default internal bucket
+        f = fakes["internal"]
+        f.put("runs/j/merged/manifest.json", json.dumps({"version": 1, "name": "j/merged", "generation": GEN,
+              "files": [{"path": "w", "size": 1, "sha256": "0" * 64}], "metadata": {}}), bucket="scratch")
+        f.put(f"runs/j/merged/generations/{GEN}/w", b"x", bucket="scratch")
+        f.put("notes/incident.txt", b"x", bucket="scratch")
+        res = st.sync(tiers["internal"].with_bucket("scratch"), tiers["external"].with_bucket("other"), "")
+        assert res.guarded and len(res.refused) == 3 and not res.to_copy
+
+    def test_swl_reference_resolved_in_default_bucket(self, tiers, fakes):
+        _dataset(fakes["internal"], "open-ds", "r1")  # lives in the default bucket
+        f = fakes["internal"]
+        doc = {"version": 1, "name": "j/adapter", "generation": GEN,
+               "files": [{"path": "w", "size": 1, "sha256": "0" * 64}],
+               "metadata": {"datasets": {"source": {"source_type": "internal", "uri": "swl://open-ds"}}}}
+        f.put("runs/j/adapter/manifest.json", json.dumps(doc), bucket="scratch")
+        f.put(f"runs/j/adapter/generations/{GEN}/w", b"x", bucket="scratch")
+        res = st.sync(tiers["internal"].with_bucket("scratch"), tiers["external"], "runs/", dry_run=True)
+        assert not res.refused and len(res.to_copy) == 2
+
+
+class TestBucketLifecycle:
+    def test_info(self, admin_tiers, admin_fakes):
+        i = st.bucket_info(admin_tiers["internal"], "datasets")
+        assert i["exists"] and i["default"] and i["region"].startswith("us-east-1")
+        assert i["creation_date"].startswith("2026-01-02")
+        with pytest.raises(st.StorageNotFound):
+            st.bucket_info(admin_tiers["internal"], "nope-bucket")
+
+    def test_info_degrades_without_list_permission(self, tiers, fakes):
+        fakes["internal"].can_list_buckets = False
+        i = st.bucket_info(tiers["internal"], "datasets")
+        assert i["creation_date"] is None and any("creation date" in n for n in i["notes"])
+
+    def test_refuses_configured_buckets(self, admin_tiers):
+        for name in ("datasets",):
+            with pytest.raises(st.StorageTierError, match="configured"):
+                st.delete_bucket(admin_tiers["internal"], name, confirm_name=name, empty_first=True)
+
+    def test_requires_typed_name_and_empty(self, admin_tiers, admin_fakes):
+        f = admin_fakes["internal"]
+        f.put("a/1", b"123", bucket="scratch")
+        f.put("b/2", b"45", bucket="scratch")
+        t = admin_tiers["internal"]
+        plan = st.delete_bucket(t, "scratch", dry_run=True)
+        assert (plan["objects"], plan["bytes"], plan["deleted"]) == (2, 5, False)
+        with pytest.raises(st.StorageTierError, match="Type the bucket name"):
+            st.delete_bucket(t, "scratch", confirm_name="scratc")
+        with pytest.raises(st.StorageTierError, match="not empty"):
+            st.delete_bucket(t, "scratch", confirm_name="scratch")
+        assert f.keys("scratch") == ["a/1", "b/2"]
+        r = st.delete_bucket(t, "scratch", confirm_name="scratch", empty_first=True)
+        assert r["ok"] and r["emptied"] and r["deleted"] and "scratch" not in f.buckets
+
+    def test_empty_bucket_deletes_without_empty_first(self, admin_tiers, admin_fakes):
+        admin_fakes["internal"].buckets["blank"] = None
+        r = st.delete_bucket(admin_tiers["internal"], "blank", confirm_name="blank")
+        assert r["ok"] and r["deleted"] and not r["emptied"]
+
+    def test_denied_delete_is_reported(self, tiers, fakes):
+        fakes["internal"].buckets["blank"] = None
+        r = st.delete_bucket(tiers["internal"], "blank", confirm_name="blank")
+        assert not r["ok"] and not r["deleted"] and "S3_ADMIN_ACCESS_KEY" in r["hint"]
+
+
+class TestListingOptions:
+    @pytest.fixture
+    def folder(self, tiers, fakes):
+        f = fakes["external"]
+        for name, size in (("alpha.json", 3), ("beta.bin", 30), ("gamma.txt", 10)):
+            f.put(f"d/{name}", b"x" * size)
+        f.put("d/sub/z", b"z")
+        return tiers["external"]
+
+    def test_search(self, folder):
+        r = st.ls(folder, "d/", search="ET")
+        assert [o["name"] for o in r["objects"]] == ["beta.bin"] and r["total"] == 1 and r["search"] == "et"
+
+    def test_sort_size_desc_dirs_first(self, folder):
+        r = st.ls(folder, "d/", sort="size", order="desc")
+        assert [d["name"] for d in r["dirs"]] == ["sub/"]
+        assert [o["name"] for o in r["objects"]] == ["beta.bin", "gamma.txt", "alpha.json"]
+
+    def test_pagination(self, folder):
+        p1 = st.ls(folder, "d/", limit=2)
+        p2 = st.ls(folder, "d/", offset=2, limit=2)
+        assert p1["has_more"] and not p2["has_more"] and p1["total"] == 4
+        names = [d["name"] for d in p1["dirs"]] + [o["name"] for o in p1["objects"] + p2["objects"]]
+        assert names == ["sub/", "alpha.json", "beta.bin", "gamma.txt"]
+
+    def test_bad_sort(self, folder):
+        with pytest.raises(st.StorageTierError):
+            st.ls(folder, "d/", sort="owner")
+
+
+def _safetensors_bytes(tensors, metadata=None, payload=b"\0" * 64):
+    header = dict(tensors)
+    if metadata:
+        header["__metadata__"] = metadata
+    raw = json.dumps(header).encode()
+    return len(raw).to_bytes(8, "little") + raw + payload
+
+
+class TestObjects:
+    def test_object_info(self, tiers, fakes):
+        fakes["internal"].put("runs/a.json", b"{}", meta={"sha256": "f" * 64}, content_type="application/json")
+        i = st.object_info(tiers["internal"], "runs/a.json")
+        assert i["size"] == 2 and i["content_type"] == "application/json"
+        assert i["metadata"]["sha256"] == "f" * 64 and i["etag"] == "abc123" and i["preview_kind"] == "text"
+        with pytest.raises(st.StorageNotFound):
+            st.object_info(tiers["internal"], "runs/missing")
+        with pytest.raises(st.StorageTierError):
+            st.object_info(tiers["internal"], "runs/")
+
+    def test_json_pretty_printed(self, tiers, fakes):
+        fakes["internal"].put("cfg/adapter_config.json", json.dumps({"r": 64, "peft_type": "LORA"}))
+        p = st.preview(tiers["internal"], "cfg/adapter_config.json")
+        assert p["kind"] == "text" and not p["truncated"] and '\n  "r": 64' in p["text"]
+
+    def test_text_truncated(self, tiers, fakes):
+        fakes["internal"].put("logs/big.txt", b"a" * 1000)
+        p = st.preview(tiers["internal"], "logs/big.txt", max_bytes=100)
+        assert p["truncated"] and len(p["text"]) == 100 and p["bytes_shown"] == 100
+        # only a bounded range was requested
+        assert fakes["internal"].cat_calls[-1][1:] == (0, 101)
+
+    @pytest.mark.parametrize("name", ["README.md", "chat_template.jinja", "data.csv", "conf.yaml", "latest"])
+    def test_text_kinds(self, tiers, fakes, name):
+        fakes["internal"].put(f"x/{name}", "hello")
+        assert st.preview(tiers["internal"], f"x/{name}")["text"] == "hello"
+
+    def test_nul_bytes_mean_binary(self, tiers, fakes):
+        fakes["internal"].put("x/blob", b"\x00\x01\x02")
+        assert st.preview(tiers["internal"], "x/blob")["kind"] == "binary"
+
+    def test_unknown_extension_is_binary(self, tiers, fakes):
+        fakes["internal"].put("x/model.bin", b"\x00" * 10)
+        p = st.preview(tiers["internal"], "x/model.bin")
+        assert p["kind"] == "binary" and "download" in p["message"]
+
+    def test_safetensors_header_only(self, tiers, fakes):
+        blob = _safetensors_bytes({
+            "a.lora_A.weight": {"dtype": "F32", "shape": [4, 8], "data_offsets": [0, 128]},
+            "a.lora_B.weight": {"dtype": "BF16", "shape": [8, 4], "data_offsets": [128, 192]},
+        }, metadata={"format": "pt"}, payload=b"\x00" * 10_000)
+        fakes["internal"].put("w/adapter_model.safetensors", blob)
+        p = st.preview(tiers["internal"], "w/adapter_model.safetensors")
+        assert p["kind"] == "safetensors" and p["tensor_count"] == 2 and p["total_params"] == 64
+        assert p["dtypes"] == {"F32": 32, "BF16": 32} and p["metadata"] == {"format": "pt"}
+        assert p["tensors"][0] == {"name": "a.lora_A.weight", "dtype": "F32", "shape": [4, 8], "params": 32}
+        # two range reads: 8-byte length, then exactly the header
+        calls = fakes["internal"].cat_calls
+        assert calls[0][1:] == (0, 8) and calls[1][1:] == (8, 8 + p["header_bytes"])
+
+    def test_safetensors_bogus_header(self, tiers, fakes):
+        fakes["internal"].put("w/bad.safetensors", (10 ** 12).to_bytes(8, "little"))
+        with pytest.raises(st.StorageTierError, match="Implausible"):
+            st.preview(tiers["internal"], "w/bad.safetensors")
+
+    def test_parquet_schema_and_rows(self, tiers, fakes):
+        pa = pytest.importorskip("pyarrow")
+        import pyarrow.parquet as pq
+        table = pa.table({"prompt": [f"q{i}" for i in range(50)], "score": list(range(50)),
+                          "tags": [["a", "b"]] * 50, "long": ["x" * 1000] * 50})
+        buf = io.BytesIO()
+        pq.write_table(table, buf, row_group_size=10)
+        fakes["internal"].put("datasets/d/r1/data-0.parquet", buf.getvalue())
+        p = st.preview(tiers["internal"], "datasets/d/r1/data-0.parquet")
+        assert p["kind"] == "parquet" and p["num_rows"] == 50 and p["num_row_groups"] == 5
+        assert [c["name"] for c in p["schema"]] == ["prompt", "score", "tags", "long"]
+        assert len(p["rows"]) == 20 and p["rows"][3]["prompt"] == "q3" and p["rows"][3]["score"] == 3
+        assert p["rows"][0]["long"].endswith("…") and len(p["rows"][0]["long"]) == 301
+
+    def test_download_streams_chunks(self, tiers, fakes):
+        fakes["internal"].put("x/f.bin", b"abcdefghij")
+        info, it = st.open_download(tiers["internal"], "x/f.bin", chunk=4)
+        assert info["size"] == 10 and list(it) == [b"abcd", b"efgh", b"ij"]
+
+
+class TestBucketAPI:
+    @pytest.fixture
+    def admin_api(self, admin_tiers):
+        from fastapi.testclient import TestClient
+        import merlina
+        st.set_tiers(admin_tiers)
+        merlina._storage_active_pairs.clear()
+        try:
+            yield TestClient(merlina.app), merlina
+        finally:
+            st.set_tiers(None)
+            merlina._storage_active_pairs.clear()
+
+    def test_tiers_describe_admin_without_secrets(self, admin_api):
+        client, _ = admin_api
+        r = client.get("/storage/tiers")
+        assert "ADMIN_AK" not in r.text and "ADMIN_SECRET" not in r.text
+        assert all(t["admin_configured"] for t in r.json()["tiers"])
+
+    def test_list_create_info_delete(self, admin_api, admin_fakes):
+        client, merlina = admin_api
+        assert client.get("/storage/buckets", params={"tier": "internal"}).json()["ok"]
+        r = client.post("/storage/buckets", json={"tier": "internal", "name": "Bad_Name"}).json()
+        assert not r["ok"] and "Invalid" in r["message"]
+        assert client.post("/storage/buckets", json={"tier": "internal", "name": "new-one"}).json()["ok"]
+        assert client.post("/storage/buckets", json={"tier": "internal", "name": "x", "extra": 1}).status_code == 422
+        info = client.get("/storage/buckets/info", params={"tier": "internal", "bucket": "new-one"}).json()
+        assert info["exists"] and not info["default"]
+        assert client.get("/storage/buckets/info", params={"tier": "internal", "bucket": "nope-x"}).status_code == 404
+        admin_fakes["internal"].put("k", b"12", bucket="new-one")
+        prev = client.post("/storage/buckets/delete", json={"tier": "internal", "name": "new-one", "dry_run": True}).json()
+        assert prev["objects"] == 1 and prev["bytes"] == 2
+        r = client.post("/storage/buckets/delete", json={"tier": "internal", "name": "new-one", "confirm_name": "new-one"})
+        assert r.status_code == 400 and "not empty" in r.json()["detail"]
+        merlina._storage_active_pairs[("internal", "new-one", "external", "shared")] = "sync_busy"
+        r = client.post("/storage/buckets/delete", json={"tier": "internal", "name": "new-one",
+                                                         "confirm_name": "new-one", "empty_first": True})
+        assert r.status_code == 409
+        merlina._storage_active_pairs.clear()
+        r = client.post("/storage/buckets/delete", json={"tier": "internal", "name": "new-one",
+                                                         "confirm_name": "new-one", "empty_first": True}).json()
+        assert r["deleted"] and "new-one" not in admin_fakes["internal"].buckets
+        r = client.post("/storage/buckets/delete", json={"tier": "internal", "name": "datasets",
+                                                         "confirm_name": "datasets", "empty_first": True})
+        assert r.status_code == 400 and "configured" in r.json()["detail"]
+
+    def test_denied_listing_returns_default_and_hint(self, api, fakes):
+        client, _ = api
+        fakes["external"].can_list_buckets = False
+        r = client.get("/storage/buckets", params={"tier": "external"}).json()
+        assert not r["ok"] and r["buckets"][0]["name"] == "shared" and "R2_ADMIN_ACCESS_KEY" in r["hint"]
+        assert "Admin Read & Write" in r["hint"] and "MinIO" not in r["hint"]
+        r = client.post("/storage/buckets", json={"tier": "external", "name": "new-one"}).json()
+        assert not r["ok"] and "R2_ADMIN_ACCESS_KEY" in r["hint"]
+
+    def test_browse_preview_download_in_other_bucket(self, api, fakes):
+        client, _ = api
+        fakes["internal"].put("cfg/a.json", '{"b":1}', bucket="scratch", meta={"sha256": "0" * 64})
+        q = {"tier": "internal", "bucket": "scratch"}
+        ls = client.get("/storage/ls", params={**q, "prefix": "cfg/", "sort": "size", "order": "desc",
+                                               "search": "a", "limit": 10}).json()
+        assert ls["bucket"] == "scratch" and ls["objects"][0]["key"] == "cfg/a.json"
+        assert client.get("/storage/ls", params={**q, "sort": "owner"}).status_code == 422
+        obj = client.get("/storage/object", params={**q, "key": "cfg/a.json"}).json()
+        assert obj["metadata"]["sha256"] == "0" * 64
+        pv = client.get("/storage/preview", params={**q, "key": "cfg/a.json"}).json()
+        assert pv["text"] == '{\n  "b": 1\n}'
+        dl = client.get("/storage/download", params={**q, "key": "cfg/a.json"})
+        assert dl.status_code == 200 and dl.content == b'{"b":1}'
+        assert 'attachment; filename="a.json"' in dl.headers["content-disposition"]
+        assert client.get("/storage/download", params={**q, "key": "cfg/missing"}).status_code == 404
+        assert client.get("/storage/ls", params={"tier": "internal", "bucket": "a/b"}).status_code == 400
+
+    def test_cross_bucket_sync_is_guarded(self, api, fakes):
+        client, _ = api
+        fakes["internal"].put("notes/incident.txt", b"x", bucket="scratch")
+        fakes["internal"].put("notes/ok.txt", b"y", bucket="scratch")
+        r = client.post("/storage/sync", json={"src": "internal", "src_bucket": "scratch",
+                                               "dst": "external", "dst_bucket": "other"}).json()["plan"]
+        assert r["guarded"] and r["counts"]["refused"] == 1 and r["counts"]["to_copy"] == 1
+        assert r["src_bucket"] == "scratch" and r["dst_bucket"] == "other"
+        same = client.post("/storage/sync", json={"src": "internal", "src_bucket": "scratch",
+                                                  "dst": "internal", "dst_bucket": "scratch"})
+        assert same.status_code == 400
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
@@ -739,6 +1136,26 @@ class TestCLI:
         assert "refused: 3" in capsys.readouterr().out and fakes["external"].keys() == []
         assert merlina_cli.main(["storage", "sync", "internal", "external", "datasets/", "--allow-private"]) == 0
         assert len(fakes["external"].keys()) == 3
+
+    def test_mb_rb_and_bucket_flags(self, fakes, capsys):
+        import merlina_cli
+        fakes["internal"].can_create_buckets = True
+        fakes["internal"].can_delete_buckets = True
+        assert merlina_cli.main(["storage", "mb", "internal", "Bad_Name"]) == 1
+        assert merlina_cli.main(["storage", "mb", "internal", "scratch"]) == 0
+        fakes["internal"].put("a/x", b"123", bucket="scratch")
+        assert merlina_cli.main(["storage", "buckets", "internal", "--sizes"]) == 0
+        assert merlina_cli.main(["storage", "ls", "internal", "a/", "--bucket", "scratch", "--sort", "size"]) == 0
+        assert merlina_cli.main(["storage", "du", "internal", "--bucket", "scratch"]) == 0
+        assert merlina_cli.main(["storage", "sync", "internal", "internal", "a/", "--src-bucket", "scratch"]) == 0
+        assert fakes["internal"].keys() == ["a/x"]
+        assert merlina_cli.main(["storage", "rb", "internal", "scratch"]) == 1          # preview only
+        assert merlina_cli.main(["storage", "rb", "internal", "scratch", "--yes"]) == 2  # not empty
+        assert merlina_cli.main(["storage", "rb", "internal", "scratch", "--yes", "--empty"]) == 0
+        assert merlina_cli.main(["storage", "rb", "internal", "datasets", "--yes", "--empty"]) == 2
+        out = capsys.readouterr()
+        assert "* default" in out.out and "Created bucket 'scratch'" in out.out
+        assert "Deleted bucket 'scratch'" in out.out and "configured" in out.err
 
     def test_cli_stays_import_light(self):
         code = ("import sys, merlina_cli; merlina_cli.main(['storage', 'tiers']); "

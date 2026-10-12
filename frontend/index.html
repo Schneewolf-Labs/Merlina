@@ -1825,20 +1825,24 @@
                     </button>
                 </div>
                 <p style="color: var(--text-muted); margin-top: 0;">
-                    Sync copies a prefix to the same keys in another tier and skips anything already
-                    there. Every sync is previewed first. Private data in the private tier is never
-                    copied to a shared tier; the preview lists anything the guard refuses.
+                    Browse every bucket your keys can see, preview files, and copy or move prefixes between
+                    buckets and tiers. Every sync is previewed first. Private data from a private tier is
+                    never copied to a shared tier; the preview lists anything the guard refuses.
                 </p>
 
                 <div class="spell-section">
-                    <h3 style="margin-top: 0;">Tiers</h3>
+                    <h3 style="margin-top: 0;">Tiers &amp; buckets</h3>
                     <div id="storage-tiers" class="storage-tier-grid"><p style="color: var(--text-muted);">Loading…</p></div>
+                    <div id="storage-bucket-panel" style="margin-top: 12px;"></div>
                 </div>
 
                 <div class="spell-section">
                     <div id="storage-crumbs" style="margin-bottom: 10px;"></div>
                     <div id="storage-actions" style="margin-bottom: 14px;"></div>
+                    <div id="storage-toolbar" class="storage-toolbar"></div>
                     <div id="storage-browser"><p style="color: var(--text-muted);">Loading…</p></div>
+                    <div id="storage-pager" class="storage-pager"></div>
+                    <div id="storage-object" style="margin-top: 14px;"></div>
                 </div>
             </section>
 

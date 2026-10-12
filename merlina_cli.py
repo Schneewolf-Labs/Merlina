@@ -130,12 +130,13 @@ def _datasets_info(args: argparse.Namespace) -> int:
 
 
 # ── storage: tier browsing / sync ────────────────────────────────────────────
-def _storage_tier(name: str):
-    """Resolve a configured storage tier or exit with a helpful message."""
+def _storage_tier(name: str, bucket=None):
+    """Resolve a configured storage tier (optionally a view of another bucket
+    on its endpoint) or exit with a helpful message."""
     from storage_tiers import StorageTierError, get_tier
 
     try:
-        return get_tier(name)
+        return get_tier(name).with_bucket(bucket)
     except StorageTierError as e:
         print(f"{e}. Configure it in the server's .env (see docs/storage-tiers.md).",
               file=sys.stderr)
@@ -167,9 +168,10 @@ def _storage_tiers(args: argparse.Namespace) -> int:
 def _storage_ls(args: argparse.Namespace) -> int:
     from storage_tiers import human_bytes, ls
 
-    t = _storage_tier(args.tier)
-    out = ls(t, args.prefix or "")
-    where = f"{t.name}:{out['prefix'] or '/'}"
+    t = _storage_tier(args.tier, args.bucket)
+    out = ls(t, args.prefix or "", search=args.search or "", sort=args.sort,
+             order="desc" if args.desc else "asc", limit=args.limit)
+    where = f"{t.name}:{t.bucket}/{out['prefix']}"
     if not out["dirs"] and not out["objects"]:
         print(f"{where} is empty.")
         return 0
@@ -180,43 +182,91 @@ def _storage_ls(args: argparse.Namespace) -> int:
         mtime = (o["mtime"] or "")[:19].replace("T", " ")
         print(f"  {human_bytes(o['size']):>10}  {mtime:<19}  {o['name']}")
     if out["truncated"]:
-        print(f"  … {out['object_count'] - len(out['objects'])} more object(s) not shown")
+        print(f"  … {out['total'] - len(out['dirs']) - len(out['objects'])} more entr(y/ies) not shown "
+              f"(use --limit)")
     return 0
 
 
 def _storage_du(args: argparse.Namespace) -> int:
     from storage_tiers import du
 
-    t = _storage_tier(args.tier)
+    t = _storage_tier(args.tier, args.bucket)
     u = du(t, args.prefix or "")
-    print(f"{t.name}:{u['prefix'] or '/'}  {u['objects']} object(s), {u['human']}")
+    print(f"{t.name}:{t.bucket}/{u['prefix']}  {u['objects']} object(s), {u['human']}")
     return 0
 
 
 def _storage_buckets(args: argparse.Namespace) -> int:
-    from storage_tiers import list_buckets, make_bucket
+    from storage_tiers import du, list_buckets
 
+    if args.create:  # kept for compatibility; prefer `merlina storage mb`
+        args.name = args.create
+        return _storage_mb(args)
     t = _storage_tier(args.tier)
-    if args.create:
-        r = make_bucket(t, args.create)
-        print(r["message"], file=sys.stdout if r["ok"] else sys.stderr)
-        return 0 if r["ok"] else 1
     r = list_buckets(t)
     if not r["ok"]:
         print(r["message"], file=sys.stderr)
-        return 1
-    for name in r["buckets"]:
-        mark = "  (this tier)" if name == t.bucket else ""
-        print(f"{name}{mark}")
-    return 0
+        if r["hint"]:
+            print(f"hint: {r['hint']}", file=sys.stderr)
+        print("Configured bucket(s):", file=sys.stderr)
+    for b in r["buckets"]:
+        line = f"{b['name']:<40}"
+        line += "  * default" if b["default"] else ""
+        if b["creation_date"]:
+            line += f"  created {b['creation_date'][:10]}"
+        if args.sizes:
+            try:
+                u = du(t.with_bucket(b["name"]))
+                line += f"  {u['objects']} objects, {u['human']}"
+            except Exception as e:  # noqa: BLE001
+                line += f"  (size unavailable: {type(e).__name__})"
+        print(line, file=sys.stdout if r["ok"] else sys.stderr)
+    return 0 if r["ok"] else 1
+
+
+def _storage_mb(args: argparse.Namespace) -> int:
+    from storage_tiers import make_bucket
+
+    t = _storage_tier(args.tier)
+    r = make_bucket(t, args.name)
+    print(r["message"], file=sys.stdout if r["ok"] else sys.stderr)
+    if r.get("hint"):
+        print(f"hint: {r['hint']}", file=sys.stderr)
+    return 0 if r["ok"] else 1
+
+
+def _storage_rb(args: argparse.Namespace) -> int:
+    from storage_tiers import StorageTierError, delete_bucket
+
+    t = _storage_tier(args.tier)
+    try:
+        plan = delete_bucket(t, args.name, dry_run=True)
+        if not plan["ok"]:
+            print(plan["message"], file=sys.stderr)
+            if plan["hint"]:
+                print(f"hint: {plan['hint']}", file=sys.stderr)
+            return 1
+        if not args.yes:
+            print(f"Would delete bucket '{args.name}' on '{t.name}' "
+                  f"({plan['objects']} object(s), {plan['human']}). "
+                  f"Re-run with --yes{' --empty' if plan['objects'] else ''} to delete.")
+            return 1
+        r = delete_bucket(t, args.name, confirm_name=args.name, empty_first=args.empty)
+    except StorageTierError as e:
+        print(f"Refusing: {e}", file=sys.stderr)
+        return 2
+    print(r["message"], file=sys.stdout if r["ok"] else sys.stderr)
+    if r.get("hint"):
+        print(f"hint: {r['hint']}", file=sys.stderr)
+    return 0 if r["ok"] else 1
 
 
 def _storage_sync(args: argparse.Namespace) -> int:
     from storage_tiers import StorageTierError, human_bytes, sync
 
-    src, dst = _storage_tier(args.src), _storage_tier(args.dst)
-    if src.name == dst.name:
-        print("Source and destination tiers must differ.", file=sys.stderr)
+    src, dst = _storage_tier(args.src, args.src_bucket), _storage_tier(args.dst, args.dst_bucket)
+    if src.name == dst.name and src.bucket == dst.bucket:
+        print("Source and destination must differ (tier or bucket).", file=sys.stderr)
         return 2
     last = {"key": None}
 
@@ -237,7 +287,7 @@ def _storage_sync(args: argparse.Namespace) -> int:
         return 1
 
     verb = "move" if args.move else "copy"
-    head = f"{src.name}:{res.prefix or '/'} -> {dst.name}"
+    head = f"{src.name}:{src.bucket}/{res.prefix} -> {dst.name}:{dst.bucket}"
     if args.dry_run:
         print(f"DRY RUN — {head}")
         print(f"  would {verb}: {len(res.to_copy)} object(s), {human_bytes(res.bytes_to_copy)}")
@@ -268,18 +318,18 @@ def _storage_sync(args: argparse.Namespace) -> int:
 def _storage_rm(args: argparse.Namespace) -> int:
     from storage_tiers import StorageTierError, delete
 
-    t = _storage_tier(args.tier)
+    t = _storage_tier(args.tier, args.bucket)
     try:
         if not args.yes:
             plan = delete(t, args.prefix, dry_run=True)
             print(f"Would delete {plan['objects']} object(s), {plan['human']} under "
-                  f"{t.name}:{plan['prefix']}/. Re-run with --yes to delete.")
+                  f"{t.name}:{t.bucket}/{plan['prefix']}/. Re-run with --yes to delete.")
             return 1
         r = delete(t, args.prefix, confirm=True)
     except StorageTierError as e:
         print(f"Refusing: {e}", file=sys.stderr)
         return 2
-    print(f"Deleted {r['objects']} object(s), {r['human']} under {t.name}:{r['prefix']}/.")
+    print(f"Deleted {r['objects']} object(s), {r['human']} under {t.name}:{t.bucket}/{r['prefix']}/.")
     return 0
 
 
@@ -367,19 +417,37 @@ def main(argv=None) -> int:
     st_sub = st_parser.add_subparsers(dest="st_command")
     tiers_p = st_sub.add_parser("tiers", help="List configured storage tiers")
     tiers_p.add_argument("--usage", action="store_true", help="Also total each tier (lists every object)")
+    bucket_help = "Bucket on the tier's endpoint (default: the tier's configured bucket)"
     ls_p = st_sub.add_parser("ls", help="List one level of a tier")
     ls_p.add_argument("tier")
     ls_p.add_argument("prefix", nargs="?", default="")
+    ls_p.add_argument("--bucket", default=None, help=bucket_help)
+    ls_p.add_argument("--search", default="", help="Only names containing this text")
+    ls_p.add_argument("--sort", default="name", choices=["name", "size", "mtime"])
+    ls_p.add_argument("--desc", action="store_true", help="Reverse the sort order")
+    ls_p.add_argument("--limit", type=int, default=1000, help="Max entries to show (default 1000)")
     du_p = st_sub.add_parser("du", help="Object count and bytes under a prefix")
     du_p.add_argument("tier")
     du_p.add_argument("prefix", nargs="?", default="")
-    bk_p = st_sub.add_parser("buckets", help="List (or --create) buckets on a tier's endpoint")
+    du_p.add_argument("--bucket", default=None, help=bucket_help)
+    bk_p = st_sub.add_parser("buckets", help="List buckets on a tier's endpoint")
     bk_p.add_argument("tier")
-    bk_p.add_argument("--create", metavar="NAME", default=None, help="Create a bucket instead")
+    bk_p.add_argument("--sizes", action="store_true", help="Also total each bucket (lists every object)")
+    bk_p.add_argument("--create", metavar="NAME", default=None, help=argparse.SUPPRESS)
+    mb_p = st_sub.add_parser("mb", help="Make a bucket (uses the tier's admin key if configured)")
+    mb_p.add_argument("tier")
+    mb_p.add_argument("name")
+    rb_p = st_sub.add_parser("rb", help="Remove a bucket (never a configured Merlina bucket)")
+    rb_p.add_argument("tier")
+    rb_p.add_argument("name")
+    rb_p.add_argument("--empty", action="store_true", help="Delete its objects first if it is not empty")
+    rb_p.add_argument("--yes", action="store_true", help="Actually delete (without it: preview)")
     sync_p = st_sub.add_parser("sync", help="Copy objects under a prefix from one tier to another")
     sync_p.add_argument("src")
     sync_p.add_argument("dst")
     sync_p.add_argument("prefix", nargs="?", default="")
+    sync_p.add_argument("--src-bucket", default=None, help="Source bucket (default: the tier's)")
+    sync_p.add_argument("--dst-bucket", default=None, help="Destination bucket (default: the tier's)")
     sync_p.add_argument("--dry-run", action="store_true", help="Plan only; transfer nothing")
     sync_p.add_argument("--move", action="store_true",
                         help="Delete source objects after every copy is verified (implies --verify)")
@@ -391,6 +459,7 @@ def main(argv=None) -> int:
     rm_p = st_sub.add_parser("rm", help="Delete every object under a prefix")
     rm_p.add_argument("tier")
     rm_p.add_argument("prefix")
+    rm_p.add_argument("--bucket", default=None, help=bucket_help)
     rm_p.add_argument("--yes", action="store_true", help="Actually delete (without it: preview)")
 
     args = parser.parse_args(argv)
@@ -405,7 +474,8 @@ def main(argv=None) -> int:
 
     if args.command == "storage":
         handlers = {"tiers": _storage_tiers, "ls": _storage_ls, "du": _storage_du,
-                    "buckets": _storage_buckets, "sync": _storage_sync, "rm": _storage_rm}
+                    "buckets": _storage_buckets, "mb": _storage_mb, "rb": _storage_rb,
+                    "sync": _storage_sync, "rm": _storage_rm}
         handler = handlers.get(args.st_command)
         if handler is None:
             st_parser.print_help()
