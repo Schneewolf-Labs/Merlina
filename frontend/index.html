@@ -4,14 +4,16 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description" content="Merlina - A magical LLM training system for fine-tuning language models with LoRA adapters">
-    <meta name="theme-color" content="#c042ff">
+    <meta name="theme-color" content="#7961a9">
     <title>Merlina - Magical Model Training</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
     <link rel="stylesheet" href="styles.css">
     <!-- Prevent flash of wrong theme -->
     <script>
         (function() {
-            const theme = localStorage.getItem('merlina-theme') ||
+            let storedTheme;
+            try { storedTheme = localStorage.getItem('merlina-theme'); } catch {}
+            const theme = storedTheme ||
                 (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
             document.documentElement.setAttribute('data-theme', theme);
         })();
@@ -22,148 +24,166 @@
     <a href="#main-content" class="skip-link">Skip to main content</a>
 
     <div class="container">
-        <!-- Header -->
-        <header>
-            <div class="logo">
-                <img src="merlina.png" alt="Merlina" class="wizard-hat" style="width: 48px; height: 48px;">
-                <h1>Merlina</h1>
-                <span class="tagline">Magical Model Training</span>
-            </div>
+        <aside class="studio-sidebar">
+            <a class="brand" href="#model-section" aria-label="Merlina home">
+                <img src="merlina.png" alt="" class="wizard-hat" width="42" height="48">
+                <span><h1>Merlina<span class="brand-star" aria-hidden="true">✧</span></h1><span class="brand-caption">YOUR MODEL, A LITTLE MAGIC</span></span>
+            </a>
+            <nav id="section-nav" class="section-nav" aria-label="Studio navigation"><p class="nav-group-label">CREATE</p>
+<button type="button" class="section-nav-btn active" data-section="model-section" aria-controls="model-section" aria-current="page">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></svg>
+        <span class="nav-copy"><span class="nav-label">Model</span><span class="nav-description">Choose your foundation</span></span>
+        <span class="nav-step">01</span>
+    </button>
+<button type="button" class="section-nav-btn" data-section="dataset-section" aria-controls="dataset-section">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M4 9h16M10 9v12M14 14h3M14 17h3"/></svg>
+        <span class="nav-copy"><span class="nav-label">Dataset</span><span class="nav-description">Prepare your ingredients</span></span>
+        <span class="nav-step">02</span>
+    </button>
+<button type="button" class="section-nav-btn" data-section="config-section" aria-controls="config-section">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></svg>
+        <span class="nav-copy"><span class="nav-label">Training</span><span class="nav-description">Make it your own</span></span>
+        <span class="nav-step">03</span>
+    </button>
+<p class="nav-group-label">EXPLORE</p>
+<button type="button" class="section-nav-btn" data-section="jobs-section" aria-controls="jobs-section">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v16h16M8 14l4-5 4 3 4-6"/></svg>
+        <span class="nav-copy"><span class="nav-label">Jobs</span><span class="nav-description">Follow the progress</span></span>
+
+    </button>
+<button type="button" class="section-nav-btn" data-section="inference-section" aria-controls="inference-section">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11a8 8 0 0 1-8 8H5l-4 3V11a10 10 0 0 1 20 0Z"/><path d="M7 10h8M7 14h5"/></svg>
+        <span class="nav-copy"><span class="nav-label">Playground</span><span class="nav-description">Try a little magic</span></span>
+
+    </button>
+<button type="button" class="section-nav-btn" data-section="export-section" aria-controls="export-section">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m-4 4 4-4 4 4M4 13v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6"/></svg>
+        <span class="nav-copy"><span class="nav-label">Export & publish</span><span class="nav-description">Share your creation</span></span>
+
+    </button>
+<p class="nav-group-label">WORKSPACE</p>
+<button type="button" class="section-nav-btn" data-section="cleanup-section" aria-controls="cleanup-section">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01M11 7h6M11 17h6"/></svg>
+        <span class="nav-copy"><span class="nav-label">Storage</span><span class="nav-description">Keep things tidy</span></span>
+
+    </button>
+</nav>
+            <div class="sidebar-note"><span aria-hidden="true">✧</span><p>Big ideas.<br>A little everyday magic.</p></div>
+            <a class="sidebar-link" href="/docs" target="_blank" rel="noopener noreferrer">API documentation <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10"/></svg></a>
+        </aside>
+        <div class="studio-workspace">
+        <header class="studio-topbar">
+            <div class="breadcrumbs"><span>Workspace</span><span aria-hidden="true">/</span><strong id="current-page-label">Model</strong></div>
+            <div class="logo"><span class="studio-badge"><span aria-hidden="true">✧</span> Training studio</span></div>
         </header>
-
-        <!-- Section Navigation Banner -->
-        <nav id="section-nav" class="section-nav">
-            <button class="section-nav-btn active" data-section="model-section">
-                <span class="nav-step">1</span>
-                <span class="nav-label">Model</span>
-            </button>
-            <button class="section-nav-btn" data-section="dataset-section">
-                <span class="nav-step">2</span>
-                <span class="nav-label">Dataset</span>
-            </button>
-            <button class="section-nav-btn" data-section="config-section">
-                <span class="nav-step">3</span>
-                <span class="nav-label">Training</span>
-            </button>
-            <button class="section-nav-btn" data-section="jobs-section">
-                <span class="nav-step">4</span>
-                <span class="nav-label">Jobs</span>
-            </button>
-            <button class="section-nav-btn" data-section="inference-section">
-                <span class="nav-step">5</span>
-                <span class="nav-label">Inference</span>
-            </button>
-            <button class="section-nav-btn" data-section="export-section">
-                <span class="nav-step">6</span>
-                <span class="nav-label">Export</span>
-            </button>
-            <button class="section-nav-btn" data-section="cleanup-section">
-                <span class="nav-step">7</span>
-                <span class="nav-label">Cleanup</span>
-            </button>
-        </nav>
-
         <!-- Main Content -->
-        <main id="main-content" role="main">
+        <main id="main-content" role="main" tabindex="-1">
+            <div class="studio-content">
             <!-- Model Selection (STEP 1) -->
             <section id="model-section" class="card nav-section">
-                <h2>🎯 Step 1: Select Your Base Model</h2>
+                <div class="page-heading"><p class="eyebrow">01 / THE FOUNDATION</p><h2 tabindex="-1">Model studio</h2><p class="page-description">Every great model starts with a little curiosity. Let’s find your starting point.</p></div>
 
+
+                <div class="welcome-banner">
+                    <div class="welcome-copy"><span class="welcome-label">A SMALL START. SOMETHING WONDERFUL.</span><h3>A little magic.<br>A model of your own.</h3><p>Choose a base model, add your data, and let’s bring your ideas to life.</p><div class="welcome-tags"><span>Text & vision</span><span>Image LoRA</span><span>Made by you</span></div></div>
+                    <div class="welcome-art" aria-hidden="true"><span class="orbit orbit-one"></span><span class="orbit orbit-two"></span><span class="art-star star-one">✦</span><span class="art-star star-two">✧</span><span class="art-star star-three">✧</span><img src="merlina.png" alt="" width="170" height="188"><span class="mascot-caption">your friendly training companion</span></div>
+                </div>
                 <div class="spell-section">
-                    <h3>🤖 Model Configuration</h3>
+                    <div class="panel-heading"><span class="panel-icon" aria-hidden="true">◇</span><div><h3>Your base model</h3><p>A familiar foundation for something new.</p></div><span class="subtle-badge">Required</span></div>
                     <div class="form-group">
-                        <label>📚 Base Model (HuggingFace Tag or Local Path)</label>
+                        <label for="base-model">Model ID or local path</label>
                         <input type="text" id="base-model" list="local-models-list" placeholder="meta-llama/Meta-Llama-3-8B-Instruct" class="magic-input" required>
                         <datalist id="local-models-list"></datalist>
-                        <small style="color: #888; font-size: 0.85em;">Examples: meta-llama/Llama-3.2-3B-Instruct, mistralai/Mistral-7B-Instruct-v0.3, ./models/my-merged-model</small>
+                        <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Use a HuggingFace model ID or a local folder, such as ./models/my-model.</small>
                     </div>
                     <div class="form-group">
-                        <label>📂 Local Models <span id="offline-mode-badge" style="display: none; background: var(--primary-purple); color: white; padding: 2px 8px; border-radius: 10px; font-size: 0.8em; margin-left: 8px;">🔌 Offline Mode</span></label>
+                        <label for="local-model-select">Local models <span id="offline-mode-badge" style="display: none; background: var(--hover-bg); color: var(--dark-purple); padding: 2px 8px; border-radius: 10px; font-size: 0.8em; margin-left: 8px;">🔌 Offline Mode</span></label>
                         <div style="display: flex; gap: 8px;">
                             <select id="local-model-select" class="magic-select" style="flex: 1;">
                                 <option value="">— Select a model already on this machine —</option>
                             </select>
-                            <button type="button" id="refresh-local-models" class="action-button" title="Refresh local model list">🔄</button>
+                            <button type="button" id="refresh-local-models" class="action-button icon-button" title="Refresh local model list" aria-label="Refresh local models">↻</button>
                         </div>
-                        <small style="color: #888; font-size: 0.85em;">Models from the HuggingFace cache and ./models — no internet needed</small>
+                        <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Models from the HuggingFace cache and ./models — no internet needed</small>
                     </div>
                     <div class="form-group">
-                        <label>🧠 Model Type</label>
+                        <label for="model-type">Model Type</label>
                         <select id="model-type" class="magic-select">
                             <option value="auto" selected>Auto-detect</option>
                             <option value="causal_lm">Text LLM (CausalLM)</option>
                             <option value="vlm">Vision-Language Model (VLM)</option>
                             <option value="diffusion">Diffusion / Image LoRA ✨ new</option>
                         </select>
-                        <small style="color: #888; font-size: 0.85em;">Auto-detect works for most models. Pick VLM for vision-language models (Qwen-VL etc.) or Diffusion to train an image LoRA on Qwen-Image / SDXL.</small>
+                        <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Auto-detect is a good starting point. Choose Vision-Language for image understanding, or Diffusion for image generation.</small>
                     </div>
-                </div>
-
-                <div class="spell-section">
-                    <h3>🔑 API Tokens (Optional)</h3>
+                <details class="model-access">
+                    <summary>Access & authentication <span class="subtle-badge">Optional</span></summary>
                     <div class="form-group">
-                        <label>HuggingFace Token</label>
+                        <label for="hf-token-preload">HuggingFace Token</label>
                         <input type="password" id="hf-token-preload" placeholder="For gated models (Llama, etc.)" class="magic-input">
-                        <small style="color: #888; font-size: 0.85em;">Required for gated models like Llama</small>
+                        <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Required for gated models like Llama</small>
                     </div>
-                </div>
+                </details>
 
                 <!-- Preload Button and Status -->
-                <div class="spell-section">
-                    <button type="button" id="preload-model-button" class="action-button" style="width: 100%; background: var(--primary-purple); color: white; font-weight: bold; padding: 15px;">
-                        🔮 Validate & Preload Model
+                <div class="model-validation">
+                    <button type="button" id="preload-model-button" class="action-button primary-button" style="width: 100%;">
+                        Validate & preload model
                     </button>
                     <div id="model-status" style="margin-top: 15px; display: none;">
-                        <div style="padding: 15px; background: #e8f5e9; border-radius: 10px; border: 1px solid #4caf50;">
-                            <div style="font-weight: bold; color: #2e7d32; margin-bottom: 5px;">✓ Model Ready</div>
-                            <div id="model-info" style="font-size: 0.9em; color: #555;"></div>
+                        <div style="padding: 15px; background: var(--success-light); border-radius: 10px; border: 1px solid var(--success);">
+                            <div style="font-weight: bold; color: var(--success-dark); margin-bottom: 5px;">✓ Model Ready</div>
+                            <div id="model-info" style="font-size: 0.9em; color: var(--text-secondary);"></div>
                         </div>
                     </div>
+                </div>
+
                 </div>
 
                 <!-- GPU Selection -->
-                <div class="spell-section">
-                    <h3>🎮 GPU Selection</h3>
-                    <button type="button" id="refresh-gpu-button" class="action-button" style="width: 100%; margin-bottom: 15px; background: var(--primary-purple); color: white;">
-                        🔄 Refresh GPU List
+                <details class="spell-section compute-settings" id="compute-settings">
+                    <summary class="panel-heading"><span class="panel-icon mint" aria-hidden="true">⌘</span><span><strong>Compute settings</strong><span class="compute-description" id="compute-summary">Auto-detect GPUs · customize hardware</span></span><span class="details-chevron" aria-hidden="true">⌄</span></summary>
+                    <button type="button" id="refresh-gpu-button" class="action-button" style="width: 100%; margin-bottom: 15px;">
+                        Refresh available GPUs
                     </button>
 
                     <div id="gpu-list-container" style="margin-top: 15px;">
-                        <div style="text-align: center; padding: 20px; color: #888;">
-                            Click "Refresh GPU List" to see available GPUs
+                        <div style="text-align: center; padding: 20px; color: var(--text-muted);">
+                            Refresh to discover the GPUs available for your training run.
                         </div>
                     </div>
 
                     <div class="form-group" style="margin-top: 15px;">
-                        <label>Selected GPUs for Training</label>
+                        <label for="gpu-selection">Selected GPUs for Training</label>
                         <select id="gpu-selection" class="magic-select" multiple style="min-height: 60px;">
                             <option value="">Auto (use all available)</option>
                         </select>
-                        <small style="color: #888; font-size: 0.85em;">Hold Ctrl/Cmd to select multiple GPUs. Leave empty for auto-selection.</small>
+                        <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Hold Ctrl/Cmd to select multiple GPUs. Leave empty for auto-selection.</small>
                     </div>
 
                     <div class="form-group" style="margin-top: 15px;">
-                        <label>Multi-GPU Strategy</label>
+                        <label for="multi-gpu-strategy">Multi-GPU Strategy</label>
                         <select id="multi-gpu-strategy" class="magic-select">
                             <option value="auto">Auto (DDP when multiple GPUs selected)</option>
                             <option value="ddp">DDP (Distributed Data Parallel)</option>
                             <option value="single">Single Process (Model Parallelism)</option>
                         </select>
-                        <small style="color: #888; font-size: 0.85em;">
+                        <small style="color: var(--text-muted); font-size: var(--font-size-sm);">
                             <strong>DDP:</strong> Each GPU processes different data batches in parallel &mdash; faster training, halves step count.
                             <strong>Single:</strong> Spreads model layers across GPUs &mdash; for models too large for one GPU.
                         </small>
                     </div>
-                </div>
+                </details>
+<div class="step-footer"><span>Your ideas, one step at a time.</span><button type="button" class="action-button primary-button" data-go-section="dataset-section">Continue to dataset <span aria-hidden="true">→</span></button></div>
             </section>
 
             <!-- Dataset Configuration (STEP 2) -->
             <section id="dataset-section" class="card nav-section" style="display: none;">
-                <h2>📚 Step 2: Configure Your Dataset</h2>
+                <div class="page-heading"><p class="eyebrow">02 / THE INGREDIENTS</p><h2 tabindex="-1">Shape your dataset</h2><p class="page-description">Bring your data together, check the format, and give your model something good to learn.</p></div>
 
                 <!-- Training Mode Selection (drives required columns below) -->
                 <div class="form-group" id="training-mode-section" style="margin-bottom: 20px;">
-                    <label>🎯 Training Method</label>
+                    <label for="training-mode">Training Method</label>
                     <select id="training-mode" class="magic-select">
                         <optgroup label="Text LLM">
                             <option value="sft">SFT - Supervised Fine-Tuning</option>
@@ -180,13 +200,13 @@
                             <option value="diffusion_sdxl">SDXL LoRA</option>
                         </optgroup>
                     </select>
-                    <small style="color: #888; font-size: 0.85em;">Determines which columns your dataset needs.</small>
+                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Determines which columns your dataset needs.</small>
                 </div>
 
                 <!-- Datasets (unified: first card is always present, add more below) -->
                 <div class="spell-section">
-                    <h3>🔮 Datasets</h3>
-                    <small style="color: #888; font-size: 0.85em; display: block; margin-bottom: 12px;">
+                    <h3>Datasets</h3>
+                    <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-bottom: 12px;">
                         Add one or more datasets. Each has its own source and column mapping. All datasets are concatenated, formatted, and split together.
                     </small>
                     <div id="datasets-list"></div>
@@ -203,7 +223,7 @@
                             <input type="checkbox" id="convert-messages-checkbox" checked style="width: 18px; height: 18px; cursor: pointer;">
                             <span>Auto-convert messages format</span>
                         </label>
-                        <div style="margin-top: 10px; font-size: 0.85em; opacity: 0.9; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.3);">
+                        <div style="margin-top: 10px; font-size: var(--font-size-sm); opacity: 0.9; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.3);">
                             When enabled: user → prompt, assistant → chosen, system → system
                         </div>
                     </div>
@@ -215,8 +235,8 @@
 
                 <!-- System Prompt Override (applies to all datasets) -->
                 <div class="spell-section">
-                    <h3>🧙 System Prompt Override (Optional)</h3>
-                    <small style="color: #888; font-size: 0.85em; display: block; margin-bottom: 10px;">
+                    <h3>System Prompt Override (Optional)</h3>
+                    <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-bottom: 10px;">
                         Inject a system prompt across all datasets.
                     </small>
                     <div class="form-group">
@@ -234,7 +254,7 @@
                                 <span>Replace all</span>
                             </label>
                         </div>
-                        <small style="color: #888; font-size: 0.85em; display: block; margin-top: 6px;">
+                        <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-top: 6px;">
                             "Fill empty" sets the system prompt only for rows without one. "Replace all" overwrites every row's system prompt.
                         </small>
                     </div>
@@ -242,9 +262,9 @@
 
                 <!-- Dataset Format -->
                 <div class="spell-section">
-                    <h3>📝 Dataset Format</h3>
+                    <h3>Dataset Format</h3>
                     <div class="form-group">
-                        <label>Format Type</label>
+                        <label for="dataset-format-type">Format Type</label>
                         <select id="dataset-format-type" class="magic-select">
                             <option value="tokenizer">Tokenizer (Recommended) - Uses model's native chat template</option>
                             <option value="chatml">ChatML</option>
@@ -254,7 +274,7 @@
                             <option value="custom">Custom Template</option>
                             <option value="raw">Raw (No Formatting) - Columns used as-is, no chat template</option>
                         </select>
-                        <small style="color: #888; font-size: 0.85em;">How to format conversations for the model</small>
+                        <small style="color: var(--text-muted); font-size: var(--font-size-sm);">How to format conversations for the model</small>
                     </div>
 
                     <!-- Qwen3 Config -->
@@ -264,7 +284,7 @@
                                 <input type="checkbox" id="enable-thinking" checked>
                                 <span>Enable Thinking Mode 🧠</span>
                             </label>
-                            <small style="color: #888; font-size: 0.85em; display: block; margin-top: 5px;">
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-top: 5px;">
                                 When enabled, the model can use &lt;think&gt; tags to show its reasoning process before responding.
                                 When disabled, adds empty &lt;think&gt;&lt;/think&gt; tags to prevent thinking output.
                             </small>
@@ -278,7 +298,7 @@
                                 <input type="checkbox" id="auto-detect-thinking" checked>
                                 <span>Auto-detect Thinking per Row 🪄</span>
                             </label>
-                            <small style="color: #888; font-size: 0.85em; display: block; margin-top: 5px;">
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-top: 5px;">
                                 Detect &lt;think&gt; per row: render with thinking <em>enabled</em> when the row has a reasoning column or
                                 embedded &lt;think&gt;…&lt;/think&gt; in prompt/response, and <em>disabled</em> when it doesn't. This bakes the
                                 empty &lt;think&gt;&lt;/think&gt; wrapper into the prompt prefix on non-reasoning rows so the model never
@@ -290,16 +310,16 @@
                     <!-- Custom Template Config -->
                     <div id="custom-format-config" style="display: none; margin-top: 15px;">
                         <div class="form-group">
-                            <label>Prompt Template</label>
+                            <label for="custom-prompt-template">Prompt Template</label>
                             <textarea id="custom-prompt-template" class="magic-input" rows="3" placeholder="{system}\n\n{prompt}">{system}\n\n{prompt}</textarea>
-                            <small style="color: #888; font-size: 0.85em;">Use {system} and {prompt} as placeholders</small>
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Use {system} and {prompt} as placeholders</small>
                         </div>
                         <div class="form-group">
-                            <label>Chosen Template</label>
+                            <label for="custom-chosen-template">Chosen Template</label>
                             <input type="text" id="custom-chosen-template" value="{chosen}" class="magic-input">
                         </div>
                         <div class="form-group">
-                            <label>Rejected Template</label>
+                            <label for="custom-rejected-template">Rejected Template</label>
                             <input type="text" id="custom-rejected-template" value="{rejected}" class="magic-input">
                         </div>
                     </div>
@@ -307,12 +327,12 @@
 
                 <!-- Dataset Preview -->
                 <div class="spell-section">
-                    <h3>👁️ Dataset Preview</h3>
+                    <h3>Dataset Preview</h3>
                     <div style="display: flex; gap: 10px; margin-bottom: 15px;">
                         <button type="button" id="preview-dataset-button" class="action-button" style="flex: 1;">
                             🔍 Preview Raw Data
                         </button>
-                        <button type="button" id="preview-formatted-button" class="action-button" style="flex: 1; background: var(--secondary-purple);">
+                        <button type="button" id="preview-formatted-button" class="action-button" style="flex: 1;">
                             ✨ Preview Formatted
                         </button>
                     </div>
@@ -323,11 +343,11 @@
                         <div style="display: flex; gap: 5px; align-items: center; flex: 1;">
                             <label for="preview-index" style="font-size: 0.9em; color: var(--primary-purple); white-space: nowrap;">Jump to:</label>
                             <input type="number" id="preview-index" min="1" value="1" class="magic-input" style="width: 100px; padding: 5px;">
-                            <button type="button" id="jump-to-index-button" class="action-button" style="padding: 5px 15px; font-size: 0.9em;">Go</button>
+                            <button type="button" id="jump-to-index-button" class="action-button">Go</button>
                         </div>
                         <div style="display: flex; gap: 5px;">
-                            <button type="button" id="preview-prev-button" class="action-button" style="padding: 5px 15px; font-size: 0.9em;">← Prev</button>
-                            <button type="button" id="preview-next-button" class="action-button" style="padding: 5px 15px; font-size: 0.9em;">Next →</button>
+                            <button type="button" id="preview-prev-button" class="action-button">← Prev</button>
+                            <button type="button" id="preview-next-button" class="action-button">Next →</button>
                         </div>
                     </div>
 
@@ -335,12 +355,12 @@
                     <div id="dataset-preview" style="margin-top: 15px; display: none;">
                         <h4 style="color: var(--secondary-purple); margin-bottom: 10px;">
                             Raw Dataset
-                            <span id="raw-preview-info" style="font-weight: normal; font-size: 0.85em; color: #888;"></span>
+                            <span id="raw-preview-info" style="font-weight: normal; font-size: var(--font-size-sm); color: var(--text-muted);"></span>
                         </h4>
                         <div style="max-height: 400px; overflow-y: auto; background: white; padding: 15px; border-radius: 10px; border: 1px solid var(--light-purple);">
-                            <pre id="dataset-preview-content" style="margin: 0; font-size: 0.85em; white-space: pre-wrap;"></pre>
+                            <pre id="dataset-preview-content" style="margin: 0; font-size: var(--font-size-sm); white-space: pre-wrap;"></pre>
                         </div>
-                        <div style="margin-top: 10px; padding: 8px; background: #f5f7fa; border-radius: 5px; text-align: center; font-size: 0.85em; color: #666;">
+                        <div style="margin-top: 10px; padding: 8px; background: var(--bg-secondary); border-radius: 5px; text-align: center; font-size: var(--font-size-sm); color: var(--text-muted);">
                             <span id="raw-preview-position"></span>
                         </div>
                     </div>
@@ -349,28 +369,28 @@
                     <div id="formatted-preview" style="margin-top: 15px; display: none;">
                         <h4 style="color: var(--secondary-purple); margin-bottom: 10px;">
                             Formatted for Training
-                            <span id="formatted-preview-info" style="font-weight: normal; font-size: 0.85em; color: #888;"></span>
+                            <span id="formatted-preview-info" style="font-weight: normal; font-size: var(--font-size-sm); color: var(--text-muted);"></span>
                         </h4>
                         <div style="background: white; padding: 15px; border-radius: 10px; border: 1px solid var(--light-purple);">
                             <div style="margin-bottom: 20px;">
                                 <div style="font-weight: bold; color: var(--primary-purple); margin-bottom: 5px;">Prompt:</div>
-                                <div style="background: #f5f7fa; padding: 10px; border-radius: 5px; max-height: 200px; overflow-y: auto; font-family: monospace; font-size: 0.85em; white-space: pre-wrap;" id="formatted-prompt"></div>
+                                <div style="background: var(--bg-secondary); padding: 10px; border-radius: 5px; max-height: 200px; overflow-y: auto; font-family: monospace; font-size: var(--font-size-sm); white-space: pre-wrap;" id="formatted-prompt"></div>
                             </div>
                             <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
                                 <div>
                                     <div style="font-weight: bold; color: var(--success); margin-bottom: 5px;">✓ Chosen Response:</div>
-                                    <div style="background: #e8f5e9; padding: 10px; border-radius: 5px; max-height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.85em; white-space: pre-wrap;" id="formatted-chosen"></div>
+                                    <div style="background: var(--success-light); padding: 10px; border-radius: 5px; max-height: 150px; overflow-y: auto; font-family: monospace; font-size: var(--font-size-sm); white-space: pre-wrap;" id="formatted-chosen"></div>
                                 </div>
                                 <div>
                                     <div style="font-weight: bold; color: var(--danger); margin-bottom: 5px;">✗ Rejected Response:</div>
-                                    <div style="background: #ffebee; padding: 10px; border-radius: 5px; max-height: 150px; overflow-y: auto; font-family: monospace; font-size: 0.85em; white-space: pre-wrap;" id="formatted-rejected"></div>
+                                    <div style="background: var(--danger-light); padding: 10px; border-radius: 5px; max-height: 150px; overflow-y: auto; font-family: monospace; font-size: var(--font-size-sm); white-space: pre-wrap;" id="formatted-rejected"></div>
                                 </div>
                             </div>
-                            <div style="margin-top: 15px; padding: 10px; background: #e6d0ff; border-radius: 5px; font-size: 0.85em;">
+                            <div style="margin-top: 15px; padding: 10px; background: var(--light-purple); border-radius: 5px; font-size: var(--font-size-sm);">
                                 <strong>📝 Format Type:</strong> <span id="format-type-display"></span>
                             </div>
                         </div>
-                        <div style="margin-top: 10px; padding: 8px; background: #f5f7fa; border-radius: 5px; text-align: center; font-size: 0.85em; color: #666;">
+                        <div style="margin-top: 10px; padding: 8px; background: var(--bg-secondary); border-radius: 5px; text-align: center; font-size: var(--font-size-sm); color: var(--text-muted);">
                             <span id="formatted-preview-position"></span>
                         </div>
                     </div>
@@ -378,8 +398,8 @@
 
                 <!-- Dataset Statistics -->
                 <div class="spell-section">
-                    <h3>📊 Dataset Statistics</h3>
-                    <button type="button" id="dataset-stats-button" class="action-button" style="width: 100%; background: var(--secondary-purple);">
+                    <h3>Dataset Statistics</h3>
+                    <button type="button" id="dataset-stats-button" class="action-button" style="width: 100%;">
                         📊 Analyze Dataset
                     </button>
                     <div id="dataset-stats-panel" style="margin-top: 15px; display: none;">
@@ -391,17 +411,17 @@
 
                 <!-- Advanced Dataset Options -->
                 <div class="spell-section">
-                    <h3>⚙️ Advanced Options</h3>
+                    <h3>Advanced Options</h3>
                     <div class="form-row">
                         <div class="form-group">
-                            <label>Test Split Size</label>
+                            <label for="test-size">Test Split Size</label>
                             <input type="number" id="test-size" value="0.01" min="0.001" max="0.5" step="0.01" class="magic-input">
-                            <small style="color: #888; font-size: 0.85em;">Fraction of data for evaluation</small>
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Fraction of data for evaluation</small>
                         </div>
                         <div class="form-group">
-                            <label>Max Samples (Optional)</label>
+                            <label for="max-samples">Max Samples (Optional)</label>
                             <input type="number" id="max-samples" placeholder="Use all" class="magic-input">
-                            <small style="color: #888; font-size: 0.85em;">Limit dataset size for testing</small>
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Limit dataset size for testing</small>
                         </div>
                     </div>
                     <div class="form-row" style="margin-top: 10px;">
@@ -410,17 +430,17 @@
                                 <input type="checkbox" id="dataset-streaming" style="margin-right: 10px; width: 18px; height: 18px; cursor: pointer;">
                                 <span>Stream Large Dataset</span>
                             </label>
-                            <small style="color: #888; font-size: 0.85em;">Streams rows in batches instead of loading all at once. Recommended for 100k+ row HuggingFace datasets.</small>
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Streams rows in batches instead of loading all at once. Recommended for 100k+ row HuggingFace datasets.</small>
                         </div>
                         <div class="form-group" style="flex: 1;">
                             <label style="display: flex; align-items: center; cursor: pointer; user-select: none;">
                                 <input type="checkbox" id="deduplicate" style="margin-right: 10px; width: 18px; height: 18px; cursor: pointer;">
                                 <span>Remove Duplicate Samples</span>
                             </label>
-                            <small style="color: #888; font-size: 0.85em;">Removes duplicates before training. Useful when combining multiple datasets.</small>
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Removes duplicates before training. Useful when combining multiple datasets.</small>
                         </div>
                         <div class="form-group" style="flex: 1;">
-                            <label>Deduplication Strategy</label>
+                            <label for="dedupe-strategy">Deduplication Strategy</label>
                             <select id="dedupe-strategy" class="magic-select">
                                 <option value="prompt_chosen" selected>Prompt + Chosen</option>
                                 <option value="prompt">Prompt Only</option>
@@ -430,33 +450,34 @@
                         </div>
                     </div>
                 </div>
+<div class="step-footer"><button type="button" class="text-button" data-go-section="model-section">← Back to model</button><button type="button" class="action-button primary-button" data-go-section="config-section">Continue to training <span aria-hidden="true">→</span></button></div>
             </section>
 
             <!-- Training Configuration (STEP 3) -->
             <section id="config-section" class="card nav-section" style="display: none;">
-                <h2>✨ Step 3: Configure Training Parameters</h2>
+                <div class="page-heading"><p class="eyebrow">03 / THE RECIPE</p><h2 tabindex="-1">Make it your own</h2><p class="page-description">A few thoughtful settings turn your model and dataset into something uniquely yours.</p></div>
 
                 <!-- Config Management Section -->
-                <div class="spell-section" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 12px; margin-bottom: 25px;">
-                    <h3 style="color: white; margin-bottom: 15px;">💾 Configuration Management</h3>
+                <div class="spell-section config-toolbar" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 12px; margin-bottom: 25px;">
+                    <h3 style="color: white; margin-bottom: 15px;">Configuration Management</h3>
 
                     <div class="form-row" style="gap: 10px; margin-bottom: 15px;">
-                        <button type="button" id="save-config-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
+                        <button type="button" id="save-config-btn" class="action-button" style="flex: 1;">
                             💾 Save Config
                         </button>
-                        <button type="button" id="load-config-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
+                        <button type="button" id="load-config-btn" class="action-button" style="flex: 1;">
                             📂 Load Config
                         </button>
-                        <button type="button" id="load-from-job-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
+                        <button type="button" id="load-from-job-btn" class="action-button" style="flex: 1;">
                             🔄 From Job
                         </button>
-                        <button type="button" id="load-from-image-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
+                        <button type="button" id="load-from-image-btn" class="action-button" style="flex: 1;">
                             🔳 From Image
                         </button>
-                        <button type="button" id="load-from-code-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
+                        <button type="button" id="load-from-code-btn" class="action-button" style="flex: 1;">
                             🪄 From Code
                         </button>
-                        <button type="button" id="manage-configs-btn" class="action-button" style="flex: 1; background: white; color: var(--primary-purple); font-weight: bold;">
+                        <button type="button" id="manage-configs-btn" class="action-button" style="flex: 1;">
                             🗂️ Manage
                         </button>
                     </div>
@@ -470,12 +491,12 @@
                 <form id="training-form">
                     <!-- Training Method -->
                     <div class="spell-section" id="training-method-section">
-                        <h3>🎯 What are you training?</h3>
-                        <small style="color: #888; font-size: 0.85em; display: block; margin-bottom: 10px;">
+                        <h3>What are you training?</h3>
+                        <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-bottom: 10px;">
                             Choose a training method — this also determines which dataset columns are required.
                         </small>
                         <div class="form-group">
-                            <label>Training Method</label>
+                            <label for="training-mode-config">Training Method</label>
                             <select id="training-mode-config" class="magic-select">
                                 <optgroup label="Text LLM">
                                     <option value="sft">SFT - Supervised Fine-Tuning</option>
@@ -492,21 +513,21 @@
                                     <option value="diffusion_sdxl">SDXL LoRA</option>
                                 </optgroup>
                             </select>
-                            <small id="training-mode-description" style="color: #888; font-size: 0.85em; display: block; margin-top: 8px;"></small>
+                            <small id="training-mode-description" style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-top: 8px;"></small>
                         </div>
-                        <button type="button" id="apply-preset-btn" class="action-button" style="width: 100%; margin-top: 12px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; font-weight: bold; padding: 12px;">
+                        <button type="button" id="apply-preset-btn" class="action-button primary-button" style="width: 100%; margin-top: 12px;">
                             📋 Apply Suggested Settings
                         </button>
-                        <div id="preset-notes" style="display: none; margin-top: 10px; padding: 12px; background: #f0e6ff; border-radius: 8px; border-left: 3px solid var(--primary-purple); font-size: 0.85em; color: #444;"></div>
+                        <div id="preset-notes" style="display: none; margin-top: 10px; padding: 12px; background: var(--hover-bg); border-radius: 8px; border-left: 3px solid var(--primary-purple); font-size: var(--font-size-sm); color: var(--text-secondary);"></div>
                     </div>
 
                     <!-- Diffusion-only fields (hidden unless training_mode starts with diffusion_) -->
-                    <div class="spell-section" id="diffusion-fields-section" style="display: none; background: linear-gradient(135deg, #fce4ec 0%, #f3e5f5 100%); border-left: 4px solid var(--primary-purple);">
-                        <h3>🎨 Diffusion Settings</h3>
+                    <div class="spell-section" id="diffusion-fields-section" style="display: none; background: var(--bg-secondary); border-left: 4px solid var(--primary-purple);">
+                        <h3>Diffusion Settings</h3>
 
                         <!-- DRAG-DROP IMAGE DATASET UPLOAD -->
                         <div class="form-group">
-                            <label>🖼️ Image Dataset</label>
+                            <label>Image Dataset</label>
                             <div id="diffusion-dropzone" style="
                                 border: 3px dashed var(--primary-purple);
                                 border-radius: 12px;
@@ -524,12 +545,12 @@
                                     <div style="font-weight: bold; color: var(--primary-purple); margin-bottom: 4px;">
                                         Drop your images here
                                     </div>
-                                    <div style="color: #888; font-size: 0.85em;">
+                                    <div style="color: var(--text-muted); font-size: var(--font-size-sm);">
                                         ...or click to pick a folder. PNG / JPG / WebP all work.
                                     </div>
                                 </div>
                             </div>
-                            <small style="color: #888; font-size: 0.85em; display: block; margin-top: 6px;">
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-top: 6px;">
                                 Captions default to the filename — edit each one inline below, or leave blank to let the trainer infer from the image.
                             </small>
                         </div>
@@ -539,13 +560,8 @@
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
                                 <strong id="diffusion-thumbnail-count">0 images selected</strong>
                                 <div>
-                                    <button type="button" id="diffusion-clear-images" class="action-button" style="
-                                        background: transparent; color: var(--primary-purple);
-                                        border: 1px solid var(--primary-purple); padding: 6px 14px; font-size: 0.85em;
-                                    ">🗑 Clear</button>
-                                    <button type="button" id="diffusion-save-dataset" class="action-button" style="
-                                        background: var(--primary-purple); color: white; padding: 6px 14px; font-size: 0.85em;
-                                    ">💾 Save & Use Dataset</button>
+                                    <button type="button" id="diffusion-clear-images" class="action-button" style="border: 1px solid var(--primary-purple);">🗑 Clear</button>
+                                    <button type="button" id="diffusion-save-dataset" class="action-button primary-button">💾 Save & Use Dataset</button>
                                 </div>
                             </div>
                             <div id="diffusion-thumbnails" style="
@@ -561,17 +577,14 @@
                         </div>
 
                         <details style="margin: 16px 0;">
-                            <summary style="cursor: pointer; color: #666; font-size: 0.9em;">⚙️ Advanced: paste a JSONL path or HF dataset name instead</summary>
+                            <summary style="cursor: pointer; color: var(--text-muted); font-size: 0.9em;">⚙️ Advanced: paste a JSONL path or HF dataset name instead</summary>
                             <div class="form-group" style="margin-top: 12px;">
-                                <label>📂 Dataset JSONL Path</label>
+                                <label>Dataset JSONL Path</label>
                                 <div style="display: flex; gap: 6px;">
                                     <input type="text" id="diffusion-dataset-jsonl" placeholder="/path/to/train.jsonl" class="magic-input" style="flex: 1;">
-                                    <button type="button" id="diffusion-jsonl-preview" class="action-button" style="
-                                        background: var(--primary-purple); color: white;
-                                        padding: 8px 14px; font-size: 0.9em; white-space: nowrap;
-                                    ">👁 Preview &amp; Edit</button>
+                                    <button type="button" id="diffusion-jsonl-preview" class="action-button primary-button" style="white-space: nowrap;">👁 Preview &amp; Edit</button>
                                 </div>
-                                <small style="color: #888; font-size: 0.85em;">JSONL with {prompt, image} (or {prompt, chosen, rejected}) rows. ⚠️ This is a path on the machine running Merlina, not your computer — if the server is remote, use the drag-drop upload above (which sets this automatically) or an HF dataset name below. Click Preview to inspect + inline-edit captions before training.</small>
+                                <small style="color: var(--text-muted); font-size: var(--font-size-sm);">JSONL with {prompt, image} (or {prompt, chosen, rejected}) rows. ⚠️ This is a path on the machine running Merlina, not your computer — if the server is remote, use the drag-drop upload above (which sets this automatically) or an HF dataset name below. Click Preview to inspect + inline-edit captions before training.</small>
                             </div>
 
                             <!-- JSONL preview + inline editor (populated by Preview button) -->
@@ -579,9 +592,9 @@
                                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                                     <strong id="diffusion-jsonl-preview-summary">Loading…</strong>
                                     <div>
-                                        <button type="button" id="diffusion-jsonl-prev-page" class="action-button" style="background: transparent; color: var(--primary-purple); border: 1px solid var(--primary-purple); padding: 4px 10px; font-size: 0.8em;">← prev</button>
-                                        <button type="button" id="diffusion-jsonl-next-page" class="action-button" style="background: transparent; color: var(--primary-purple); border: 1px solid var(--primary-purple); padding: 4px 10px; font-size: 0.8em;">next →</button>
-                                        <button type="button" id="diffusion-jsonl-save-edits" class="action-button" style="background: var(--primary-purple); color: white; padding: 4px 12px; font-size: 0.85em; margin-left: 8px;">💾 Save Edits</button>
+                                        <button type="button" id="diffusion-jsonl-prev-page" class="action-button" style="border: 1px solid var(--primary-purple);">← prev</button>
+                                        <button type="button" id="diffusion-jsonl-next-page" class="action-button" style="border: 1px solid var(--primary-purple);">next →</button>
+                                        <button type="button" id="diffusion-jsonl-save-edits" class="action-button primary-button" style="margin-left: 8px;">💾 Save Edits</button>
                                     </div>
                                 </div>
                                 <div id="diffusion-jsonl-thumbnails" style="
@@ -591,59 +604,59 @@
                                     max-height: 520px; overflow-y: auto;
                                     padding: 8px;
                                 "></div>
-                                <div id="diffusion-jsonl-status" style="margin-top: 8px; font-size: 0.85em; color: #555;"></div>
+                                <div id="diffusion-jsonl-status" style="margin-top: 8px; font-size: var(--font-size-sm); color: var(--text-secondary);"></div>
                             </div>
                             <div class="form-group">
-                                <label>🤗 HF Dataset Name</label>
+                                <label for="diffusion-dataset-name">HF Dataset Name</label>
                                 <input type="text" id="diffusion-dataset-name" placeholder="user/image-caption-dataset" class="magic-input">
-                                <small style="color: #888; font-size: 0.85em;">Alternative to upload / JSONL. Dataset must have an `image` + `prompt` (or `caption`) column.</small>
+                                <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Alternative to upload / JSONL. Dataset must have an `image` + `prompt` (or `caption`) column.</small>
                             </div>
                         </details>
 
                         <div class="form-group">
-                            <label>🖼️ Image Resolution (px)</label>
+                            <label for="diffusion-image-resolution">Image Resolution (px)</label>
                             <input type="number" id="diffusion-image-resolution" value="1024" min="256" max="2048" step="64" class="magic-input">
-                            <small style="color: #888; font-size: 0.85em;">Square crop at this size for both VAE encoding + training. 1024 is Qwen-Image native.</small>
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Square crop at this size for both VAE encoding + training. 1024 is Qwen-Image native.</small>
                         </div>
                         <div class="form-group">
-                            <label>🎚️ LoRA Rank (overrides "LoRA r" below)</label>
+                            <label for="diffusion-lora-rank">LoRA Rank (overrides "LoRA r" below)</label>
                             <input type="number" id="diffusion-lora-rank" value="32" min="4" max="256" class="magic-input">
-                            <small style="color: #888; font-size: 0.85em;">32 is a safe default for diffusion. Higher rank = more capacity but more overfit risk on small datasets.</small>
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm);">32 is a safe default for diffusion. Higher rank = more capacity but more overfit risk on small datasets.</small>
                         </div>
                         <div class="form-group">
-                            <label>🎯 LoRA Target Modules (comma-separated, blank = adapter defaults)</label>
+                            <label for="diffusion-lora-target-modules">LoRA Target Modules (comma-separated, blank = adapter defaults)</label>
                             <input type="text" id="diffusion-lora-target-modules" placeholder="to_k, to_q, to_v, to_out.0" class="magic-input">
-                            <small style="color: #888; font-size: 0.85em;">Attention modules. Default targets attention only; add ff.net.0.proj / ff.net.2 for higher-capacity finetunes.</small>
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Attention modules. Default targets attention only; add ff.net.0.proj / ff.net.2 for higher-capacity finetunes.</small>
                         </div>
                         <div class="form-group">
                             <label style="display: flex; align-items: center; gap: 8px;">
                                 <input type="checkbox" id="diffusion-lora-use-dora" style="width: auto;">
                                 <span>✨ Use DoRA (Weight-Decomposed LoRA)</span>
                             </label>
-                            <small style="color: #888; font-size: 0.85em;">Decomposes the LoRA update into magnitude + direction. ~5-10% slower step, meaningfully better quality on small aesthetic datasets where vanilla LoRA underfits the target style.</small>
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Decomposes the LoRA update into magnitude + direction. ~5-10% slower step, meaningfully better quality on small aesthetic datasets where vanilla LoRA underfits the target style.</small>
                         </div>
                         <div class="form-group">
                             <label style="display: flex; align-items: center; gap: 8px;">
                                 <input type="checkbox" id="diffusion-mid-training-samples" style="width: auto;" checked>
                                 <span>🖼️ Mid-Training Sample Previews</span>
                             </label>
-                            <small style="color: #888; font-size: 0.85em;">Generate preview images on every checkpoint, not just at the end. Watch the LoRA converge in near-real-time. Pauses training briefly while sampling (~30-60s per checkpoint). Untick for fastest wall-clock.</small>
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Generate preview images on every checkpoint, not just at the end. Watch the LoRA converge in near-real-time. Pauses training briefly while sampling (~30-60s per checkpoint). Untick for fastest wall-clock.</small>
                         </div>
                     </div>
 
                     <!-- Output Name -->
-                    <div class="form-group">
-                        <label style="display: flex; align-items: center; justify-content: space-between;">
-                            <span>🏷️ Output Model Name</span>
-                            <button type="button" id="generate-name-btn" style="background: none; border: 1px solid var(--light-purple); border-radius: 6px; padding: 2px 10px; cursor: pointer; font-size: 0.85em; color: var(--primary-purple);">🎲 Generate</button>
-                        </label>
+                    <div class="spell-section output-identity">
+                        <div class="output-name-heading">
+                            <label for="output-name">Name your creation</label>
+                            <button type="button" id="generate-name-btn" style="background: none; border: 1px solid var(--light-purple); border-radius: 6px; padding: 2px 10px; cursor: pointer; font-size: var(--font-size-sm); color: var(--primary-purple);">Generate a name</button>
+                        </div>
                         <input type="text" id="output-name" placeholder="My-Magical-Model" class="magic-input" required>
-                        <small style="color: #888; font-size: 0.85em;">Name for your fine-tuned model</small>
+                        <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Name for your fine-tuned model</small>
                     </div>
 
                     <!-- LoRA Configuration -->
                     <div class="spell-section">
-                        <h3>🪄 LoRA Enchantments</h3>
+                        <h3>LoRA adaptation</h3>
 
                         <!-- LoRA Enable/Disable Toggle -->
                         <div class="form-group" style="margin-bottom: 20px;">
@@ -651,7 +664,7 @@
                                 <input type="checkbox" id="use-lora" checked style="margin-right: 10px; width: 20px; height: 20px; cursor: pointer;">
                                 <span style="font-weight: bold; color: var(--primary-purple);">Enable LoRA (Low-Rank Adaptation)</span>
                             </label>
-                            <small style="color: #888; font-size: 0.85em; margin-top: 5px; display: block;">
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm); margin-top: 5px; display: block;">
                                 When enabled, trains only LoRA adapters (faster, less VRAM). When disabled, trains the full model.
                             </small>
                         </div>
@@ -659,15 +672,15 @@
                         <div id="lora-settings" style="display: block;">
                             <div class="form-row">
                                 <div class="form-group">
-                                    <label>Rank (r)</label>
+                                    <label for="lora-r">Rank (r)</label>
                                     <input type="number" id="lora-r" value="64" min="8" max="256" class="magic-input">
                                 </div>
                                 <div class="form-group">
-                                    <label>Alpha</label>
+                                    <label for="lora-alpha">Alpha</label>
                                     <input type="number" id="lora-alpha" value="32" min="8" max="256" class="magic-input">
                                 </div>
                                 <div class="form-group">
-                                    <label>Dropout</label>
+                                    <label for="lora-dropout">Dropout</label>
                                     <input type="number" id="lora-dropout" value="0.05" min="0" max="0.5" step="0.01" class="magic-input">
                                 </div>
                             </div>
@@ -746,21 +759,21 @@
                                 <!-- Fallback: Manual input when layers not detected -->
                                 <div id="manual-layers-input" class="manual-layers-input">
                                     <input type="text" id="target-modules-manual" value="up_proj,down_proj,gate_proj,k_proj,q_proj,v_proj,o_proj" class="magic-input" placeholder="e.g., q_proj,v_proj,k_proj">
-                                    <small style="color: #888; font-size: 0.85em;">Enter a model name above and click "Detect Layers" to see available layers, or enter comma-separated layer names manually.</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Enter a model name above and click "Detect Layers" to see available layers, or enter comma-separated layer names manually.</small>
                                 </div>
                                 <div class="form-group">
-                                    <label>Modules to Save (comma-separated, optional)</label>
+                                    <label for="modules-to-save">Modules to Save (comma-separated, optional)</label>
                                     <input type="text" id="modules-to-save" value="" class="magic-input" placeholder="e.g., embed_tokens,lm_head">
-                                    <small style="color: #888; font-size: 0.85em;">Modules to fully fine-tune (not LoRA-adapted) and save with adapter</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Modules to fully fine-tune (not LoRA-adapted) and save with adapter</small>
                                 </div>
                                 <div class="form-group">
-                                    <label>LoRA Task Type</label>
+                                    <label for="lora-task-type">LoRA Task Type</label>
                                     <select id="lora-task-type" class="magic-select">
                                         <option value="CAUSAL_LM" selected>CAUSAL_LM (text generation)</option>
                                         <option value="SEQ_2_SEQ_LM">SEQ_2_SEQ_LM (encoder-decoder)</option>
                                         <option value="FEATURE_EXTRACTION">FEATURE_EXTRACTION (embeddings only)</option>
                                     </select>
-                                    <small style="color: #888; font-size: 0.85em;">Most models use CAUSAL_LM. Only change this if you know your model architecture requires a different task type.</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Most models use CAUSAL_LM. Only change this if you know your model architecture requires a different task type.</small>
                                 </div>
                             </div>
                         </div>
@@ -768,56 +781,56 @@
 
                     <!-- Training Parameters -->
                     <div class="spell-section">
-                        <h3>⚗️ Training Potions</h3>
+                        <h3>Training parameters</h3>
                         <div class="form-row">
                             <div class="form-group">
-                                <label>Learning Rate</label>
+                                <label for="learning-rate">Learning Rate</label>
                                 <input type="number" id="learning-rate" value="0.000005" step="0.000001" class="magic-input">
                             </div>
                             <div class="form-group">
-                                <label>Epochs</label>
+                                <label for="epochs">Epochs</label>
                                 <input type="number" id="epochs" value="2" min="1" max="10" class="magic-input">
                             </div>
                             <div class="form-group">
-                                <label>Batch Size</label>
+                                <label for="batch-size">Batch Size</label>
                                 <input type="number" id="batch-size" value="1" min="1" max="8" class="magic-input">
                             </div>
                         </div>
                         <div class="form-row">
                             <div class="form-group">
-                                <label>Gradient Accumulation</label>
+                                <label for="grad-accum">Gradient Accumulation</label>
                                 <input type="number" id="grad-accum" value="16" min="1" max="128" class="magic-input">
                             </div>
                             <div class="form-group">
-                                <label>Max Length</label>
+                                <label for="max-length">Max Length</label>
                                 <input type="number" id="max-length" value="2048" min="512" max="8192" step="512" class="magic-input">
                             </div>
                             <div class="form-group" id="beta-field">
-                                <label>Beta</label>
+                                <label for="beta">Beta</label>
                                 <input type="number" id="beta" value="0.1" min="0.01" max="10" step="0.01" class="magic-input">
-                                <small style="color: #888; font-size: 0.85em;">Controls preference optimization strength</small>
+                                <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Controls preference optimization strength</small>
                             </div>
                             <div class="form-group" id="gamma-field" style="display: none;">
-                                <label>SimPO Gamma (Reward Margin)</label>
+                                <label for="gamma">SimPO Gamma (Reward Margin)</label>
                                 <input type="number" id="gamma" value="0.5" min="0" max="5" step="0.1" class="magic-input">
-                                <small style="color: #888; font-size: 0.85em;">Target margin between chosen and rejected rewards</small>
+                                <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Target margin between chosen and rejected rewards</small>
                             </div>
                             <div class="form-group" id="label-smoothing-field" style="display: none;">
-                                <label>Label Smoothing</label>
+                                <label for="label-smoothing">Label Smoothing</label>
                                 <input type="number" id="label-smoothing" value="0.0" min="0" max="0.5" step="0.01" class="magic-input">
-                                <small style="color: #888; font-size: 0.85em;">Smoothing coefficient for preference loss</small>
+                                <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Smoothing coefficient for preference loss</small>
                             </div>
                         </div>
                         <div class="form-row">
                             <div class="form-group">
-                                <label>Random Seed 🎲</label>
+                                <label for="seed">Random Seed 🎲</label>
                                 <input type="number" id="seed" value="42" min="0" max="99999" class="magic-input">
-                                <small style="color: #888; font-size: 0.85em;">For reproducibility</small>
+                                <small style="color: var(--text-muted); font-size: var(--font-size-sm);">For reproducibility</small>
                             </div>
                             <div class="form-group">
-                                <label>Max Gradient Norm ✂️</label>
+                                <label for="max-grad-norm">Max Gradient Norm ✂️</label>
                                 <input type="number" id="max-grad-norm" value="0.3" min="0.01" max="10.0" step="0.01" class="magic-input">
-                                <small style="color: #888; font-size: 0.85em;">Gradient clipping threshold</small>
+                                <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Gradient clipping threshold</small>
                             </div>
                         </div>
 
@@ -825,34 +838,34 @@
                         <div class="advanced-section" style="display: none;">
                             <div class="form-row">
                                 <div class="form-group">
-                                    <label>Max Prompt Length</label>
+                                    <label for="max-prompt-length">Max Prompt Length</label>
                                     <input type="number" id="max-prompt-length" value="1024" min="256" max="4096" step="128" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Maximum length for prompts</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Maximum length for prompts</small>
                                 </div>
                                 <div class="form-group">
-                                    <label>Warmup Ratio</label>
+                                    <label for="warmup-ratio">Warmup Ratio</label>
                                     <input type="number" id="warmup-ratio" value="0.05" min="0" max="0.5" step="0.01" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Learning rate warmup proportion</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Learning rate warmup proportion</small>
                                 </div>
                                 <div class="form-group">
-                                    <label>Eval Steps Ratio</label>
+                                    <label for="eval-steps">Eval Steps Ratio</label>
                                     <input type="number" id="eval-steps" value="0.2" min="0.1" max="1" step="0.05" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">How often to evaluate (0-1)</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">How often to evaluate (0-1)</small>
                                 </div>
                                 <div class="form-group">
-                                    <label>Save Steps</label>
+                                    <label for="save-steps">Save Steps</label>
                                     <input type="number" id="save-steps" value="" min="0" step="0.05" placeholder="follows eval steps" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Checkpoint cadence. Blank = follow eval steps; 0 = final model only (use on unified-memory boards); &lt;1 = ratio; &ge;1 = steps</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Checkpoint cadence. Blank = follow eval steps; 0 = final model only (use on unified-memory boards); &lt;1 = ratio; &ge;1 = steps</small>
                                 </div>
                             </div>
                             <div class="form-row">
                                 <div class="form-group">
-                                    <label>Weight Decay</label>
+                                    <label for="weight-decay">Weight Decay</label>
                                     <input type="number" id="weight-decay" value="0.01" min="0" max="0.5" step="0.001" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">L2 regularization strength</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">L2 regularization strength</small>
                                 </div>
                                 <div class="form-group">
-                                    <label>LR Scheduler Type</label>
+                                    <label for="lr-scheduler-type">LR Scheduler Type</label>
                                     <select id="lr-scheduler-type" class="magic-select">
                                         <option value="cosine" selected>Cosine</option>
                                         <option value="linear">Linear</option>
@@ -861,12 +874,12 @@
                                         <option value="constant">Constant</option>
                                         <option value="constant_with_warmup">Constant with Warmup</option>
                                     </select>
-                                    <small style="color: #888; font-size: 0.85em;">Learning rate schedule</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Learning rate schedule</small>
                                 </div>
                                 <div class="form-group">
-                                    <label>Logging Steps</label>
+                                    <label for="logging-steps">Logging Steps</label>
                                     <input type="number" id="logging-steps" value="1" min="1" max="100" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Log metrics every N steps</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Log metrics every N steps</small>
                                 </div>
                             </div>
                             <div class="form-row">
@@ -875,24 +888,24 @@
                                         <input type="checkbox" id="shuffle-dataset" checked>
                                         <span>Shuffle Dataset 🔀</span>
                                     </label>
-                                    <small style="color: #888; font-size: 0.85em; display: block; margin-top: 5px;">Randomize training data order</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-top: 5px;">Randomize training data order</small>
                                 </div>
                                 <div class="form-group" style="flex: 1;">
                                     <label class="magic-checkbox">
                                         <input type="checkbox" id="gradient-checkpointing">
                                         <span>Gradient Checkpointing 💾</span>
                                     </label>
-                                    <small style="color: #888; font-size: 0.85em; display: block; margin-top: 5px;">Save VRAM (slower training)</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-top: 5px;">Save VRAM (slower training)</small>
                                 </div>
                             </div>
                         </div>
                     </div>
 
                     <!-- Optimizer Configuration -->
-                    <div class="spell-section">
-                        <h3>🔧 Optimizer Configuration</h3>
+                    <details class="spell-section settings-disclosure">
+                        <summary><span><strong>Optimizer configuration</strong><span class="disclosure-description">Algorithm, weight decay, and optimizer parameters</span></span><span class="details-chevron" aria-hidden="true">⌄</span></summary>
                         <div class="form-group">
-                            <label>Optimizer Type</label>
+                            <label for="optimizer-type">Optimizer Type</label>
                             <select id="optimizer-type" class="magic-select">
                                 <option value="paged_adamw_8bit" selected>Paged AdamW 8-bit (Recommended - Memory Efficient)</option>
                                 <option value="paged_adamw_32bit">Paged AdamW 32-bit (More Precise, More Memory)</option>
@@ -903,7 +916,7 @@
                                 <option value="sgd">SGD (Stochastic Gradient Descent)</option>
                                 <option value="muon">Muon (Momentum Orthogonalized by Newton-Schulz)</option>
                             </select>
-                            <small style="color: #888; font-size: 0.85em;">
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm);">
                                 Paged optimizers swap memory to CPU when GPU is full. 8-bit uses less memory but may be slightly less precise. Muon applies orthogonalized updates to weight matrices — great for LoRA.
                             </small>
                         </div>
@@ -912,19 +925,19 @@
                         <div id="adam-settings" class="advanced-section" style="display: none;">
                             <div class="form-row">
                                 <div class="form-group">
-                                    <label>Adam Beta1</label>
+                                    <label for="adam-beta1">Adam Beta1</label>
                                     <input type="number" id="adam-beta1" value="0.9" min="0.8" max="0.99" step="0.01" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">First moment decay (momentum)</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">First moment decay (momentum)</small>
                                 </div>
                                 <div class="form-group">
-                                    <label>Adam Beta2</label>
+                                    <label for="adam-beta2">Adam Beta2</label>
                                     <input type="number" id="adam-beta2" value="0.999" min="0.9" max="0.9999" step="0.001" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Second moment decay (variance)</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Second moment decay (variance)</small>
                                 </div>
                                 <div class="form-group">
-                                    <label>Adam Epsilon</label>
+                                    <label for="adam-epsilon">Adam Epsilon</label>
                                     <input type="number" id="adam-epsilon" value="0.00000001" min="0.000000001" max="0.000001" step="0.000000001" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Numerical stability (1e-8)</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Numerical stability (1e-8)</small>
                                 </div>
                             </div>
                         </div>
@@ -936,51 +949,51 @@
                                     <label>
                                         <input type="checkbox" id="adafactor-relative-step"> Relative Step
                                     </label>
-                                    <small style="color: #888; font-size: 0.85em;">Use time-dependent LR instead of explicit learning rate</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Use time-dependent LR instead of explicit learning rate</small>
                                 </div>
                                 <div class="form-group">
                                     <label>
                                         <input type="checkbox" id="adafactor-scale-parameter"> Scale Parameter
                                     </label>
-                                    <small style="color: #888; font-size: 0.85em;">Scale LR by root-mean-square of parameter tensor</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Scale LR by root-mean-square of parameter tensor</small>
                                 </div>
                                 <div class="form-group">
                                     <label>
                                         <input type="checkbox" id="adafactor-warmup-init"> Warmup Init
                                     </label>
-                                    <small style="color: #888; font-size: 0.85em;">Time-dependent warmup (requires Relative Step)</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Time-dependent warmup (requires Relative Step)</small>
                                 </div>
                             </div>
                             <div class="form-row">
                                 <div class="form-group">
-                                    <label>Decay Rate</label>
+                                    <label for="adafactor-decay-rate">Decay Rate</label>
                                     <input type="number" id="adafactor-decay-rate" value="-0.8" min="-1.0" max="0" step="0.05" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Running average decay for squared gradients</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Running average decay for squared gradients</small>
                                 </div>
                                 <div class="form-group">
-                                    <label>Beta1 (Momentum)</label>
+                                    <label for="adafactor-beta1">Beta1 (Momentum)</label>
                                     <input type="number" id="adafactor-beta1" value="" placeholder="None (disabled)" min="0" max="1" step="0.05" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Leave empty to disable momentum</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Leave empty to disable momentum</small>
                                 </div>
                                 <div class="form-group">
-                                    <label>Clip Threshold</label>
+                                    <label for="adafactor-clip-threshold">Clip Threshold</label>
                                     <input type="number" id="adafactor-clip-threshold" value="1.0" min="0.1" max="10" step="0.1" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Root-mean-square gradient clipping</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Root-mean-square gradient clipping</small>
                                 </div>
                             </div>
                         </div>
-                    </div>
+                    </details>
 
                     <!-- Grimoire Kernel Optimizations -->
-                    <div class="spell-section">
-                        <h3>🦁 Grimoire Optimizations</h3>
+                    <details class="spell-section settings-disclosure">
+                        <summary><span><strong>Performance optimizations</strong><span class="disclosure-description">Memory efficiency, compilation, and kernel options</span></span><span class="details-chevron" aria-hidden="true">⌄</span></summary>
                         <div class="form-row">
                             <div class="form-group" style="flex: 1;">
                                 <label class="magic-checkbox">
                                     <input type="checkbox" id="use-liger">
                                     <span>Liger Kernel 🦁</span>
                                 </label>
-                                <small style="color: #888; font-size: 0.85em; display: block; margin-top: 5px;">
+                                <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-top: 5px;">
                                     Patch model with fused Triton kernels (RMSNorm, RoPE, SwiGLU). Faster training, lower VRAM.
                                 </small>
                             </div>
@@ -989,62 +1002,62 @@
                                     <input type="checkbox" id="torch-compile">
                                     <span>torch.compile ⚙️</span>
                                 </label>
-                                <small style="color: #888; font-size: 0.85em; display: block; margin-top: 5px;">
+                                <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-top: 5px;">
                                     Wrap model with torch.compile for fused kernels (PyTorch 2.x). May add startup overhead.
                                 </small>
                             </div>
                         </div>
                         <div class="form-row">
                             <div class="form-group" style="flex: 1;">
-                                <label>NEFTune Alpha</label>
+                                <label for="neftune-alpha">NEFTune Alpha</label>
                                 <input type="number" id="neftune-alpha" value="" placeholder="None (disabled)" min="0" max="20" step="0.5" class="magic-input">
-                                <small style="color: #888; font-size: 0.85em;">Embedding noise scale for regularization (try 5.0). Leave empty to disable.</small>
+                                <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Embedding noise scale for regularization (try 5.0). Leave empty to disable.</small>
                             </div>
                             <div class="form-group" style="flex: 1;">
                                 <label class="magic-checkbox">
                                     <input type="checkbox" id="eval-on-start">
                                     <span>Evaluate on Start 📏</span>
                                 </label>
-                                <small style="color: #888; font-size: 0.85em; display: block; margin-top: 5px;">
+                                <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-top: 5px;">
                                     Run a baseline eval before training begins.
                                 </small>
                             </div>
                         </div>
-                        <div style="margin-top: 10px; padding: 10px; background: #fef3c7; border-radius: 5px; border-left: 3px solid #f59e0b;">
-                            <div style="font-size: 0.85em; color: #92400e;">
+                        <div style="margin-top: 10px; padding: 10px; background: var(--warning-light); border-radius: 5px; border-left: 3px solid var(--warning);">
+                            <div style="font-size: var(--font-size-sm); color: var(--warning-dark);">
                                 <strong>💡 Liger Kernel:</strong> Best on Llama, Mistral, Qwen, Gemma, and Phi family models. Requires <code>pip install liger-kernel</code>.
                             </div>
                         </div>
-                    </div>
+                    </details>
 
                     <!-- Attention Configuration -->
-                    <div class="spell-section">
-                        <h3>⚡ Attention Implementation</h3>
+                    <details class="spell-section settings-disclosure">
+                        <summary><span><strong>Attention implementation</strong><span class="disclosure-description">Choose the attention backend for your hardware</span></span><span class="details-chevron" aria-hidden="true">⌄</span></summary>
                         <div class="form-group">
-                            <label>Attention Type</label>
+                            <label for="attn-implementation">Attention Type</label>
                             <select id="attn-implementation" class="magic-select">
                                 <option value="auto" selected>Auto (Recommended - Smart Selection)</option>
                                 <option value="flash_attention_2">Flash Attention 2 (Fastest - Requires Ampere+ GPU)</option>
                                 <option value="sdpa">SDPA (PyTorch Scaled Dot Product)</option>
                                 <option value="eager">Eager (Standard - Most Compatible)</option>
                             </select>
-                            <small style="color: #888; font-size: 0.85em;">
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm);">
                                 <strong>Auto mode:</strong> Uses Flash Attention 2 on Ampere+ GPUs (RTX 30/40 series, A100, H100), falls back to SDPA or Eager for older GPUs.
                             </small>
                         </div>
-                        <div style="margin-top: 10px; padding: 10px; background: #e3f2fd; border-radius: 5px; border-left: 3px solid #2196f3;">
-                            <div style="font-size: 0.85em; color: #1565c0;">
+                        <div style="margin-top: 10px; padding: 10px; background: var(--info-light); border-radius: 5px; border-left: 3px solid #2196f3;">
+                            <div style="font-size: var(--font-size-sm); color: var(--info-dark);">
                                 <strong>💡 Performance Guide:</strong><br>
                                 • <strong>Flash Attention 2:</strong> Up to 2-3x faster, lowest memory usage<br>
                                 • <strong>SDPA:</strong> Good balance, works on most modern GPUs<br>
                                 • <strong>Eager:</strong> Slower but most compatible, use for debugging
                             </div>
                         </div>
-                    </div>
+                    </details>
 
                     <!-- Options -->
                     <div class="spell-section">
-                        <h3>🌟 Magical Options</h3>
+                        <h3>Output & integrations</h3>
                         <div class="checkbox-group">
                             <label class="magic-checkbox">
                                 <input type="checkbox" id="use-4bit" checked>
@@ -1061,14 +1074,14 @@
 
                         <!-- HuggingFace Hub Configuration (shown when Push to Hub is enabled) -->
                         <div id="hf-hub-config" style="margin-top: 15px; display: none;">
-                            <div style="padding: 15px; background: #fff7ed; border-radius: 10px; border-left: 3px solid #f97316;">
-                                <h4 style="margin-top: 0; color: #f97316; font-size: 0.95em;">🤗 HuggingFace Hub Configuration</h4>
+                            <div style="padding: 15px; background: var(--warning-light); border-radius: 10px; border-left: 3px solid var(--warning);">
+                                <h4 style="margin-top: 0; color: var(--warning); font-size: 0.95em;">HuggingFace Hub Configuration</h4>
 
                                 <!-- HF Token -->
                                 <div class="form-group">
-                                    <label>HuggingFace Token</label>
+                                    <label for="hf-token">HuggingFace Token</label>
                                     <input type="password" id="hf-token" placeholder="Your HuggingFace token" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Required to push models. Get your token from <a href="https://huggingface.co/settings/tokens" target="_blank" style="color: #f97316;">huggingface.co/settings/tokens</a></small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Required to push models. Get your token from <a href="https://huggingface.co/settings/tokens" target="_blank" style="color: var(--warning);">huggingface.co/settings/tokens</a></small>
                                 </div>
 
                                 <!-- Namespace (account or organization) -->
@@ -1078,9 +1091,9 @@
                                         <select id="hf-namespace" class="magic-input" style="flex: 1;">
                                             <option value="">Personal account (default)</option>
                                         </select>
-                                        <button type="button" id="refresh-hf-namespaces" class="action-button" style="white-space: nowrap; padding: 8px 14px;">🔄 Check Orgs</button>
+                                        <button type="button" id="refresh-hf-namespaces" class="action-button" style="white-space: nowrap;">🔄 Check Orgs</button>
                                     </div>
-                                    <small id="hf-namespace-hint" style="color: #888; font-size: 0.85em;">Click "Check Orgs" to list the organizations your token can publish to.</small>
+                                    <small id="hf-namespace-hint" style="color: var(--text-muted); font-size: var(--font-size-sm);">Click "Check Orgs" to list the organizations your token can publish to.</small>
                                 </div>
 
                                 <!-- Privacy Toggle -->
@@ -1088,7 +1101,7 @@
                                     <input type="checkbox" id="hf-hub-private" checked>
                                     <span>🔒 Make Repository Private</span>
                                 </label>
-                                <small style="color: #888; font-size: 0.85em; display: block; margin-left: 30px; margin-top: 5px;">
+                                <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-left: 30px; margin-top: 5px;">
                                     Private repositories are only visible to you. Uncheck to make your model public.
                                 </small>
 
@@ -1098,7 +1111,7 @@
                                         <input type="checkbox" id="merge-lora-before-upload" checked>
                                         <span>🔀 Merge LoRA with Base Model</span>
                                     </label>
-                                    <small style="color: #888; font-size: 0.85em; display: block; margin-left: 30px; margin-top: 5px;">
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-left: 30px; margin-top: 5px;">
                                         When checked, uploads full merged model (larger). When unchecked, uploads only LoRA adapter (much smaller, requires base model to use).
                                     </small>
                                 </div>
@@ -1108,7 +1121,7 @@
                                     <input type="checkbox" id="share-config" checked>
                                     <span>📜 Share Training Config in README</span>
                                 </label>
-                                <small style="color: #888; font-size: 0.85em; display: block; margin-left: 30px; margin-top: 5px;">
+                                <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-left: 30px; margin-top: 5px;">
                                     Embeds the (secret-stripped) training config in the model's README so others can reproduce your run with one click. Uncheck to keep your hyperparameters private.
                                 </small>
 
@@ -1117,7 +1130,7 @@
                                     <input type="checkbox" id="share-config-image">
                                     <span>🔳 Share Config as QR Image</span>
                                 </label>
-                                <small style="color: #888; font-size: 0.85em; display: block; margin-left: 30px; margin-top: 5px;">
+                                <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-left: 30px; margin-top: 5px;">
                                     Uploads a <code>merlina_config.png</code> — a scannable QR code that also carries the full (secret-stripped) config in its metadata. Others can reproduce your run by scanning it or loading it via <em>Load Config → From Image</em>, without the giant JSON block. Works with or without the README option above.
                                 </small>
                             </div>
@@ -1134,39 +1147,39 @@
 
                         <!-- W&B Configuration (shown when W&B is enabled) -->
                         <div id="wandb-config" style="margin-top: 15px; display: none;">
-                            <div style="padding: 15px; background: #f5f3ff; border-radius: 10px; border-left: 3px solid #7c3aed;">
-                                <h4 style="margin-top: 0; color: #7c3aed; font-size: 0.95em;">📊 Weights & Biases Configuration</h4>
+                            <div style="padding: 15px; background: var(--bg-secondary); border-radius: 10px; border-left: 3px solid var(--primary-purple);">
+                                <h4 style="margin-top: 0; color: var(--primary-purple); font-size: 0.95em;">Weights & Biases Configuration</h4>
 
                                 <!-- W&B API Key -->
                                 <div class="form-group">
-                                    <label>W&B API Key</label>
+                                    <label for="wandb-key">W&B API Key</label>
                                     <input type="password" id="wandb-key" placeholder="Your Weights & Biases API key" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Get your API key from <a href="https://wandb.ai/authorize" target="_blank" style="color: #7c3aed;">wandb.ai/authorize</a></small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Get your API key from <a href="https://wandb.ai/authorize" target="_blank" style="color: var(--primary-purple);">wandb.ai/authorize</a></small>
                                 </div>
 
                                 <div class="form-row">
                                     <div class="form-group">
-                                        <label>Project Name</label>
+                                        <label for="wandb-project">Project Name</label>
                                         <input type="text" id="wandb-project" placeholder="merlina-training (default)" class="magic-input">
-                                        <small style="color: #888; font-size: 0.85em;">W&B project to organize runs</small>
+                                        <small style="color: var(--text-muted); font-size: var(--font-size-sm);">W&B project to organize runs</small>
                                     </div>
                                     <div class="form-group">
-                                        <label>Run Name (Optional)</label>
+                                        <label for="wandb-run-name">Run Name (Optional)</label>
                                         <input type="text" id="wandb-run-name" placeholder="Auto-generated from settings" class="magic-input">
-                                        <small style="color: #888; font-size: 0.85em;">Leave empty for auto-naming</small>
+                                        <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Leave empty for auto-naming</small>
                                     </div>
                                 </div>
                                 <div class="form-group">
-                                    <label>Tags (comma-separated)</label>
+                                    <label for="wandb-tags">Tags (comma-separated)</label>
                                     <input type="text" id="wandb-tags" placeholder="e.g., experiment, llama3, production" class="magic-input">
-                                    <small style="color: #888; font-size: 0.85em;">Organize runs with tags</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Organize runs with tags</small>
                                 </div>
                                 <div class="form-group">
-                                    <label>Notes</label>
+                                    <label for="wandb-notes">Notes</label>
                                     <textarea id="wandb-notes" class="magic-input" rows="2" placeholder="Optional notes about this training run..."></textarea>
-                                    <small style="color: #888; font-size: 0.85em;">Describe the purpose of this run</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Describe the purpose of this run</small>
                                 </div>
-                                <div style="margin-top: 10px; padding: 10px; background: white; border-radius: 5px; font-size: 0.85em; color: #555;">
+                                <div style="margin-top: 10px; padding: 10px; background: white; border-radius: 5px; font-size: var(--font-size-sm); color: var(--text-secondary);">
                                     <strong>💡 Auto-naming format:</strong> <code>[model]-[lr]-[batch]-[epochs]ep-[optimizer]-[attention]</code><br>
                                     <strong>Example:</strong> <code>llama3-8b-5e-6LR-256B-2ep-adamw8bit-flash2-4bit</code>
                                 </div>
@@ -1181,7 +1194,7 @@
 
                     <button type="submit" class="cast-button">
                         <span class="button-icon">🪄</span>
-                        Cast Training Spell
+                        Start training
                     </button>
                 </form>
             </section>
@@ -1189,8 +1202,8 @@
             <!-- Active Jobs -->
             <section id="jobs-section" class="card nav-section" style="display: none;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                    <h2 style="margin: 0;">🔮 Active Spells</h2>
-                    <button id="clear-all-jobs-btn" class="action-button" style="background: #dc2626; color: white; padding: 8px 16px; font-size: 0.9em; max-width: 150px;">
+                    <div class="page-heading"><p class="eyebrow">EXPLORE / JOBS</p><h2 tabindex="-1">Magic in the making</h2><p class="page-description">Your training runs, from first step to finished model.</p></div>
+                    <button id="clear-all-jobs-btn" class="action-button danger" style="max-width: 150px;">
                         🗑️ Clear All Jobs
                     </button>
                 </div>
@@ -1199,20 +1212,20 @@
 
             <!-- Inference (STEP 5) — unified for text LLM + diffusion -->
             <section id="inference-section" class="card nav-section" style="display: none;">
-                <h2>🔮 Step 5: Test Your Model</h2>
+                <div class="page-heading"><p class="eyebrow">EXPLORE / PLAYGROUND</p><h2 tabindex="-1">Meet your creation</h2><p class="page-description">Start a conversation or conjure an image. See what your model has learned.</p></div>
 
                 <!-- Mode selector — toggles between the chat UI (LLM) and the
                      conjure UI (diffusion). Both use the same nav entry; they're
                      the same intent ("test what you trained") for different
                      model families. -->
-                <div class="spell-section" style="background: linear-gradient(135deg, #f3e8ff 0%, #fce4f0 100%);">
+                <div class="spell-section" style="background: var(--bg-secondary);">
                     <div class="form-group" style="margin: 0;">
-                        <label>🎭 Model kind</label>
+                        <label for="inference-mode">Model kind</label>
                         <select id="inference-mode" class="magic-select">
                             <option value="text" selected>Text LLM (chat)</option>
                             <option value="diffusion">Diffusion / Image LoRA</option>
                         </select>
-                        <small style="color: #888; font-size: 0.85em;">Pick chat for any text model, or diffusion to render images from a trained image LoRA.</small>
+                        <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Pick chat for any text model, or diffusion to render images from a trained image LoRA.</small>
                     </div>
                 </div>
 
@@ -1221,10 +1234,10 @@
 
                 <!-- Model Loading -->
                 <div class="spell-section">
-                    <h3>🤖 Load a Model</h3>
+                    <h3>Load a Model</h3>
 
                     <div class="form-group">
-                        <label>Model Source</label>
+                        <label for="inference-source">Model Source</label>
                         <select id="inference-source" class="magic-select">
                             <option value="trained">Trained Model (from models/ directory)</option>
                             <option value="huggingface">HuggingFace Model</option>
@@ -1234,22 +1247,22 @@
 
                     <!-- Trained model dropdown -->
                     <div id="inference-trained-group" class="form-group">
-                        <label>Trained Model</label>
+                        <label for="inference-trained-model">Trained Model</label>
                         <select id="inference-trained-model" class="magic-select">
                             <option value="">Loading models...</option>
                         </select>
-                        <small style="color: #888; font-size: 0.85em;" id="inference-trained-info"></small>
+                        <small style="color: var(--text-muted); font-size: var(--font-size-sm);" id="inference-trained-info"></small>
                     </div>
 
                     <!-- HuggingFace / Local path input -->
                     <div id="inference-manual-group" class="form-group" style="display: none;">
-                        <label>Model Name or Path</label>
+                        <label for="inference-model-name">Model Name or Path</label>
                         <input type="text" id="inference-model-name" class="magic-input" placeholder="meta-llama/Meta-Llama-3-8B-Instruct">
-                        <small style="color: #888; font-size: 0.85em;">HuggingFace model ID or absolute path to local model directory</small>
+                        <small style="color: var(--text-muted); font-size: var(--font-size-sm);">HuggingFace model ID or absolute path to local model directory</small>
                     </div>
 
                     <div id="inference-hf-token-group" class="form-group" style="display: none;">
-                        <label>HuggingFace Token (for gated models)</label>
+                        <label for="inference-hf-token">HuggingFace Token (for gated models)</label>
                         <input type="password" id="inference-hf-token" class="magic-input" placeholder="Optional — for gated models like Llama">
                     </div>
 
@@ -1259,10 +1272,10 @@
                     </div>
 
                     <div style="display: flex; gap: 10px;">
-                        <button type="button" id="inference-load-btn" class="action-button" style="flex: 1; background: var(--primary-purple); color: white; font-weight: bold; padding: 15px;">
+                        <button type="button" id="inference-load-btn" class="action-button primary-button" style="flex: 1;">
                             🧙 Load Model
                         </button>
-                        <button type="button" id="inference-unload-btn" class="action-button" style="flex: 0 0 auto; background: #dc2626; color: white; padding: 15px; display: none;">
+                        <button type="button" id="inference-unload-btn" class="action-button danger" style="flex: 0 0 auto;    display: none;">
                             🗑️ Unload
                         </button>
                     </div>
@@ -1272,26 +1285,26 @@
 
                 <!-- Generation Settings -->
                 <div class="spell-section" id="inference-settings" style="display: none;">
-                    <h3>⚙️ Generation Settings</h3>
+                    <h3>Generation Settings</h3>
                     <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 15px;">
                         <div class="form-group">
-                            <label>Max New Tokens</label>
+                            <label for="inference-max-tokens">Max New Tokens</label>
                             <input type="number" id="inference-max-tokens" class="magic-input" value="512" min="1" max="4096">
                         </div>
                         <div class="form-group">
-                            <label>Temperature</label>
+                            <label for="inference-temperature">Temperature</label>
                             <input type="number" id="inference-temperature" class="magic-input" value="0.7" min="0" max="2" step="0.05">
                         </div>
                         <div class="form-group">
-                            <label>Top P</label>
+                            <label for="inference-top-p">Top P</label>
                             <input type="number" id="inference-top-p" class="magic-input" value="0.9" min="0" max="1" step="0.05">
                         </div>
                         <div class="form-group">
-                            <label>Top K</label>
+                            <label for="inference-top-k">Top K</label>
                             <input type="number" id="inference-top-k" class="magic-input" value="50" min="0" max="200">
                         </div>
                         <div class="form-group">
-                            <label>Repetition Penalty</label>
+                            <label for="inference-rep-penalty">Repetition Penalty</label>
                             <input type="number" id="inference-rep-penalty" class="magic-input" value="1.1" min="1.0" max="2.0" step="0.05">
                         </div>
                         <div class="form-group" style="display: flex; align-items: flex-end;">
@@ -1303,24 +1316,24 @@
                     </div>
 
                     <div class="form-group">
-                        <label>System Prompt (optional)</label>
+                        <label for="inference-system-prompt">System Prompt (optional)</label>
                         <textarea id="inference-system-prompt" class="magic-input" rows="2" placeholder="You are a helpful assistant."></textarea>
                     </div>
                 </div>
 
                 <!-- Chat Interface -->
                 <div class="spell-section" id="inference-chat-section" style="display: none;">
-                    <h3>💬 Chat</h3>
+                    <h3>Chat</h3>
 
                     <div id="inference-chat-messages" class="inference-chat-messages"></div>
 
                     <div style="display: flex; gap: 10px; margin-top: 10px;">
                         <textarea id="inference-chat-input" class="magic-input" rows="2" placeholder="Type your message..." style="flex: 1; resize: vertical;"></textarea>
                         <div style="display: flex; flex-direction: column; gap: 5px;">
-                            <button type="button" id="inference-send-btn" class="action-button" style="background: var(--primary-purple); color: white; padding: 10px 20px;">
+                            <button type="button" id="inference-send-btn" class="action-button primary-button">
                                 Send
                             </button>
-                            <button type="button" id="inference-clear-btn" class="action-button" style="background: #888; color: white; padding: 10px 20px; font-size: 0.85em;">
+                            <button type="button" id="inference-clear-btn" class="action-button">
                                 Clear
                             </button>
                         </div>
@@ -1328,7 +1341,7 @@
 
                     <div style="display: flex; align-items: center; gap: 10px; margin-top: 8px;">
                         <input type="checkbox" id="inference-stream" checked style="width: 16px; height: 16px;">
-                        <label for="inference-stream" style="margin: 0; cursor: pointer; font-size: 0.9em; color: #888;">Stream tokens (real-time output)</label>
+                        <label for="inference-stream" style="margin: 0; cursor: pointer; font-size: 0.9em; color: var(--text-muted);">Stream tokens (real-time output)</label>
                     </div>
                 </div>
 
@@ -1336,64 +1349,62 @@
 
                 <!-- ═══ Diffusion mode (moved from old standalone Playground section) ═══ -->
                 <div id="inference-diffusion-mode" style="display: none;">
-                    <p style="color: #888; margin-top: 0;">
+                    <p style="color: var(--text-muted); margin-top: 0;">
                         Pick a base diffusion model + one of your trained LoRAs, type a prompt, hit conjure. Runs in a fresh subprocess so it won't fight live training jobs for VRAM.
                     </p>
 
                     <div class="spell-section">
-                        <h3>🪄 Conjure</h3>
+                        <h3>Conjure</h3>
 
                         <div class="form-group">
-                            <label>🖼️ Base Diffusion Model</label>
+                            <label for="dplay-base-model">Base Diffusion Model</label>
                             <input type="text" id="dplay-base-model" value="Qwen/Qwen-Image" class="magic-input">
-                            <small style="color: #888; font-size: 0.85em;">HF repo id or local path. Defaults to Qwen-Image.</small>
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm);">HF repo id or local path. Defaults to Qwen-Image.</small>
                         </div>
 
                         <div class="form-group">
-                            <label>🎨 Adapter Family</label>
+                            <label for="dplay-adapter">Adapter Family</label>
                             <select id="dplay-adapter" class="magic-select">
                                 <option value="qwen_image" selected>Qwen-Image (text-to-image)</option>
                                 <option value="qwen_edit">Qwen-Image-Edit</option>
                                 <option value="sdxl">SDXL</option>
                             </select>
-                            <small style="color: #888; font-size: 0.85em;">Match the family the LoRA was trained against.</small>
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Match the family the LoRA was trained against.</small>
                         </div>
 
                         <div class="form-group">
-                            <label>📁 Trained LoRA</label>
+                            <label for="dplay-lora">Trained LoRA</label>
                             <select id="dplay-lora" class="magic-select">
                                 <option value="">Loading…</option>
                             </select>
-                            <small style="color: #888; font-size: 0.85em;">Picked from <code>./models/</code>. Refresh after training new ones.</small>
-                            <button type="button" id="dplay-refresh-loras" style="margin-top: 6px; background: transparent; color: var(--primary-purple); border: 1px solid var(--primary-purple); border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: 0.85em;">
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Picked from <code>./models/</code>. Refresh after training new ones.</small>
+                            <button type="button" id="dplay-refresh-loras" style="margin-top: 6px; background: transparent; color: var(--primary-purple); border: 1px solid var(--primary-purple); border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: var(--font-size-sm);">
                                 🔄 Refresh list
                             </button>
                         </div>
 
                         <div class="form-group">
-                            <label>💬 Prompt</label>
+                            <label for="dplay-prompt">Prompt</label>
                             <textarea id="dplay-prompt" rows="3" class="magic-input" placeholder="a portrait of a young person with auburn hair, soft lighting"></textarea>
                         </div>
 
                         <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px;">
                             <div class="form-group">
-                                <label>Width</label>
+                                <label for="dplay-width">Width</label>
                                 <input type="number" id="dplay-width" value="1024" min="256" max="2048" step="64" class="magic-input">
                             </div>
                             <div class="form-group">
-                                <label>Height</label>
+                                <label for="dplay-height">Height</label>
                                 <input type="number" id="dplay-height" value="1024" min="256" max="2048" step="64" class="magic-input">
                             </div>
                             <div class="form-group">
-                                <label>Steps</label>
+                                <label for="dplay-steps">Steps</label>
                                 <input type="number" id="dplay-steps" value="25" min="4" max="100" class="magic-input">
                             </div>
                         </div>
 
-                        <button type="button" id="dplay-conjure" class="action-button" style="
-                            width: 100%; background: linear-gradient(135deg, #7c4dff 0%, #ff4dc4 100%);
-                            color: white; font-weight: bold; padding: 14px; margin-top: 8px;
-                        ">
+                        <button type="button" id="dplay-conjure" class="action-button primary-button" style="width: 100%;
+                               margin-top: 8px;">
                             ✨ Conjure Image
                         </button>
 
@@ -1405,7 +1416,7 @@
                                 width: 100%; max-width: 768px; border-radius: 12px;
                                 box-shadow: 0 4px 16px rgba(0,0,0,0.15);
                             ">
-                            <div id="dplay-result-prompt" style="margin-top: 8px; color: #666; font-size: 0.9em;"></div>
+                            <div id="dplay-result-prompt" style="margin-top: 8px; color: var(--text-muted); font-size: 0.9em;"></div>
                         </div>
                     </div>
                 </div><!-- /#inference-diffusion-mode -->
@@ -1415,8 +1426,8 @@
             <!-- Export Section                                               -->
             <!-- ═══════════════════════════════════════════════════════════ -->
             <section id="export-section" class="card nav-section" style="display: none;">
-                <h2>📦 Export & Publish</h2>
-                <p style="color: #888; margin-top: -10px;">
+                <div class="page-heading"><p class="eyebrow">EXPLORE / EXPORT</p><h2 tabindex="-1">Ready for the world</h2><p class="page-description">Package your model, publish to the Hub, and keep your artifacts together.</p></div>
+                <p style="color: var(--text-muted); margin-top: -10px;">
                     Quantize trained models to GGUF, publish to HuggingFace Hub, and manage artifacts — all against any model under <code>./models/</code>.
                 </p>
 
@@ -1425,11 +1436,11 @@
                     <select id="export-model-select" class="magic-input">
                         <option value="">Loading models…</option>
                     </select>
-                    <small id="export-model-info" style="color: #888; font-size: 0.85em; display: block; margin-top: 5px;"></small>
+                    <small id="export-model-info" style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-top: 5px;"></small>
                 </div>
 
                 <!-- Tab switcher -->
-                <div id="export-tabs" class="export-tabs" role="tablist" style="display: flex; gap: 8px; margin: 20px 0 15px 0; border-bottom: 2px solid #e5e7eb;">
+                <div id="export-tabs" class="export-tabs" role="tablist" style="display: flex; gap: 8px; margin: 20px 0 15px 0; border-bottom: 2px solid var(--border-color);">
                     <button type="button" class="export-tab-btn active" data-tab="gguf" role="tab" aria-selected="true">
                         🪄 GGUF Export
                     </button>
@@ -1443,9 +1454,9 @@
 
                 <!-- GGUF panel -->
                 <div id="export-panel-gguf" class="export-panel" role="tabpanel">
-                    <div style="padding: 15px; background: #f5f3ff; border-radius: 10px; border-left: 3px solid #8b5cf6;">
-                        <h4 style="margin-top: 0; color: #8b5cf6;">🔮 GGUF Quantization</h4>
-                        <small style="color: #888; font-size: 0.85em; display: block; margin-bottom: 12px;">
+                    <div style="padding: 15px; background: var(--bg-secondary); border-radius: 10px; border-left: 3px solid var(--primary-purple);">
+                        <h4 style="margin-top: 0; color: var(--primary-purple);">GGUF Quantization</h4>
+                        <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-bottom: 12px;">
                             Merlina will merge the LoRA (if any) and brew one GGUF per selected quant. Larger quants keep more quality; smaller quants run on weaker hardware.
                         </small>
 
@@ -1472,7 +1483,7 @@
                         </label>
 
                         <div style="margin-top: 15px;">
-                            <button type="button" id="export-gguf-start" class="action-button" style="background: var(--primary-purple); color: white;">
+                            <button type="button" id="export-gguf-start" class="action-button primary-button">
                                 ✨ Start GGUF Export
                             </button>
                             <span id="export-gguf-status" style="margin-left: 12px; font-size: 0.9em;"></span>
@@ -1486,8 +1497,8 @@
 
                 <!-- HuggingFace Hub panel -->
                 <div id="export-panel-hub" class="export-panel" role="tabpanel" style="display: none;">
-                    <div style="padding: 15px; background: #fff7ed; border-radius: 10px; border-left: 3px solid #f97316;">
-                        <h4 style="margin-top: 0; color: #f97316;">🤗 HuggingFace Hub Upload</h4>
+                    <div style="padding: 15px; background: var(--warning-light); border-radius: 10px; border-left: 3px solid var(--warning);">
+                        <h4 style="margin-top: 0; color: var(--warning);">HuggingFace Hub Upload</h4>
 
                         <div id="export-hub-status-banner" style="margin-bottom: 12px; display: none;"></div>
 
@@ -1497,15 +1508,15 @@
                                 <select id="export-hub-namespace" class="magic-input" style="flex: 1;">
                                     <option value="">Personal account (default)</option>
                                 </select>
-                                <button type="button" id="export-hub-refresh-namespaces" class="action-button" style="white-space: nowrap; padding: 8px 14px;">🔄 Check Orgs</button>
+                                <button type="button" id="export-hub-refresh-namespaces" class="action-button" style="white-space: nowrap;">🔄 Check Orgs</button>
                             </div>
-                            <small id="export-hub-namespace-hint" style="color: #888; font-size: 0.85em;">Click "Check Orgs" to list the organizations your token can publish to.</small>
+                            <small id="export-hub-namespace-hint" style="color: var(--text-muted); font-size: var(--font-size-sm);">Click "Check Orgs" to list the organizations your token can publish to.</small>
                         </div>
 
                         <div class="form-group">
                             <label for="export-hub-repo-id">Repository ID</label>
                             <input type="text" id="export-hub-repo-id" class="magic-input" placeholder="model-name">
-                            <small style="color: #888; font-size: 0.85em;">Defaults to the model folder name. Picking an organization above publishes it as <code>org/model-name</code>; an explicit <code>org/name</code> here wins.</small>
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Defaults to the model folder name. Picking an organization above publishes it as <code>org/model-name</code>; an explicit <code>org/name</code> here wins.</small>
                         </div>
 
                         <label class="magic-checkbox" style="margin-top: 6px;">
@@ -1529,7 +1540,7 @@
                         </div>
 
                         <details style="margin-top: 10px;">
-                            <summary style="cursor: pointer; color: #f97316; font-size: 0.9em;">Advanced metadata</summary>
+                            <summary style="cursor: pointer; color: var(--warning); font-size: 0.9em;">Advanced metadata</summary>
                             <div class="form-group" style="margin-top: 10px;">
                                 <label for="export-hub-license">License (SPDX)</label>
                                 <input type="text" id="export-hub-license" class="magic-input" placeholder="apache-2.0">
@@ -1549,7 +1560,7 @@
                         </details>
 
                         <div style="margin-top: 15px;">
-                            <button type="button" id="export-hub-start" class="action-button" style="background: #f97316; color: white;">
+                            <button type="button" id="export-hub-start" class="action-button primary-button">
                                 📤 Upload to Hub
                             </button>
                             <span id="export-hub-status" style="margin-left: 12px; font-size: 0.9em;"></span>
@@ -1561,13 +1572,13 @@
 
                 <!-- Artifacts panel -->
                 <div id="export-panel-artifacts" class="export-panel" role="tabpanel" style="display: none;">
-                    <div style="padding: 15px; background: #f0f9ff; border-radius: 10px; border-left: 3px solid #0ea5e9;">
-                        <h4 style="margin-top: 0; color: #0ea5e9;">🗂️ Artifacts</h4>
-                        <small style="color: #888; font-size: 0.85em; display: block; margin-bottom: 12px;">
+                    <div style="padding: 15px; background: var(--info-light); border-radius: 10px; border-left: 3px solid var(--info);">
+                        <h4 style="margin-top: 0; color: var(--info);">Artifacts</h4>
+                        <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-bottom: 12px;">
                             Everything Merlina saved under <code>./models/{selected}/</code>. Protected files (config, tokenizer) can't be deleted via the UI.
                         </small>
 
-                        <div id="export-artifacts-summary" style="margin-bottom: 10px; font-size: 0.9em; color: #555;"></div>
+                        <div id="export-artifacts-summary" style="margin-bottom: 10px; font-size: 0.9em; color: var(--text-secondary);"></div>
                         <div id="export-artifacts-list"></div>
                     </div>
                 </div>
@@ -1576,19 +1587,19 @@
             <!-- Cleanup & Analysis (STEP 7) — reclaim disk from old checkpoints -->
             <section id="cleanup-section" class="card nav-section" style="display: none;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                    <h2 style="margin: 0;">🧹 Step 7: Tidy the Workshop</h2>
-                    <button id="cleanup-refresh-btn" type="button" class="action-button" style="padding: 8px 16px; font-size: 0.9em; max-width: 160px;">
+                    <div class="page-heading"><p class="eyebrow">WORKSPACE / STORAGE</p><h2 tabindex="-1">Room for your next idea</h2><p class="page-description">A clear view of your checkpoints, models, and cached files.</p></div>
+                    <button id="cleanup-refresh-btn" type="button" class="action-button" style="max-width: 160px;">
                         🔄 Refresh
                     </button>
                 </div>
-                <p style="color: #666; margin-top: 0;">
+                <p style="color: var(--text-muted); margin-top: 0;">
                     Old training runs leave behind full-size checkpoints. Keep the latest of each
                     finished run and reclaim the rest — active jobs are always left untouched.
                 </p>
 
                 <!-- Disk usage overview -->
-                <div class="spell-section" style="background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);">
-                    <h3 style="margin-top: 0;">💾 Disk Usage</h3>
+                <div class="spell-section" style="background: var(--bg-secondary) 100%);">
+                    <h3 style="margin-top: 0;">Disk Usage</h3>
                     <div id="cleanup-fs-bar" class="progress-bar" style="margin-bottom: 8px;">
                         <div id="cleanup-fs-fill" class="progress-fill" style="width: 0%;"></div>
                         <span id="cleanup-fs-text" class="progress-text">—</span>
@@ -1610,7 +1621,7 @@
                 </div>
 
                 <!-- Tabs: training checkpoints vs the shared HuggingFace cache -->
-                <div id="cleanup-tabs" role="tablist" style="display: flex; gap: 8px; margin: 20px 0 4px 0; border-bottom: 2px solid #e5e7eb;">
+                <div id="cleanup-tabs" role="tablist" style="display: flex; gap: 8px; margin: 20px 0 4px 0; border-bottom: 2px solid var(--border-color);">
                     <button type="button" class="cleanup-tab-btn active" data-ctab="checkpoints" role="tab" aria-selected="true"
                             style="background: none; border: none; padding: 10px 16px; cursor: pointer; font-weight: 600; border-bottom: 3px solid transparent;">
                         ✂️ Checkpoints
@@ -1633,7 +1644,7 @@
                 <div id="cleanup-panel-checkpoints" class="cleanup-panel" role="tabpanel">
                 <!-- Cleanup controls -->
                 <div class="spell-section">
-                    <h3 style="margin-top: 0;">✂️ Prune Checkpoints</h3>
+                    <h3 style="margin-top: 0;">Prune Checkpoints</h3>
                     <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end;">
                         <div class="form-group" style="margin: 0;">
                             <label for="cleanup-keep">Keep latest per job</label>
@@ -1650,7 +1661,7 @@
                         <button id="cleanup-preview-btn" type="button" class="action-button" style="max-width: 220px;">
                             🔍 Preview (dry run)
                         </button>
-                        <button id="cleanup-apply-btn" type="button" class="action-button" style="max-width: 220px; background: #dc2626; color: white;" disabled>
+                        <button id="cleanup-apply-btn" type="button" class="action-button danger" style="max-width: 220px;" disabled>
                             🗑️ Delete previewed items
                         </button>
                     </div>
@@ -1659,16 +1670,16 @@
 
                 <!-- Per-job breakdown -->
                 <div class="spell-section">
-                    <h3 style="margin-top: 0;">📊 Per-Job Breakdown</h3>
-                    <div id="cleanup-jobs"><p style="color: #888;">Loading…</p></div>
+                    <h3 style="margin-top: 0;">Per-Job Breakdown</h3>
+                    <div id="cleanup-jobs"><p style="color: var(--text-muted);">Loading…</p></div>
                 </div>
                 </div><!-- /cleanup-panel-checkpoints -->
 
                 <!-- Panel: HuggingFace cache -->
                 <div id="cleanup-panel-hfcache" class="cleanup-panel" role="tabpanel" style="display: none;">
-                    <div class="spell-section" style="background: #fffbeb; border-left: 3px solid #f59e0b;">
+                    <div class="spell-section" style="background: var(--warning-light); border-left: 3px solid var(--warning);">
                         <strong>⚠️ This cache is shared across your whole machine.</strong>
-                        <p style="margin: 6px 0 0 0; color: #92400e; font-size: 0.9em;">
+                        <p style="margin: 6px 0 0 0; color: var(--warning-dark); font-size: 0.9em;">
                             Other tools (ComfyUI, other trainers, scripts) pull models from this same cache.
                             Everything here is re-downloadable from the Hub, but deleting a model another tool
                             still needs will force a re-download. Only remove repos you're sure are unused.
@@ -1676,7 +1687,7 @@
                     </div>
 
                     <div class="spell-section">
-                        <h3 style="margin-top: 0;">🤗 Cached Repos</h3>
+                        <h3 style="margin-top: 0;">Cached Repos</h3>
                         <div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; margin-bottom: 12px;">
                             <div class="form-group" style="margin: 0;">
                                 <label for="hf-stale-days">Stale after (days)</label>
@@ -1700,20 +1711,20 @@
                             </div>
                         </div>
                         <div style="display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;">
-                            <button id="hf-delete-btn" type="button" class="action-button" style="max-width: 240px; background: #dc2626; color: white;" disabled>
+                            <button id="hf-delete-btn" type="button" class="action-button danger" style="max-width: 240px;" disabled>
                                 🗑️ Delete selected repos
                             </button>
                         </div>
                         <div id="hf-result" style="margin-bottom: 12px;"></div>
-                        <div id="hf-cache-table"><p style="color: #888;">Click “Scan” to inspect the cache.</p></div>
+                        <div id="hf-cache-table"><p style="color: var(--text-muted);">Click “Scan” to inspect the cache.</p></div>
                     </div>
                 </div>
 
                 <!-- Panel: saved models -->
                 <div id="cleanup-panel-models" class="cleanup-panel" role="tabpanel" style="display: none;">
-                    <div class="spell-section" style="background: #fef2f2; border-left: 3px solid #dc2626;">
+                    <div class="spell-section" style="background: var(--danger-light); border-left: 3px solid var(--danger-dark);">
                         <strong>⚠️ Deleting a saved model is permanent.</strong>
-                        <p style="margin: 6px 0 0 0; color: #991b1b; font-size: 0.9em;">
+                        <p style="margin: 6px 0 0 0; color: var(--danger-dark); font-size: 0.9em;">
                             These are your trained outputs under <code>./models/</code>. Unlike the HuggingFace
                             cache, a model that was never pushed to the Hub <strong>cannot be recovered</strong>.
                             Models in use (an active job's output, or one loaded for inference) are locked 🔒.
@@ -1721,7 +1732,7 @@
                     </div>
 
                     <div class="spell-section">
-                        <h3 style="margin-top: 0;">📦 Saved Models</h3>
+                        <h3 style="margin-top: 0;">Saved Models</h3>
                         <div class="metrics-grid" style="margin-bottom: 12px;">
                             <div class="metric-card">
                                 <span class="metric-label">Models total</span>
@@ -1733,12 +1744,12 @@
                             </div>
                         </div>
                         <div style="display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;">
-                            <button id="models-delete-btn" type="button" class="action-button" style="max-width: 240px; background: #dc2626; color: white;" disabled>
+                            <button id="models-delete-btn" type="button" class="action-button danger" style="max-width: 240px;" disabled>
                                 🗑️ Delete selected models
                             </button>
                         </div>
                         <div id="models-result" style="margin-bottom: 12px;"></div>
-                        <div id="models-table"><p style="color: #888;">Loading…</p></div>
+                        <div id="models-table"><p style="color: var(--text-muted);">Loading…</p></div>
                     </div>
                 </div>
 
@@ -1746,10 +1757,10 @@
                 <div id="cleanup-panel-artifacts" class="cleanup-panel" role="tabpanel" style="display: none;">
                     <div class="spell-section">
                         <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <h3 style="margin: 0;">🧊 GGUF Exports</h3>
-                            <span style="font-size: 0.85em; color: #16a34a;">always regenerable from the model</span>
+                            <h3 style="margin: 0;">GGUF Exports</h3>
+                            <span style="font-size: var(--font-size-sm); color: var(--success);">always regenerable from the model</span>
                         </div>
-                        <p style="color: #666; font-size: 0.9em; margin: 6px 0 12px 0;">
+                        <p style="color: var(--text-muted); font-size: 0.9em; margin: 6px 0 12px 0;">
                             Quantized GGUF files produced for llama.cpp inference. Safe to delete — re-export
                             anytime from the model. One loaded for inference is locked 🔒.
                         </p>
@@ -1764,17 +1775,17 @@
                             </div>
                         </div>
                         <div style="display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;">
-                            <button id="gguf-delete-btn" type="button" class="action-button" style="max-width: 240px; background: #dc2626; color: white;" disabled>
+                            <button id="gguf-delete-btn" type="button" class="action-button danger" style="max-width: 240px;" disabled>
                                 🗑️ Delete selected GGUF
                             </button>
                         </div>
                         <div id="gguf-result" style="margin-bottom: 12px;"></div>
-                        <div id="gguf-table"><p style="color: #888;">Loading…</p></div>
+                        <div id="gguf-table"><p style="color: var(--text-muted);">Loading…</p></div>
                     </div>
 
                     <div class="spell-section">
-                        <h3 style="margin-top: 0;">📈 Weights & Biases Logs</h3>
-                        <p style="color: #666; font-size: 0.9em; margin: 6px 0 12px 0;">
+                        <h3 style="margin-top: 0;">Weights & Biases Logs</h3>
+                        <p style="color: var(--text-muted); font-size: 0.9em; margin: 6px 0 12px 0;">
                             Local mirrors of training run logs under <code>wandb/</code>. Metrics already live on
                             the W&amp;B server; the active run is kept.
                         </p>
@@ -1792,26 +1803,35 @@
                                 <span id="wandb-reclaimable" class="metric-value">—</span>
                             </div>
                         </div>
-                        <button id="wandb-clear-btn" type="button" class="action-button" style="max-width: 240px; background: #dc2626; color: white;" disabled>
+                        <button id="wandb-clear-btn" type="button" class="action-button danger" style="max-width: 240px;" disabled>
                             🗑️ Clear W&amp;B logs
                         </button>
                         <div id="wandb-result" style="margin-top: 12px;"></div>
                     </div>
                 </div>
             </section>
+
+            </div>
+            <aside class="setup-summary" id="setup-summary" aria-label="Current training setup">
+                <div class="summary-card"><div class="summary-title"><span class="panel-icon" aria-hidden="true">✧</span><h3>Your recipe</h3></div><p class="summary-description">A little of this. A little of you.</p>
+                    <dl><div><dt>BASE MODEL</dt><dd id="summary-model">Choose your model</dd></div><div><dt>DATASETS ADDED</dt><dd id="summary-datasets">1 dataset</dd></div><div><dt>TRAINING METHOD</dt><dd id="summary-method">ORPO</dd></div><div><dt>ADAPTATION</dt><dd id="summary-adaptation">LoRA fine-tuning</dd></div></dl>
+                    <div class="summary-tip"><span aria-hidden="true">✦</span><p id="summary-tip">Start with a model you love. Merlina will check that it’s ready before training.</p></div>
+                </div>
+                <div class="journey-card"><p class="eyebrow">FROM IDEA TO CREATION</p><ol><li data-journey="model-section" class="current"><span>01</span>Choose a model</li><li data-journey="dataset-section"><span>02</span>Add your dataset</li><li data-journey="config-section"><span>03</span>Make some magic</li></ol><p>Then explore, export, and share.</p></div>
+            </aside>
         </main>
 
         <!-- Job Monitoring Modal -->
         <div id="job-modal" class="modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="job-modal-title">
             <div class="modal-content">
                 <button class="close" aria-label="Close modal" type="button">&times;</button>
-                <h2 id="job-modal-title">Spell Progress</h2>
+                <h2 id="job-modal-title">Training progress</h2>
                 <div id="job-details">
                     <div class="job-header">
                         <h3 id="job-name"></h3>
                         <span id="job-id" class="job-id"></span>
                     </div>
-                    
+
                     <div class="progress-section">
                         <div class="progress-bar">
                             <div id="progress-fill" class="progress-fill"></div>
@@ -1856,17 +1876,17 @@
 
                     <!-- GPU Monitoring Section -->
                     <div id="gpu-monitor-section" style="margin-top: 20px; display: none;">
-                        <h3 style="color: var(--primary-purple); margin-bottom: 10px;">🎮 GPU Monitoring</h3>
+                        <h3 style="color: var(--primary-purple); margin-bottom: 10px;">GPU Monitoring</h3>
                         <div id="gpu-monitor-cards"></div>
-                        <button type="button" onclick="refreshJobGPUs()" class="action-button" style="width: 100%; margin-top: 10px; background: var(--secondary-pink); color: white;">
+                        <button type="button" onclick="refreshJobGPUs()" class="action-button" style="width: 100%; margin-top: 10px;">
                             🔄 Refresh GPU Stats
                         </button>
                     </div>
 
                     <!-- Diffusion Sample Gallery (populated by diffusion.js after training completes) -->
                     <div id="job-samples-gallery-section" style="margin-top: 24px; display: none;">
-                        <h3 style="color: var(--primary-purple); margin-bottom: 10px;">🎨 Sample Renders</h3>
-                        <p style="color: #666; font-size: 0.9em; margin-bottom: 12px;">
+                        <h3 style="color: var(--primary-purple); margin-bottom: 10px;">Sample Renders</h3>
+                        <p style="color: var(--text-muted); font-size: 0.9em; margin-bottom: 12px;">
                             Test images generated by your freshly-trained LoRA on a default prompt set. (Override via <code>sample_prompts</code> in the API.)
                         </p>
                         <div id="job-samples-grid" style="
@@ -1874,7 +1894,7 @@
                             grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
                             gap: 12px;
                         "></div>
-                        <p id="job-samples-empty" style="color: #888; font-size: 0.9em; margin-top: 10px; display: none;">
+                        <p id="job-samples-empty" style="color: var(--text-muted); font-size: 0.9em; margin-top: 10px; display: none;">
                             No sample images yet — they'll appear once training completes.
                         </p>
                     </div>
@@ -1886,18 +1906,18 @@
                         <button id="stop-button" class="action-button danger">
                             🛑 Stop Training
                         </button>
-                        <button id="retry-button" class="action-button" style="display: none; background: var(--primary-purple); color: white;">
+                        <button id="retry-button" class="action-button primary-button" style="display: none;">
                             🔄 Retry with Same Config
                         </button>
-                        <button id="upload-hub-button" class="action-button" style="display: none; background: var(--wizard-yellow); color: #1a1a2e;">
+                        <button id="upload-hub-button" class="action-button" style="display: none;">
                             📤 Upload to Hub
                         </button>
                     </div>
-                    <div id="upload-error-message" style="display: none; margin-top: 10px; padding: 10px 14px; background: #fff3cd; color: #856404; border: 1px solid #ffc107; border-radius: 8px; font-size: 0.9em;"></div>
+                    <div id="upload-error-message" style="display: none; margin-top: 10px; padding: 10px 14px; background: var(--warning-light); color: var(--warning-dark); border: 1px solid #ffc107; border-radius: 8px; font-size: 0.9em;"></div>
                     <div style="margin-top: 10px;">
                         <span id="gguf-progress-pill" class="status-badge" style="display: none;"></span>
                     </div>
-                    <div id="gguf-error-message" style="display: none; margin-top: 10px; padding: 10px 14px; background: #f5f3ff; color: #6d28d9; border: 1px solid #c4b5fd; border-radius: 8px; font-size: 0.9em;"></div>
+                    <div id="gguf-error-message" style="display: none; margin-top: 10px; padding: 10px 14px; background: var(--bg-secondary); color: var(--secondary-purple); border: 1px solid #c4b5fd; border-radius: 8px; font-size: 0.9em;"></div>
                 </div>
             </div>
         </div>
@@ -1911,7 +1931,7 @@
                 <div class="form-group">
                     <label for="upload-hf-token">HuggingFace Token</label>
                     <input type="password" id="upload-hf-token" placeholder="hf_... (or leave blank to use server's .env HF_TOKEN)" class="magic-input">
-                    <small style="color: #888; font-size: 0.85em;">Optional if <code>HF_TOKEN</code> is set in the server's <code>.env</code>.</small>
+                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Optional if <code>HF_TOKEN</code> is set in the server's <code>.env</code>.</small>
                 </div>
                 <div class="form-group">
                     <label for="upload-hf-namespace">Upload To (Account or Organization)</label>
@@ -1919,9 +1939,9 @@
                         <select id="upload-hf-namespace" class="magic-input" style="flex: 1;">
                             <option value="">Personal account (default)</option>
                         </select>
-                        <button type="button" id="upload-refresh-namespaces" class="action-button" style="white-space: nowrap; padding: 8px 14px;">🔄 Check Orgs</button>
+                        <button type="button" id="upload-refresh-namespaces" class="action-button" style="white-space: nowrap;">🔄 Check Orgs</button>
                     </div>
-                    <small id="upload-hf-namespace-hint" style="color: #888; font-size: 0.85em;">Click "Check Orgs" to list the organizations your token can publish to.</small>
+                    <small id="upload-hf-namespace-hint" style="color: var(--text-muted); font-size: var(--font-size-sm);">Click "Check Orgs" to list the organizations your token can publish to.</small>
                 </div>
                 <div class="form-group">
                     <label for="upload-repo-name">Repository Name (optional override)</label>
@@ -1937,7 +1957,7 @@
                         Private repository
                     </label>
                 </div>
-                <button id="upload-hub-confirm" class="action-button" style="width: 100%; background: var(--wizard-yellow); color: #1a1a2e; font-weight: bold; margin-top: 10px;">
+                <button id="upload-hub-confirm" class="action-button" style="width: 100%;    margin-top: 10px;">
                     🚀 Start Upload
                 </button>
             </div>
@@ -1952,22 +1972,22 @@
                 <button class="close" onclick="document.getElementById('save-config-modal').style.display='none'" aria-label="Close modal" type="button">&times;</button>
                 <h2 id="save-config-modal-title">Save Configuration</h2>
                 <div class="form-group">
-                    <label>Configuration Name</label>
+                    <label for="config-name">Configuration Name</label>
                     <input type="text" id="config-name" placeholder="my-training-config" class="magic-input" required>
                 </div>
                 <div class="form-group">
-                    <label>Description (Optional)</label>
+                    <label for="config-description">Description (Optional)</label>
                     <textarea id="config-description" placeholder="Describe this configuration..." class="magic-input" rows="3"></textarea>
                 </div>
                 <div class="form-group">
-                    <label>Tags (Optional, comma-separated)</label>
+                    <label for="config-tags">Tags (Optional, comma-separated)</label>
                     <input type="text" id="config-tags" placeholder="llama3, orpo, 4bit" class="magic-input">
                 </div>
                 <div class="action-buttons">
-                    <button type="button" onclick="saveCurrentConfig()" class="action-button" style="background: var(--primary-purple); color: white;">
+                    <button type="button" onclick="saveCurrentConfig()" class="action-button primary-button">
                         Save Configuration
                     </button>
-                    <button type="button" onclick="document.getElementById('save-config-modal').style.display='none'" class="action-button" style="background: #ccc;">
+                    <button type="button" onclick="document.getElementById('save-config-modal').style.display='none'" class="action-button">
                         Cancel
                     </button>
                 </div>
@@ -1980,7 +2000,7 @@
                 <button class="close" onclick="document.getElementById('load-config-modal').style.display='none'" aria-label="Close modal" type="button">&times;</button>
                 <h2 id="load-config-modal-title">Load Configuration</h2>
                 <div id="config-list" style="margin: 20px 0;">
-                    <p style="text-align: center; color: #888;">Loading configurations...</p>
+                    <p style="text-align: center; color: var(--text-muted);">Loading configurations...</p>
                 </div>
             </div>
         </div>
@@ -1990,7 +2010,7 @@
             <div class="modal-content" style="max-width: 700px;">
                 <button class="close" onclick="document.getElementById('load-from-code-modal').style.display='none'" aria-label="Close modal" type="button">&times;</button>
                 <h2 id="load-from-code-modal-title">Load Configuration from Code</h2>
-                <p style="color: #888; margin-bottom: 15px;">
+                <p style="color: var(--text-muted); margin-bottom: 15px;">
                     Paste the <code>merlina-config-v1:…</code> code from a Merlina model card
                     (the "Reproduce this training run" section). Raw config JSON works too.
                 </p>
@@ -1998,7 +2018,7 @@
                     <label for="load-config-code-input">Config code</label>
                     <textarea id="load-config-code-input" rows="5" spellcheck="false"
                               placeholder="merlina-config-v1:H4sIA…"
-                              style="width: 100%; font-family: monospace; font-size: 0.85em;"></textarea>
+                              style="width: 100%; font-family: monospace; font-size: var(--font-size-sm);"></textarea>
                 </div>
                 <button type="button" id="load-config-code-submit" class="action-button" style="width: 100%;">
                     ✨ Load Configuration
@@ -2011,9 +2031,9 @@
             <div class="modal-content" style="max-width: 700px;">
                 <button class="close" onclick="document.getElementById('load-from-job-modal').style.display='none'" aria-label="Close modal" type="button">&times;</button>
                 <h2 id="load-from-job-modal-title">Load Configuration from Previous Job</h2>
-                <p style="color: #888; margin-bottom: 15px;">Click a job to load its training configuration into the form.</p>
+                <p style="color: var(--text-muted); margin-bottom: 15px;">Click a job to load its training configuration into the form.</p>
                 <div id="job-history-list" style="margin: 20px 0; max-height: 500px; overflow-y: auto;">
-                    <p style="text-align: center; color: #888;">Loading job history...</p>
+                    <p style="text-align: center; color: var(--text-muted);">Loading job history...</p>
                 </div>
             </div>
         </div>
@@ -2024,7 +2044,7 @@
                 <button class="close" onclick="document.getElementById('manage-configs-modal').style.display='none'" aria-label="Close modal" type="button">&times;</button>
                 <h2 id="manage-configs-modal-title">Manage Configurations</h2>
                 <div id="manage-config-list" style="margin: 20px 0;">
-                    <p style="text-align: center; color: #888;">Loading configurations...</p>
+                    <p style="text-align: center; color: var(--text-muted);">Loading configurations...</p>
                 </div>
             </div>
         </div>
@@ -2037,6 +2057,7 @@
                 Made with ❤️ by <a href="https://schneewolflabs.com/" target="_blank" rel="noopener noreferrer">Schneewolf Labs</a>
             </p>
         </footer>
+        </div>
     </div>
 
     <!-- Chart.js for loss visualization -->

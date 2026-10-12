@@ -237,11 +237,11 @@ class InferenceManager {
         }
 
         statusDiv.innerHTML = `
-            <div style="padding: 15px; background: #e8f5e9; border-radius: 10px; border: 1px solid #4caf50;">
-                <div style="font-weight: bold; color: #2e7d32; margin-bottom: 5px;">
+            <div style="padding: 15px; background: var(--success-light); border-radius: 10px; border: 1px solid var(--success);">
+                <div style="font-weight: bold; color: var(--success-dark); margin-bottom: 5px;">
                     ✓ Model Loaded ${backend === 'llama_cpp' ? '🔮' : ''}
                 </div>
-                <div style="font-size: 0.9em; color: #555;">
+                <div style="font-size: 0.9em; color: var(--text-secondary);">
                     <strong>${info.model_name}</strong><br>
                     ${subtitle}
                 </div>

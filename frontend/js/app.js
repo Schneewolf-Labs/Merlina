@@ -5,7 +5,7 @@ import { DatasetManager } from './dataset.js';
 import { ConfigManager } from './config.js';
 import { GPUManager } from './gpu.js';
 import { ModelManager } from './model.js';
-import { Toast, FormUI, Tooltip, createSparkle } from './ui.js';
+import { Toast, FormUI, Tooltip } from './ui.js';
 import { Validator, ValidationRules, debounce } from './validation.js';
 import { ThemeManager } from './theme.js';
 import { InferenceManager } from './inference.js';
@@ -13,6 +13,7 @@ import { ExportManager } from './export.js';
 import { DiskManager } from './disk.js';
 import { buildTrainingConfig } from './form_config.js';
 import { initDiffusionDropzone, initDiffusionPlayground } from './diffusion.js';
+import { Studio } from './studio.js';
 
 /**
  * Toggle visibility of optimizer-specific settings based on selected optimizer.
@@ -720,6 +721,7 @@ class MerlinaApp {
      * Setup section navigation banner
      */
     setupSectionNav() {
+        this.studio = new Studio(sectionId => this.showSection(sectionId));
         const navBtns = document.querySelectorAll('.section-nav-btn');
         if (!navBtns.length) return;
 
@@ -729,19 +731,29 @@ class MerlinaApp {
                 this.showSection(targetId);
             });
         });
+        const initialSection = window.location.hash.slice(1);
+        if (document.getElementById(initialSection)?.classList.contains('nav-section')) {
+            this.showSection(initialSection, { focus: false, updateHistory: false });
+        } else {
+            this.studio.showSection('model-section', { focus: false });
+        }
+        window.addEventListener('popstate', () => {
+            this.showSection(window.location.hash.slice(1) || 'model-section', { updateHistory: false });
+        });
     }
 
     /**
      * Switch to a specific section
      */
-    showSection(sectionId) {
+    showSection(sectionId, { focus = true, updateHistory = true } = {}) {
+        const target = document.getElementById(sectionId);
+        if (!target?.classList.contains('nav-section')) return;
         // Hide all nav sections
         document.querySelectorAll('.nav-section').forEach(section => {
             section.style.display = 'none';
         });
 
         // Show target section
-        const target = document.getElementById(sectionId);
         if (target) {
             target.style.display = 'block';
         }
@@ -750,6 +762,10 @@ class MerlinaApp {
         document.querySelectorAll('.section-nav-btn').forEach(btn => {
             btn.classList.toggle('active', btn.dataset.section === sectionId);
         });
+        this.studio?.showSection(sectionId, { focus });
+        if (updateHistory && window.location.hash !== `#${sectionId}`) {
+            history.pushState(null, '', `#${sectionId}`);
+        }
 
         // Lazy-load disk analysis the first time the Cleanup section opens.
         if (sectionId === 'cleanup-section' && this.diskManager && !this._cleanupLoaded) {
@@ -758,7 +774,7 @@ class MerlinaApp {
         }
 
         // Scroll to top
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        window.scrollTo({ top: 0, behavior: 'instant' });
     }
 
     /**
@@ -978,21 +994,14 @@ class MerlinaApp {
      * Setup magical interactions (sparkles, etc.)
      */
     setupMagicalInteractions() {
-        // Add sparkle effect on input focus
-        const inputs = document.querySelectorAll('.magic-input, .magic-select');
-        inputs.forEach(input => {
-            input.addEventListener('focus', (e) => {
-                createSparkle(e.target);
-            });
-        });
-
-        // Animate wizard hat on hover
+        // A small optional flourish belongs on the mascot, away from form work.
         const wizardHat = document.querySelector('.wizard-hat');
         if (wizardHat) {
             wizardHat.addEventListener('mouseenter', () => {
+                if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
                 wizardHat.style.animation = 'wiggle 0.5s ease-in-out';
                 setTimeout(() => {
-                    wizardHat.style.animation = 'wiggle 2s ease-in-out infinite';
+                    wizardHat.style.animation = 'none';
                 }, 500);
             });
         }

@@ -1,147 +1,110 @@
-/* Merlina CSS Variables - Theme Configuration */
-
+/* Shared studio palette for every screen and dynamically rendered panel. */
 :root {
-    /* Primary Colors */
-    --primary-purple: #c042ff;
-    --secondary-purple: #9b42ff;
-    --light-purple: #e6d0ff;
-    --dark-purple: #4a0080;
-
-    /* Accent Colors */
-    --wizard-blue: #a5c9ea;
-    --wizard-yellow: #ffd700;
-    --wizard-pink: #ff6b9d;
-
-    /* Semantic Colors */
-    --success: #4caf50;
-    --success-light: #e8f5e9;
-    --success-dark: #2e7d32;
-    --danger: #f44336;
-    --danger-light: #ffebee;
-    --danger-dark: #c62828;
-    --warning: #ff9800;
-    --warning-light: #fff3cd;
-    --warning-dark: #856404;
-    --info: #2196f3;
-    --info-light: #e3f2fd;
-    --info-dark: #1565c0;
-
-    /* Backgrounds */
-    --bg-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    --card-bg: rgba(255, 255, 255, 0.95);
-    --section-bg: linear-gradient(135deg, #f5f7fa 0%, #f0e6ff 100%);
-
-    /* Text Colors */
-    --text-primary: #333;
-    --text-secondary: #555;
-    --text-muted: #888;
-    --text-light: #aaa;
-
-    /* Borders */
-    --border-light: rgba(230, 208, 255, 0.5);
-    --border-color: var(--light-purple);
-
-    /* Shadows */
-    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.08);
-    --shadow-md: 0 5px 15px rgba(0, 0, 0, 0.1);
-    --shadow-lg: 0 15px 35px rgba(0, 0, 0, 0.1);
-    --shadow-purple: 0 5px 15px rgba(192, 66, 255, 0.3);
-    --shadow-purple-lg: 0 8px 25px rgba(192, 66, 255, 0.4);
-
-    /* Spacing */
-    --space-xs: 5px;
-    --space-sm: 10px;
-    --space-md: 15px;
+    color-scheme: light;
+    --primary-purple: #75549e;
+    --secondary-purple: #65438e;
+    --light-purple: #ede5f6;
+    --dark-purple: #4d356d;
+    --wizard-blue: #e5edf4;
+    --wizard-yellow: #e7bf66;
+    --wizard-pink: #bf7896;
+    --accent-gold: #edd8a4;
+    --accent-gold-light: #f5e6c3;
+    --success: #397c64;
+    --success-light: #eaf4ee;
+    --success-dark: #28644f;
+    --danger: #b5455c;
+    --danger-light: #fbeef0;
+    --danger-dark: #9b354a;
+    --warning: #9c6a25;
+    --warning-light: #fbf2df;
+    --warning-dark: #84591c;
+    --info: #49768b;
+    --info-light: #eaf2f6;
+    --info-dark: #365d72;
+    --bg-gradient: #f8f7fa;
+    --card-bg: #ffffff;
+    --section-bg: #ffffff;
+    --bg-secondary: #f6f4f9;
+    --hover-bg: #f2edf7;
+    --sidebar-bg: #fdfcfe;
+    --hero-bg: #efe8f7;
+    --hero-end: #f8f0f2;
+    --text-primary: #302c3b;
+    --text-secondary: #514b5f;
+    --text-muted: #746d80;
+    --text-light: #84798f;
+    --border-light: #eeeaf2;
+    --border-color: #e3dce9;
+    --shadow-sm: 0 2px 4px rgba(51, 32, 75, .025);
+    --shadow-md: 0 6px 20px rgba(51, 32, 75, .06);
+    --shadow-lg: 0 16px 48px rgba(51, 32, 75, .1);
+    --shadow-purple: 0 3px 8px rgba(100, 68, 142, .12);
+    --shadow-purple-lg: 0 5px 16px rgba(100, 68, 142, .18);
+    --space-xs: 4px;
+    --space-sm: 8px;
+    --space-md: 16px;
     --space-lg: 20px;
-    --space-xl: 30px;
+    --space-xl: 28px;
     --space-xxl: 40px;
-
-    /* Border Radius */
-    --radius-sm: 5px;
+    --radius-sm: 6px;
     --radius-md: 10px;
-    --radius-lg: 15px;
+    --radius-lg: 14px;
     --radius-xl: 20px;
     --radius-full: 50px;
-
-    /* Transitions */
-    --transition-fast: 0.2s ease;
-    --transition-normal: 0.3s ease;
-    --transition-slow: 0.5s ease;
-
-    /* Z-Index Scale */
+    --transition-fast: .16s ease;
+    --transition-normal: .22s ease;
+    --transition-slow: .35s ease;
     --z-dropdown: 100;
     --z-modal: 1000;
     --z-toast: 1001;
     --z-tooltip: 10000;
-
-    /* Typography */
-    --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
-    --font-mono: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
-    --font-size-xs: 0.75em;
-    --font-size-sm: 0.85em;
-    --font-size-base: 1em;
-    --font-size-lg: 1.1em;
-    --font-size-xl: 1.2em;
-    --font-size-2xl: 1.8em;
-    --font-size-3xl: 2.5em;
+    --font-family: 'Nunito Sans', 'Avenir Next', 'Segoe UI', sans-serif;
+    --font-display: 'Nunito', 'Avenir Next', 'Segoe UI', sans-serif;
+    --font-mono: 'SF Mono', 'Cascadia Code', Consolas, monospace;
+    --font-size-xs: .75rem;
+    --font-size-sm: .8125rem;
+    --font-size-base: 1rem;
+    --font-size-lg: 1.0625rem;
+    --font-size-xl: 1.125rem;
+    --font-size-2xl: 1.875rem;
+    --font-size-3xl: 2.5rem;
 }
-
-/* Dark Mode Variables */
 [data-theme="dark"] {
-    --primary-purple: #d070ff;
-    --secondary-purple: #b070ff;
-    --light-purple: #3d2066;
-    --dark-purple: #e6d0ff;
-
-    --bg-gradient: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-    --card-bg: rgba(30, 30, 45, 0.95);
-    --section-bg: linear-gradient(135deg, #252538 0%, #2d2050 100%);
-
-    --text-primary: #e8e8e8;
-    --text-secondary: #c0c0c0;
-    --text-muted: #888;
-    --text-light: #666;
-
-    --border-light: rgba(100, 80, 150, 0.3);
-    --border-color: #3d2066;
-
-    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
-    --shadow-md: 0 5px 15px rgba(0, 0, 0, 0.4);
-    --shadow-lg: 0 15px 35px rgba(0, 0, 0, 0.4);
-
-    --success-light: #1b3d1b;
-    --danger-light: #3d1b1b;
-    --warning-light: #3d3d1b;
-    --info-light: #1b2d3d;
-}
-
-/* System preference dark mode */
-@media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-        --primary-purple: #d070ff;
-        --secondary-purple: #b070ff;
-        --light-purple: #3d2066;
-        --dark-purple: #e6d0ff;
-
-        --bg-gradient: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-        --card-bg: rgba(30, 30, 45, 0.95);
-        --section-bg: linear-gradient(135deg, #252538 0%, #2d2050 100%);
-
-        --text-primary: #e8e8e8;
-        --text-secondary: #c0c0c0;
-        --text-muted: #888;
-        --text-light: #666;
-
-        --border-light: rgba(100, 80, 150, 0.3);
-        --border-color: #3d2066;
-
-        --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
-        --shadow-md: 0 5px 15px rgba(0, 0, 0, 0.4);
-        --shadow-lg: 0 15px 35px rgba(0, 0, 0, 0.4);
-
-        --success-light: #1b3d1b;
-        --danger-light: #3d1b1b;
-        --warning-light: #3d3d1b;
-        --info-light: #1b2d3d;
-    }
+    color-scheme: dark;
+    --primary-purple: #bda2e2;
+    --secondary-purple: #cbb4e9;
+    --light-purple: #382d48;
+    --dark-purple: #e6d7fa;
+    --wizard-blue: #293848;
+    --wizard-pink: #dba1b6;
+    --bg-gradient: #1a1720;
+    --card-bg: #24202c;
+    --section-bg: #24202c;
+    --bg-secondary: #2a2534;
+    --sidebar-bg: #201c26;
+    --hover-bg: #32293e;
+    --hero-bg: #362a47;
+    --hero-end: #3b2b3d;
+    --text-primary: #eee8f5;
+    --text-secondary: #cec5db;
+    --text-muted: #afa3be;
+    --text-light: #a397b2;
+    --border-light: #342d3f;
+    --border-color: #45394f;
+    --success: #91cfb2;
+    --success-light: #233b32;
+    --success-dark: #a8dbc3;
+    --danger: #ef9dad;
+    --danger-light: #402831;
+    --danger-dark: #f2b1bd;
+    --warning: #e4c187;
+    --warning-light: #3d3324;
+    --warning-dark: #ebce9e;
+    --info: #9dc8dc;
+    --info-light: #263641;
+    --info-dark: #b7d5e4;
+    --shadow-sm: 0 2px 4px rgba(0, 0, 0, .05);
+    --shadow-md: 0 6px 20px rgba(0, 0, 0, .12);
+    --shadow-lg: 0 16px 48px rgba(0, 0, 0, .25);
 }

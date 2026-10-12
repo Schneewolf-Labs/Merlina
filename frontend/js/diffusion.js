@@ -51,7 +51,7 @@ function renderThumbnails() {
             box-shadow: 0 1px 3px rgba(0,0,0,0.08);
             display: flex; flex-direction: column; gap: 4px;
         ">
-            <div style="position: relative; aspect-ratio: 1; overflow: hidden; border-radius: 6px; background: #f0e6ff;">
+            <div style="position: relative; aspect-ratio: 1; overflow: hidden; border-radius: 6px; background: var(--hover-bg);">
                 <img src="${entry.previewUrl}" alt="${entry.file.name}"
                      style="width: 100%; height: 100%; object-fit: cover;">
                 <button type="button" data-thumb-remove="${idx}" title="Remove from dataset" style="
@@ -61,7 +61,7 @@ function renderThumbnails() {
                     cursor: pointer; font-size: 0.8em; line-height: 22px;
                 ">✕</button>
             </div>
-            <div style="font-size: 0.7em; color: #888; word-break: break-all;">
+            <div style="font-size: 0.7em; color: var(--text-muted); word-break: break-all;">
                 ${entry.file.name}
             </div>
             <textarea data-thumb-caption="${idx}" rows="2" placeholder="caption…" style="
@@ -147,7 +147,7 @@ async function uploadStagedDataset() {
 
         if (status) {
             status.innerHTML = `
-                <div style="padding: 10px; background: #e6f4e6; border-left: 3px solid #4caf50; border-radius: 6px;">
+                <div style="padding: 10px; background: #e6f4e6; border-left: 3px solid var(--success); border-radius: 6px;">
                     ✨ <strong>${data.image_count} images saved</strong> as
                     <code style="font-size: 0.85em;">${data.jsonl_path}</code>.
                     Ready to train — scroll down and hit Start.
@@ -159,7 +159,7 @@ async function uploadStagedDataset() {
         console.error('Image dataset upload failed:', e);
         if (status) {
             status.innerHTML = `
-                <div style="padding: 10px; background: #fde8e8; border-left: 3px solid #d32f2f; border-radius: 6px;">
+                <div style="padding: 10px; background: var(--danger-light); border-left: 3px solid #d32f2f; border-radius: 6px;">
                     ❌ Upload failed: ${e.message}
                 </div>
             `;
@@ -207,8 +207,8 @@ function renderJsonlPreview() {
     const pageEnd = Math.min(s.offset + JSONL_PAGE_SIZE, s.total);
     const dirty = s.pendingEdits.size + s.deletes.size;
     summary.innerHTML = `
-        <code style="font-size: 0.85em; color: #444;">${s.path || ''}</code><br>
-        <span style="color: #666; font-size: 0.9em;">
+        <code style="font-size: 0.85em; color: var(--text-secondary);">${s.path || ''}</code><br>
+        <span style="color: var(--text-muted); font-size: 0.9em;">
             showing ${s.offset + 1}–${pageEnd} of ${s.total}
             ${dirty ? `· <span style="color: var(--primary-purple);">${dirty} unsaved change${dirty === 1 ? '' : 's'}</span>` : ''}
         </span>
@@ -231,17 +231,17 @@ function renderJsonlPreview() {
                          style="width: 100%; height: 100%; object-fit: cover;">
                     <button type="button" data-jdrop="${row.row_index}" title="${isDeleted ? 'Restore' : 'Mark for deletion'}" style="
                         position: absolute; top: 4px; right: 4px;
-                        background: ${isDeleted ? '#4caf50' : 'rgba(0,0,0,0.6)'}; color: white;
+                        background: ${isDeleted ? 'var(--success)' : 'rgba(0,0,0,0.6)'}; color: white;
                         border: none; border-radius: 50%; width: 24px; height: 24px;
                         cursor: pointer; font-size: 0.8em; line-height: 24px;
                     ">${isDeleted ? '↺' : '✕'}</button>
                 </div>
-                <div style="font-size: 0.7em; color: #888;">row ${row.row_index}</div>
+                <div style="font-size: 0.7em; color: var(--text-muted);">row ${row.row_index}</div>
                 <textarea data-jedit="${row.row_index}" rows="3" ${isDeleted ? 'disabled' : ''} style="
                     width: 100%; border: 1px solid ${overlay !== undefined ? 'var(--primary-purple)' : '#e0d0f0'};
                     border-radius: 4px; padding: 4px 6px; font-size: 0.75em;
                     resize: vertical; font-family: inherit; min-height: 50px;
-                    ${isDeleted ? 'background: #fafafa;' : ''}
+                    ${isDeleted ? 'background: var(--bg-secondary);' : ''}
                 ">${caption || ''}</textarea>
             </div>
         `;
@@ -268,8 +268,8 @@ function renderJsonlPreview() {
             // Cheap: just trigger a header re-render
             const pageEnd = Math.min(s.offset + JSONL_PAGE_SIZE, s.total);
             summary.innerHTML = `
-                <code style="font-size: 0.85em; color: #444;">${s.path || ''}</code><br>
-                <span style="color: #666; font-size: 0.9em;">
+                <code style="font-size: 0.85em; color: var(--text-secondary);">${s.path || ''}</code><br>
+                <span style="color: var(--text-muted); font-size: 0.9em;">
                     showing ${s.offset + 1}–${pageEnd} of ${s.total}
                     ${dirty ? `· <span style="color: var(--primary-purple);">${dirty} unsaved change${dirty === 1 ? '' : 's'}</span>` : ''}
                 </span>
@@ -334,7 +334,7 @@ async function saveJsonlEdits() {
         }
         const data = await r.json();
         status.innerHTML = `
-            <span style="color: #2e7d32;">
+            <span style="color: var(--success-dark);">
                 ✨ saved — edited ${data.edited}, deleted ${data.deleted},
                 ${data.total_after} rows remain.
                 backup at <code>${data.backup}</code>.
@@ -441,8 +441,8 @@ export async function renderJobSamples(jobId) {
             <img src="${s.url}" alt="${s.prompt.replace(/"/g, '&quot;')}"
                  loading="lazy"
                  style="width: 100%; aspect-ratio: 1; object-fit: cover; background: #f5f0ff;">
-            <figcaption style="padding: 8px 10px; font-size: 0.78em; color: #444;
-                              border-top: 1px solid #f0e6ff;">
+            <figcaption style="padding: 8px 10px; font-size: 0.78em; color: var(--text-secondary);
+                              border-top: 1px solid var(--hover-bg);">
                 ${s.prompt}
             </figcaption>
         </figure>
@@ -534,7 +534,7 @@ async function conjureImage() {
     }
     if (status) {
         status.innerHTML = `
-            <div style="padding: 10px; background: #f0e6ff; border-left: 3px solid var(--primary-purple); border-radius: 6px;">
+            <div style="padding: 10px; background: var(--hover-bg); border-left: 3px solid var(--primary-purple); border-radius: 6px;">
                 🧙 Loading pipeline + LoRA, denoising ${numSteps} steps at ${width}×${height}… this can take ~30–60 seconds.
             </div>
         `;
@@ -567,7 +567,7 @@ async function conjureImage() {
         if (resultEl) resultEl.style.display = 'block';
         if (status) {
             status.innerHTML = `
-                <div style="padding: 10px; background: #e6f4e6; border-left: 3px solid #4caf50; border-radius: 6px;">
+                <div style="padding: 10px; background: #e6f4e6; border-left: 3px solid var(--success); border-radius: 6px;">
                     ✨ Done!
                 </div>
             `;
@@ -577,7 +577,7 @@ async function conjureImage() {
         console.error('Playground conjure failed:', e);
         if (status) {
             status.innerHTML = `
-                <div style="padding: 10px; background: #fde8e8; border-left: 3px solid #d32f2f; border-radius: 6px;">
+                <div style="padding: 10px; background: var(--danger-light); border-left: 3px solid #d32f2f; border-radius: 6px;">
                     ❌ ${e.message}
                 </div>
             `;

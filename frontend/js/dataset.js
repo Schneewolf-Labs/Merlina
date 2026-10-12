@@ -150,7 +150,7 @@ class DatasetManager {
                         <div class="form-group" style="flex: 1;">
                             <label>Subset / Config</label>
                             <input type="text" class="magic-input ds-config" placeholder="default">
-                            <small style="color: #888; font-size: 0.85em;">Optional — e.g. high_quality</small>
+                            <small style="color: var(--text-muted); font-size: 0.85em;">Optional — e.g. high_quality</small>
                         </div>
                         <div class="form-group" style="flex: 1;">
                             <label>Split</label>
@@ -164,7 +164,7 @@ class DatasetManager {
                         <div class="form-group" style="flex: 2;">
                             <label>Internal Store Address</label>
                             <input type="text" class="magic-input ds-uri" placeholder="swl://athanorlite-dpo">
-                            <small style="color: #888; font-size: 0.85em;">swl://name or swl://name@revision — served from the internal dataset store (MinIO/R2), no HuggingFace needed</small>
+                            <small style="color: var(--text-muted); font-size: 0.85em;">swl://name or swl://name@revision — served from the internal dataset store (MinIO/R2), no HuggingFace needed</small>
                         </div>
                         <div class="form-group" style="flex: 1;">
                             <label>Split</label>
@@ -177,7 +177,7 @@ class DatasetManager {
                     <div class="form-group">
                         <label>Upload Dataset File</label>
                         <input type="file" class="magic-input ds-file" accept=".json,.jsonl,.csv,.parquet">
-                        <small style="color: #888; font-size: 0.85em;">Supported: JSON, JSONL, CSV, Parquet</small>
+                        <small style="color: var(--text-muted); font-size: 0.85em;">Supported: JSON, JSONL, CSV, Parquet</small>
                     </div>
                     <div class="ds-upload-status"></div>
                     <button type="button" class="action-button ds-upload-btn" style="margin-top: 10px;">
@@ -208,7 +208,7 @@ class DatasetManager {
                 </button>
 
                 <div class="ds-colmap-config" style="display: none; margin-top: 12px;">
-                    <div class="ds-columns-summary" style="background: #f5f7fa; padding: 10px; border-radius: 8px; margin-bottom: 10px; font-size: 0.85em;">
+                    <div class="ds-columns-summary" style="background: var(--bg-secondary); padding: 10px; border-radius: 8px; margin-bottom: 10px; font-size: 0.85em;">
                         <strong style="color: var(--primary-purple);">Columns:</strong>
                         <span class="ds-columns-list"></span>
                     </div>
@@ -651,17 +651,17 @@ class DatasetManager {
 
         let html = `
             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 15px;">
-                <div style="background: #f5f7fa; padding: 12px; border-radius: 8px; text-align: center;">
+                <div style="background: var(--bg-secondary); padding: 12px; border-radius: 8px; text-align: center;">
                     <div style="font-size: 1.4em; font-weight: bold; color: var(--primary-purple);">${fmt(data.total_rows)}</div>
-                    <div style="font-size: 0.8em; color: #666; margin-top: 2px;">Total Rows</div>
+                    <div style="font-size: 0.8em; color: var(--text-muted); margin-top: 2px;">Total Rows</div>
                 </div>
-                <div style="background: #f5f7fa; padding: 12px; border-radius: 8px; text-align: center;">
+                <div style="background: var(--bg-secondary); padding: 12px; border-radius: 8px; text-align: center;">
                     <div style="font-size: 1.4em; font-weight: bold; color: var(--primary-purple);">${fmt(data.est_total_tokens)}</div>
-                    <div style="font-size: 0.8em; color: #666; margin-top: 2px;">Est. Tokens</div>
+                    <div style="font-size: 0.8em; color: var(--text-muted); margin-top: 2px;">Est. Tokens</div>
                 </div>
-                <div style="background: #f5f7fa; padding: 12px; border-radius: 8px; text-align: center;">
+                <div style="background: var(--bg-secondary); padding: 12px; border-radius: 8px; text-align: center;">
                     <div style="font-size: 1.4em; font-weight: bold; color: var(--primary-purple);">${data.columns.length}</div>
-                    <div style="font-size: 0.8em; color: #666; margin-top: 2px;">Columns</div>
+                    <div style="font-size: 0.8em; color: var(--text-muted); margin-top: 2px;">Columns</div>
                 </div>
             </div>
         `;
@@ -689,9 +689,9 @@ class DatasetManager {
             for (const [field, fs] of Object.entries(fields)) {
                 const emptyWarning = fs.empty_count > 0
                     ? `<span style="color: var(--danger);" title="${fs.empty_count} empty values">${fmt(fs.empty_count)}</span>`
-                    : '<span style="color: #999;">0</span>';
+                    : '<span style="color: var(--text-muted);">0</span>';
                 html += `
-                    <tr style="border-bottom: 1px solid #eee;">
+                    <tr style="border-bottom: 1px solid var(--border-light);">
                         <td style="padding: 8px; font-weight: 600; color: var(--primary-purple);">${field}</td>
                         <td style="padding: 8px;">${fmt(fs.avg_length)}</td>
                         <td style="padding: 8px;">${fmt(fs.min_length)}</td>
@@ -712,21 +712,21 @@ class DatasetManager {
             html += `
                 <h4 style="color: var(--secondary-purple); margin: 15px 0 8px; font-size: 0.95em;">Length Balance (Chosen vs Rejected)</h4>
                 <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 10px;">
-                    <div style="background: #e8f5e9; padding: 10px; border-radius: 8px; text-align: center;">
+                    <div style="background: var(--success-light); padding: 10px; border-radius: 8px; text-align: center;">
                         <div style="font-weight: bold; color: var(--success);">${fmt(lb.avg_chosen_length)}</div>
-                        <div style="font-size: 0.8em; color: #666;">Avg Chosen</div>
+                        <div style="font-size: 0.8em; color: var(--text-muted);">Avg Chosen</div>
                     </div>
-                    <div style="background: #ffebee; padding: 10px; border-radius: 8px; text-align: center;">
+                    <div style="background: var(--danger-light); padding: 10px; border-radius: 8px; text-align: center;">
                         <div style="font-weight: bold; color: var(--danger);">${fmt(lb.avg_rejected_length)}</div>
-                        <div style="font-size: 0.8em; color: #666;">Avg Rejected</div>
+                        <div style="font-size: 0.8em; color: var(--text-muted);">Avg Rejected</div>
                     </div>
-                    <div style="background: #f5f7fa; padding: 10px; border-radius: 8px; text-align: center;">
+                    <div style="background: var(--bg-secondary); padding: 10px; border-radius: 8px; text-align: center;">
                         <div style="font-weight: bold; color: var(--primary-purple);">${lb.ratio}x</div>
-                        <div style="font-size: 0.8em; color: #666;">Length Ratio</div>
+                        <div style="font-size: 0.8em; color: var(--text-muted);">Length Ratio</div>
                     </div>
                 </div>
-                <div style="background: #f5f7fa; padding: 10px; border-radius: 8px;">
-                    <div style="font-size: 0.85em; color: #666; margin-bottom: 5px;">Chosen longer than rejected: <strong>${lb.chosen_longer_pct}%</strong></div>
+                <div style="background: var(--bg-secondary); padding: 10px; border-radius: 8px;">
+                    <div style="font-size: 0.85em; color: var(--text-muted); margin-bottom: 5px;">Chosen longer than rejected: <strong>${lb.chosen_longer_pct}%</strong></div>
                     <div style="background: #e0e0e0; border-radius: 4px; height: 8px; overflow: hidden;">
                         <div style="background: ${barColor}; height: 100%; width: ${barWidth}%; border-radius: 4px; transition: width 0.3s;"></div>
                     </div>
