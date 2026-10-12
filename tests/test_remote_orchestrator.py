@@ -623,3 +623,54 @@ class TestDurableExecution:
         assert provider.terminated == ['inst_1']
         assert RemoteLifecycle(job_manager.db_path).attempts()[0]['state'] == 'failed'
         assert job_manager.get_job('job_1').status == 'failed'
+
+    def test_in_process_reconciler_leaves_live_controller_alone(self, job_manager):
+        """The API's periodic reconciler must not kill a run this process drives."""
+        import time
+        from types import SimpleNamespace
+        from src.remote.cleanup import start_reconciler
+
+        class InventoryFake(FakeProvider):
+            def __init__(self):
+                super().__init__()
+                self.scans = 0
+            def provision(self, spec):
+                instance = super().provision(spec)
+                instance.raw = {"name": spec.name}
+                return instance
+            def list_instances(self):
+                self.scans += 1
+                return [RemoteInstance(f"inst_{i + 1}", self.name, "running", raw={"name": s.name})
+                        for i, s in enumerate(self.provisioned)
+                        if f"inst_{i + 1}" not in self.terminated]
+
+        provider = InventoryFake()
+        killed_while_running = []
+
+        class SlowWorker(ScriptedWorker):
+            def status(self, since_step=0):
+                if provider.terminated:
+                    killed_while_running.append(list(provider.terminated))
+                time.sleep(0.02)
+                return super().status(since_step)
+
+        def push_adapter():
+            Path("trained_adapter").mkdir(exist_ok=True)
+            (Path("trained_adapter") / "adapter_config.json").write_text("{}")
+            store.push_dir(Path("trained_adapter"), "adapter")
+        store = LocalArtifactStore(Path("store"))
+        worker = SlowWorker([WorkerStatus(state=STATE_RUNNING)] * 10
+                            + [WorkerStatus(state=STATE_DONE, artifacts=["adapter"])], on_done=push_adapter)
+        thread, stop = start_reconciler(job_manager, SimpleNamespace(runpod_api_key="test-only"),
+                                        provider_factory=lambda *a, **k: provider, interval=0.005)
+        try:
+            run(make_config(), job_manager, provider=provider, store=store, worker=worker)
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+        assert provider.scans > 1
+        assert killed_while_running == []
+        job = job_manager.get_job("job_1")
+        assert job.status == "completed"
+        assert "remote_plan" in job.metrics        # reconciler didn't clobber live metrics
+        assert "inst_1" in provider.terminated

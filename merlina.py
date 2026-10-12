@@ -225,12 +225,24 @@ async def _reconcile_jobs_after_restart():
         except Exception as e:
             logger.warning(f"Worker reattach scan failed: {e}")
         try:
-            from src.remote.cleanup import reconcile_startup
-            reconcile_startup(job_manager, settings)
+            # Startup pass, then periodic passes while remote work is outstanding:
+            # a run whose lease was still valid at restart must be re-checked.
+            from src.remote.cleanup import start_reconciler
+            _remote_reconciler["thread"], _remote_reconciler["stop"] = start_reconciler(job_manager, settings)
         except Exception:
-            logger.exception("Remote startup reconciliation failed; independent cleanup service must retry")
+            logger.exception("Remote reconciler failed to start; remote resources may keep billing")
 
     threading.Thread(target=_run, name="WorkerReattach", daemon=True).start()
+
+
+_remote_reconciler: dict = {}
+
+
+@app.on_event("shutdown")
+async def _stop_remote_reconciler():
+    stop = _remote_reconciler.get("stop")
+    if stop is not None:
+        stop.set()
 
 
 # Backwards-compatible redirects for the old documentation URLs

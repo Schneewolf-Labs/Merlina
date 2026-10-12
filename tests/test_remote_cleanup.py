@@ -239,3 +239,182 @@ def test_cleanup_can_forward_authenticated_worker_stop_without_storing_token(sta
     assert calls == [('https://worker.example', 'scoped-test-token')]
     assert provider.deleted == []
     assert 'scoped-test-token' not in repr(lifecycle.resources())
+
+
+def _wait_for(predicate, timeout=5.0):
+    import time
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        if predicate():
+            return True
+        time.sleep(0.005)
+    return predicate()
+
+
+class CountingProvider(InventoryProvider):
+    def __init__(self):
+        super().__init__()
+        self.scans = 0
+    def list_instances(self):
+        self.scans += 1
+        return super().list_instances()
+
+
+def test_api_restart_within_lease_is_cleaned_up_after_expiry(state):
+    """One startup pass is not enough: the lease was still valid when it ran."""
+    from types import SimpleNamespace
+    from src.remote.cleanup import start_reconciler
+    now, manager, lifecycle, owner, label, _ = state
+    provider = CountingProvider()
+    instance = provider.create(label)
+    lifecycle.record_instance('job', 'train', label, instance)
+    manager.update_job('job', status='training')
+    # The controller died with the old process; its lease is still valid.
+    restarted = RemoteLifecycle(manager.db_path, lease_seconds=10, clock=lambda: now[0])
+    thread, stop = start_reconciler(manager, SimpleNamespace(runpod_api_key='test-only'),
+                                    provider_factory=lambda *a, **k: provider,
+                                    lifecycle=restarted, interval=0.01)
+    try:
+        assert _wait_for(lambda: provider.scans >= 2)
+        assert provider.deleted == []                  # live lease respected
+        assert manager.get_job('job').status == 'training'
+        now[0] += 11                                   # lease lapses, nobody renews it
+        assert _wait_for(lambda: provider.deleted == ['pod'])
+        assert _wait_for(lambda: manager.get_job('job').status == 'failed')
+        assert _wait_for(lambda: restarted.resources('job')[0]['cleanup_status'] == 'terminated')
+    finally:
+        stop.set()
+        thread.join(timeout=5)
+    assert not thread.is_alive()
+
+
+def test_reconciler_idle_and_local_installs_never_contact_provider(tmp_path):
+    from types import SimpleNamespace
+    from src.remote.cleanup import start_reconciler
+    manager = JobManager(str(tmp_path / 'jobs.db'))
+    calls = []
+    for key in (None, 'test-only'):
+        thread, stop = start_reconciler(manager, SimpleNamespace(runpod_api_key=key),
+                                        provider_factory=lambda *a, **k: calls.append(a),
+                                        interval=0.01)
+        thread.join(timeout=0.1 if key else 5)
+        stop.set()
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+    assert calls == []
+
+
+def test_reconciler_survives_failed_pass(state):
+    from types import SimpleNamespace
+    from src.remote.cleanup import start_reconciler
+    now, manager, lifecycle, owner, label, _ = state
+    provider = CountingProvider()
+    provider.fail_inventory = True
+    lifecycle.finish('job', owner, 'failed')
+    attempts = []
+    def factory(*a, **k):
+        attempts.append(a)
+        if len(attempts) == 1:
+            raise RuntimeError('transient')
+        return provider
+    thread, stop = start_reconciler(manager, SimpleNamespace(runpod_api_key='test-only'),
+                                    provider_factory=factory, lifecycle=lifecycle, interval=0.01)
+    try:
+        assert _wait_for(lambda: provider.scans >= 1)
+    finally:
+        stop.set()
+        thread.join(timeout=5)
+
+
+def test_ambiguous_create_absent_across_grace_resolves_failed(state):
+    now, manager, lifecycle, owner, label, provider = state
+    lifecycle.stage_state('job', 'train', 'provisioning_unknown', error='ProviderError')
+    lifecycle.finish('job', owner, 'failed')
+    settlements = []
+    class Guard:
+        def settle(self, *args):
+            settlements.append(args)
+    kwargs = dict(job_manager=manager, execution_guard_factory=lambda _: Guard(),
+                  absent_scans=3, absent_grace_seconds=600)
+    for _ in range(3):  # three scans, but within the grace window
+        result = reconcile_once(lifecycle, {'runpod': provider}, **kwargs)
+        now[0] += 100
+    assert any(a['alert_key'] == f'ambiguous:{label}' for a in result['alerts'])
+    assert lifecycle.attempts()[0]['state'] == 'provisioning_unknown'
+    now[0] += 400                                       # 700s since first absence
+    result = reconcile_once(lifecycle, {'runpod': provider}, **kwargs)
+    assert lifecycle.attempts()[0]['state'] == 'failed'
+    assert 'never appeared' in lifecycle.attempts()[0]['error']
+    assert result['alerts'] == []
+    assert len(settlements) == 1
+    assert provider.deleted == []
+
+
+def test_failed_inventory_scans_do_not_count_as_absence(state):
+    now, manager, lifecycle, owner, label, provider = state
+    lifecycle.stage_state('job', 'train', 'provisioning_unknown')
+    lifecycle.finish('job', owner, 'failed')
+    provider.fail_inventory = True
+    for _ in range(5):
+        reconcile_once(lifecycle, {'runpod': provider}, absent_scans=3, absent_grace_seconds=600)
+        now[0] += 600
+    assert lifecycle.attempts()[0]['state'] == 'provisioning_unknown'
+
+
+def test_late_appearance_resets_absence_and_is_terminated(state):
+    now, manager, lifecycle, owner, label, provider = state
+    lifecycle.stage_state('job', 'train', 'provisioning_unknown')
+    lifecycle.finish('job', owner, 'failed')
+    kwargs = dict(absent_scans=3, absent_grace_seconds=600)
+    for _ in range(2):
+        reconcile_once(lifecycle, {'runpod': provider}, **kwargs)
+        now[0] += 400
+    provider.create(label)  # the listing lagged; the pod really exists
+    reconcile_once(lifecycle, {'runpod': provider}, **kwargs)
+    assert provider.deleted == ['pod']
+    assert lifecycle.resources('job')[0]['cleanup_status'] == 'terminated'
+    assert 'reconciled and terminated' in lifecycle.attempts()[0]['error']
+
+
+def test_cli_resolve_records_operator_and_clears_alert(state, capsys):
+    from src.remote.cleanup import main
+    now, manager, lifecycle, owner, label, provider = state
+    lifecycle.stage_state('job', 'train', 'provisioning_unknown')
+    lifecycle.finish('job', owner, 'failed')
+    reconcile_once(lifecycle, {'runpod': provider})
+    assert lifecycle.alerts()
+    assert main(['--db', str(manager.db_path), '--resolve', 'job', '--as', 'failed',
+                 '--by', 'nick', '--note', 'checked console']) == 0
+    assert lifecycle.attempts()[0]['state'] == 'failed'
+    assert 'by nick' in lifecycle.attempts()[0]['error']
+    record = lifecycle.manual_resolutions()[0]
+    assert (record['label'], record['resolved_as'], record['resolved_by'], record['note']) == (
+        label, 'failed', 'nick', 'checked console')
+    assert lifecycle.alerts() == []
+    assert reconcile_once(lifecycle, {'runpod': provider})['alerts'] == []
+
+
+def test_cli_resolve_terminated_confirms_unterminable_resource(state):
+    from src.remote.cleanup import main
+    now, manager, lifecycle, owner, label, provider = state
+    lifecycle.record_instance('job', 'train', label, provider.create(label))
+    lifecycle.finish('job', owner, 'failed')
+    lifecycle.cleanup_result('runpod', 'pod', error='timeout')
+    assert main(['--db', str(manager.db_path), '--resolve', label, '--as', 'terminated', '--by', 'nick']) == 0
+    resource = lifecycle.resources('job')[0]
+    assert resource['cleanup_status'] == 'terminated'
+    assert 'nick' in resource['last_error']
+    assert lifecycle.manual_resolutions()[0]['resolved_as'] == 'terminated'
+
+
+def test_cli_resolve_refuses_live_run_and_unknown_target(state):
+    from src.remote.cleanup import main
+    now, manager, lifecycle, owner, label, provider = state
+    with pytest.raises(SystemExit):
+        main(['--db', str(manager.db_path), '--resolve', 'job', '--as', 'failed', '--by', 'nick'])
+    with pytest.raises(SystemExit):
+        main(['--db', str(manager.db_path), '--resolve', 'nope', '--as', 'failed', '--by', 'nick'])
+    with pytest.raises(SystemExit):
+        main(['--db', str(manager.db_path), '--resolve', 'job'])
+    assert lifecycle.attempts()[0]['state'] == 'provisioning'
+    assert lifecycle.manual_resolutions() == []
