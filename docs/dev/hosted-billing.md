@@ -70,7 +70,15 @@ usage includes boot through confirmed termination, rounded to the configured
 provider granularity. Agent use is excluded from this runner. Unknown provider
 rates or unconfirmed cleanup retain the reservation for investigation; they do not
 produce an invented zero-cost settlement. Runtime and estimated spend exhaustion
-request cleanup through lifecycle hooks with reserved shutdown headroom.
+request cleanup through lifecycle hooks with reserved shutdown headroom. The
+spend check rounds elapsed time plus shutdown allowance once, as the reservation
+does, and stops only when that projection exceeds the reservation.
+
+A dispatch claim whose worker never took lifecycle ownership (for example, a
+crash right after the claim) is released at zero after 10 minutes: the
+dispatcher takes the insert-only lifecycle claim itself, so a late worker cannot
+provision, then marks the job failed. Provisioning always requires a lifecycle
+intent first, so no provider resource can exist for such a claim.
 
 ## Routes
 

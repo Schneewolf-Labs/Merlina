@@ -240,3 +240,24 @@ def test_guard_revalidates_rate_increases_and_cleanup_unknown(billing):
     with pytest.raises(BillingError,match='rate missing'):
         guard.settle('j',[resource])
     assert billing.balance('a')['reserved_minor']==150
+
+
+@pytest.mark.parametrize('window,live_until', [
+    # Hourly billing, 1.5h approved window (2 units reserved): must not stop 10s in.
+    (dict(boot_seconds=600, runtime_seconds=3600, shutdown_seconds=1200, billing_granularity_seconds=3600), 10),
+    # 60s billing, boot+runtime 3660s: must not stop at 3601s.
+    (dict(boot_seconds=60, runtime_seconds=3600, shutdown_seconds=60, billing_granularity_seconds=60), 3601),
+])
+def test_guard_does_not_double_round_approved_window(billing, window, live_until):
+    credit(billing, amount=20000)
+    q = billing.quote('a', 'proj', 'j', {}, [stage(**window)], fixed_minor=10)
+    billing.reserve('a', 'proj', 'j', q['quote_id'], {})
+    billing.claim('j')
+    guard = ExecutionGuard(billing, 'j', rate_check=lambda *_: (3600, 1000))
+    resource = {'stage_name': 'train', 'started_at': 1000-live_until, 'terminated_at': None, 'cost_per_hr': 36}
+    guard.usage('j', [resource])
+    # The approved window still ends the run.
+    resource['started_at'] = 1000-window['boot_seconds']-window['runtime_seconds']
+    with pytest.raises(BudgetExceeded):
+        guard.usage('j', [resource])
+    assert billing.run('j')['failure_code'] == 'budget_exhausted'

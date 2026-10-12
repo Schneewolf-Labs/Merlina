@@ -70,9 +70,14 @@ class ExecutionGuard:
             raise BillingError("Guard job mismatch")
         run = self.billing.run(job_id)
         spent = self._cost(run, resources)
-        headroom = sum(self._stage(run, r["stage_name"]).charge(self._stage(run, r["stage_name"]).shutdown_seconds)
-                       for r in resources if r.get("terminated_at") is None)
-        if spent+headroom >= run["amount"]:
+        # Project each live resource to the end of its shutdown allowance and
+        # round elapsed+shutdown once, like the reservation. Rounding them
+        # separately would forfeit up to a billing unit of approved runtime.
+        now = self.billing.clock()
+        projected = [r if r.get("terminated_at") is not None else
+                     dict(r, terminated_at=max(now, r["started_at"])+self._stage(run, r["stage_name"]).shutdown_seconds)
+                     for r in resources]
+        if self._cost(run, projected) > run["amount"]:
             self.billing.record_failure(self.job_id, "budget_exhausted")
             raise BudgetExceeded("Approved budget exhausted; cleanup required")
         return spent

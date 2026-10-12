@@ -256,3 +256,65 @@ def test_artifact_failure_after_settlement_recovers_after_restart(execution,monk
     assert len(artifacts)==1
     assert e.client.get(endpoint(e,'artifacts')+'/'+artifacts[0]['id']+'/download').status_code==200
     assert e.provider.starts==1
+
+
+def backdate_claim(e,seconds):
+    with e.store.transaction() as db:
+        db.execute('UPDATE billing_runs SET claimed_at=claimed_at-? WHERE job_id=?',(seconds,e.job['id']))
+
+
+def test_dispatch_crash_before_lifecycle_claim_releases_after_grace(execution):
+    from src.hosted.remote_runtime import UNLAUNCHED_DISPATCH_GRACE_SECONDS
+    from src.remote.lifecycle import RemoteAlreadyClaimed
+    e=execution
+    approve(e)
+    # Crash between the billing claim and the worker's lifecycle claim.
+    assert e.billing.claim(e.job['id'])
+    e.service.tick()
+    assert e.billing.run(e.job['id'])['state']=='dispatching'
+    assert e.billing.balance(e.job['account_id'])['reserved_minor']>0
+    backdate_claim(e,UNLAUNCHED_DISPATCH_GRACE_SECONDS+1)
+    e.service.tick()
+    run=e.billing.run(e.job['id'])
+    assert run['state']=='settled' and run['charged']==0
+    assert e.billing.balance(e.job['account_id'])=={'balance_minor':1000,'reserved_minor':0,'available_minor':1000,'currency':'usd'}
+    state=e.store.require_job(e.job['account_id'],e.job['project_id'],e.job['id'])
+    assert state['status']=='failed' and 'no compute was charged' in state['result']['error']
+    # A late worker for the released claim can never reach provisioning.
+    with pytest.raises(RemoteAlreadyClaimed):
+        e.runtime.lifecycle.claim(e.job['id'],1)
+    e.service.tick()
+    assert e.provider.starts==0 and e.billing.run(e.job['id'])['charged']==0
+
+
+def test_dispatch_with_live_worker_claim_is_not_released(execution):
+    from src.hosted.remote_runtime import UNLAUNCHED_DISPATCH_GRACE_SECONDS
+    e=execution
+    approve(e)
+    assert e.billing.claim(e.job['id'])
+    e.runtime.lifecycle.claim(e.job['id'],1)
+    backdate_claim(e,UNLAUNCHED_DISPATCH_GRACE_SECONDS+1)
+    e.service.tick()
+    assert e.billing.run(e.job['id'])['state']=='dispatching'
+    assert e.billing.balance(e.job['account_id'])['reserved_minor']>0
+
+
+def test_definitively_failed_provision_settles_without_charge(execution):
+    e=execution
+    approve(e)
+    jid=e.job['id']
+    assert e.billing.claim(jid)
+    e.runtime.jobs.create_job(jid,{})
+    # Lifecycle records a definite provider rejection: no instance was created.
+    lifecycle=e.runtime.lifecycle
+    owner=lifecycle.claim(jid,1)
+    lifecycle.intent(jid,owner,'train','runpod')
+    lifecycle.stage_state(jid,'train','failed',error='ProviderError')
+    lifecycle.finish(jid,owner,'failed','Provider rejected create')
+    e.runtime.jobs.update_job(jid,status='failed',error='Provider rejected create')
+    e.service.tick()
+    run=e.billing.run(jid)
+    assert run['state']=='settled' and run['charged']==0
+    assert e.billing.balance(e.job['account_id'])['available_minor']==1000
+    assert e.store.require_job(e.job['account_id'],e.job['project_id'],jid)['status']=='failed'
+    assert e.provider.starts==0

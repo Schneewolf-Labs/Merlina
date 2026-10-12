@@ -27,6 +27,10 @@ from types import SimpleNamespace
 from .billing import BillingError, BillingUnavailable, BillingService, StageQuote, config_digest
 from .execution import ExecutionGuard, ExecutionService
 
+# A dispatch claim whose worker never took lifecycle ownership is released after
+# this long; a slower launch in another dispatcher then finds the claim taken.
+UNLAUNCHED_DISPATCH_GRACE_SECONDS = 600
+
 
 @dataclass(frozen=True)
 class RuntimeSettings:
@@ -304,8 +308,47 @@ class ManagedRemoteRuntime:
             raise BillingError("Artifact cache failed integrity verification")
         return FileResponse(path, filename="adapter.zip", media_type="application/zip")
 
+    def release_unlaunched(self, job):
+        """Settle at zero a dispatch that crashed before any provider call.
+
+        Provisioning requires ``lifecycle.intent``, which requires a running
+        lifecycle run owned by the worker; ``lifecycle.claim`` is insert-only.
+        Taking that claim ourselves therefore proves no worker can provision.
+        """
+        jid = job["id"]
+        run = self.billing.run(jid)
+        if run["state"] != "dispatching" or jid in self.active:
+            return False
+        from src.remote.lifecycle import RemoteAlreadyClaimed
+        reason = "Dispatch interrupted before compute started"
+        remote = self.lifecycle.run(jid)
+        if remote is None:
+            if self.billing.clock()-(run["claimed_at"] or 0) < UNLAUNCHED_DISPATCH_GRACE_SECONDS:
+                return False
+            try:
+                owner = self.lifecycle.claim(jid, 0)
+            except RemoteAlreadyClaimed:
+                return False  # A worker claimed it meanwhile; normal reconciliation owns it.
+            self.lifecycle.finish(jid, owner, "failed", reason)
+        elif remote["state"] == "running":
+            return False
+        if any(a["job_id"] == jid for a in self.lifecycle.attempts()) or self.lifecycle.resources(jid):
+            return False
+        self.billing.abort_before_launch(jid, "dispatch_interrupted")
+        if self.jobs.get_job(jid) is not None:
+            self.jobs.update_job(jid, status="failed", error=reason)
+        self.store.update_job(job["account_id"], job["project_id"], jid, status="failed",
+                              result={"error": reason + "; no compute was charged."})
+        with self.store.transaction() as db:
+            db.execute("UPDATE hosted_result_sync SET pending=0 WHERE job_id=?", (jid,))
+        self.billing.event(job["account_id"], job["project_id"], jid, "execution.status",
+                           {"status": "failed", "artifact_status": "not_ready"})
+        return True
+
     def reconcile(self, job, guard):
         from src.remote.cleanup import reconcile_once
+        if self.release_unlaunched(job):
+            return
         reconcile_once(self.lifecycle, {"runpod": self.provider}, job_manager=self.jobs,
                        execution_guard_factory=lambda jid: ExecutionGuard(self.billing, jid, rate_check=self.rate_check))
         self.sync(job)
