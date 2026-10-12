@@ -1,6 +1,9 @@
 """Independent hosted ASGI factory: uvicorn src.hosted.app:create_hosted_app --factory."""
 from pathlib import Path
 import importlib.util
+import asyncio
+import logging
+from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -29,7 +32,32 @@ def client_ip(request, trusted_proxies=()):
 
 def create_hosted_app(settings=None):
     settings = settings or HostedSettings.from_env()
-    app = FastAPI(title='Merlina Wishcraft Hosted', version=__version__)
+
+    @asynccontextmanager
+    async def lifespan(app):
+        from .runtime import configure_runtime, tick
+        configure_runtime(app)
+
+        async def dispatch():
+            while True:
+                try:
+                    await asyncio.to_thread(tick, app)
+                except Exception:
+                    logging.getLogger(__name__).exception('Hosted dispatcher pass failed')
+                await asyncio.sleep(settings.dispatch_interval_seconds)
+
+        task = asyncio.create_task(dispatch()) if getattr(app.state, 'execution', None) else None
+        try:
+            yield
+        finally:
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+    app = FastAPI(title='Merlina Wishcraft Hosted', version=__version__, lifespan=lifespan)
     app.state.settings = settings
     app.state.store = HostedStore(settings.database_path)
     if settings.cors_origins:
@@ -151,7 +179,7 @@ def create_hosted_app(settings=None):
         return downloader(artifact)
 
     # Each optional stack layer contributes only authenticated hosted routes.
-    for module_name in ('routes_billing', 'routes_advisor'):
+    for module_name in ('routes_billing', 'routes_advisor', 'artifact_broker'):
         if importlib.util.find_spec(f'src.hosted.{module_name}'):
             module = __import__(f'src.hosted.{module_name}', fromlist=['router'])
             app.include_router(module.router)

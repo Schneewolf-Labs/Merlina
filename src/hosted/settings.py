@@ -22,6 +22,9 @@ class HostedSettings:
     max_dataset_bytes: int = 10 * 1024 * 1024
     # Peer addresses allowed to set X-Forwarded-For (e.g. the local reverse proxy).
     trusted_proxies: tuple[str, ...] = ()
+    public_url: str | None = None
+    max_artifact_bytes: int = 100 * 1024 ** 3
+    dispatch_interval_seconds: int = 10
 
     @classmethod
     def from_env(cls):
@@ -30,11 +33,11 @@ class HostedSettings:
         for key in ('data_dir', 'database_path', 'stripe_secret_key',
                     'stripe_webhook_secret', 'checkout_success_url', 'checkout_cancel_url',
                     'billing_currency', 'billing_policy_version', 'billing_failure_policy',
-                    'billing_overage_policy'):
+                    'billing_overage_policy', 'public_url'):
             value = os.getenv(prefix + key.upper())
             if value is not None:
                 values[key] = value
-        for key in ('session_ttl_seconds', 'max_dataset_bytes'):
+        for key in ('session_ttl_seconds', 'max_dataset_bytes', 'max_artifact_bytes', 'dispatch_interval_seconds'):
             value = os.getenv(prefix + key.upper())
             if value is not None:
                 values[key] = int(value)
@@ -58,6 +61,10 @@ class HostedSettings:
             raise ValueError('Dataset limit must be positive and at most 100 MiB')
         if self.billing_currency != 'usd':
             raise ValueError('Only USD billing is supported in the pilot')
+        if type(self.max_artifact_bytes) is not int or not 1 <= self.max_artifact_bytes <= 1024 ** 4:
+            raise ValueError('Artifact limit must be positive and at most 1 TiB')
+        if not 1 <= self.dispatch_interval_seconds <= 60:
+            raise ValueError('Dispatch interval must be between 1 and 60 seconds')
         if self.session_ttl_seconds < 60 or self.session_ttl_seconds > 604800:
             raise ValueError('Session TTL must be between 60 seconds and seven days')
         if any(origin == '*' or not origin.startswith(('https://', 'http://localhost:')) for origin in self.cors_origins):
