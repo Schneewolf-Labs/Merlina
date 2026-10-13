@@ -1,5 +1,13 @@
 # Custom Dataset Implementation Summary
 
+> **Document Status (October 2026):** This note is a historical snapshot of the
+> custom-dataset feature as originally implemented. The frontend has since been
+> modularized: there is no `frontend/script.js` — `frontend/index.html` now
+> loads `<script type="module" src="js/app.js">`, and `frontend/js/` holds 18
+> ES modules. The "Frontend Changes" and "File Statistics" sections below have
+> been updated to reflect the modular structure; the backend notes describe the
+> original implementation and remain accurate.
+
 ## Overview
 
 Successfully implemented a modular, extensible dataset handling system for Merlina, enabling users to:
@@ -91,15 +99,31 @@ New dataset configuration section with:
   - Max samples limit for testing
   - Column mapping (future enhancement)
 
-#### JavaScript: `frontend/script.js` (~180 lines added)
+#### JavaScript: `frontend/js/` ES modules (dataset UI — originally ~180 lines in `frontend/script.js`)
 
-New functions:
+The dataset UI logic now lives in the modular frontend. `frontend/index.html`
+loads `<script type="module" src="js/app.js">`, and `app.js` imports the manager
+modules:
+
+- `frontend/js/dataset.js` — `DatasetManager`: file upload, dataset
+  source/format UI state, and preview. Raw and formatted previews are
+  paginated with a user-configurable sample limit (`#preview-limit`, default
+  1); the formatted preview is color-coded (Prompt gray, Chosen green,
+  Rejected red) with a format type indicator.
+- `frontend/js/app.js` — application bootstrap: instantiates the managers and
+  wires the dataset config into submit handling.
+- `frontend/js/form_config.js` — `buildTrainingConfig()`: assembles the
+  dataset config from the form.
+- `frontend/js/config.js` — `ConfigManager`: save/load named training
+  configurations (including dataset settings).
+
+Dataset UI behavior (across these modules):
 - `handleDatasetUpload()` - Upload file to server
-- `handleDatasetPreview()` - Fetch and display raw preview (3 samples)
-- `handleFormattedPreview()` - Fetch and display formatted preview (1 sample)
+- `handleDatasetPreview()` - Fetch and display raw preview (paginated)
+- `handleFormattedPreview()` - Fetch and display formatted preview (paginated)
 - `getDatasetConfig()` - Build dataset config from form
 - Dynamic UI updates for source/format changes
-- Updated `handleSubmit()` to include dataset config
+- Updated submit handling to include dataset config
 - Preview toggle (shows one type at a time)
 
 ## Design Patterns Used
@@ -150,10 +174,12 @@ All tests pass successfully:
 - 1 test dataset
 - 2 documentation files
 
-**Files Modified:** 3
+**Files Modified:** 4 (at implementation time)
 - `merlina.py` (~200 lines added/changed)
 - `frontend/index.html` (~140 lines added)
-- `frontend/script.js` (~180 lines added)
+- `frontend/script.js` (~180 lines added) — since split into `frontend/js/`
+  ES modules (`dataset.js`, `app.js`, `form_config.js`, `config.js`, …;
+  18 modules total as of October 2026)
 - `README.md` (updated features section)
 
 **Total Lines of Code:** ~1,500 new lines
