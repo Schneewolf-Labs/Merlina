@@ -38,7 +38,9 @@ from .plan import RemotePlanError, build_remote_plan
 from .providers import ComputeProvider, ProviderError, ProvisionRejected, get_provider
 from .spec import InstanceSpec, RemotePlan, StagePlan
 from .worker_client import (
+    SERVE_PORT,
     STATE_FAILED,
+    STATE_SERVING,
     WORKER_PORT,
     HttpWorkerClient,
     WorkerClient,
@@ -287,12 +289,26 @@ def _run_remote_stage(
     lifecycle: RemoteLifecycle,
     owner: str,
     execution_guard: Any = None,
+    keep_on_failure: Any = None,
+    drive: Optional[Callable[..., List[str]]] = None,
 ) -> None:
     """
-    Provision an instance, drive one worker stage to completion on it, and
-    terminate the instance no matter what. Raises on failure/stop/budget.
+    Provision an instance, drive one worker stage on it, and terminate the
+    instance no matter what. Raises on failure/stop/budget.
+
+    By default the stage is driven to a terminal worker state
+    (:func:`_poll_stage_to_completion`). A ``drive`` callable replaces that
+    for stages whose useful phase is not terminal — the serve stage holds
+    in ``serving`` until stopped. It is called as ``drive(client=...,
+    instance=..., tick=..., deadline=...)`` once the worker is healthy and
+    returns the stage's artifact names; returning normally means success,
+    and the instance is terminated either way.
+
+    ``keep_on_failure`` overrides ``config.remote.keep_instance_on_failure``;
+    it may be a predicate on the exception (retain only for real failures).
     """
-    remote_cfg = config.remote
+    if keep_on_failure is None:
+        keep_on_failure = config.remote.keep_instance_on_failure
     token = spec.env.get(TOKEN_ENV_VAR, "")
     _check_run(lifecycle, job_id, owner, job_manager)
     if execution_guard is not None:
@@ -302,6 +318,7 @@ def _run_remote_stage(
     deadline = time.monotonic() + max(0, lifecycle.run(job_id)["deadline"] - time.time())
     instance = None
     failed = False
+    error: Optional[BaseException] = None
 
     def tick():
         _check_run(lifecycle, job_id, owner, job_manager, check_stop=False)
@@ -322,14 +339,17 @@ def _run_remote_stage(
             boot_timeout_s=boot_timeout_min * 60, poll_interval_s=poll_interval_s,
             deadline=deadline, tick=tick,
         )
-        artifacts = _poll_stage_to_completion(
-            client=client, stage=stage, job_id=job_id, job_manager=job_manager,
-            event_loop=event_loop, poll_interval_s=poll_interval_s,
-            deadline=deadline, mirror_job_fields=mirror_job_fields, tick=tick, lifecycle=lifecycle,
-        )
+        if drive is not None:
+            artifacts = drive(client=client, instance=instance, tick=tick, deadline=deadline)
+        else:
+            artifacts = _poll_stage_to_completion(
+                client=client, stage=stage, job_id=job_id, job_manager=job_manager,
+                event_loop=event_loop, poll_interval_s=poll_interval_s,
+                deadline=deadline, mirror_job_fields=mirror_job_fields, tick=tick, lifecycle=lifecycle,
+            )
         lifecycle.stage_state(job_id, stage.name, "completed", artifacts=artifacts)
     except BaseException as exc:
-        failed = True
+        failed, error = True, exc
         # Only a definitive provider refusal proves nothing was created;
         # anything else before an instance id leaves the create ambiguous.
         definite = instance is not None or isinstance(exc, ProvisionRejected)
@@ -339,7 +359,8 @@ def _run_remote_stage(
         raise
     finally:
         if instance is not None:
-            if failed and remote_cfg.keep_instance_on_failure and execution_guard is None:
+            keep = keep_on_failure(error) if callable(keep_on_failure) else keep_on_failure
+            if failed and keep and execution_guard is None:
                 lifecycle.cleanup_result(provider.name, instance.instance_id, retained=True,
                                          error="Retained for debugging until total job deadline")
             else:
@@ -600,6 +621,320 @@ def _merge_instance_spec(job_id: str, config: Any, plan: RemotePlan,
         http_ports=[WORKER_PORT],
         docker_start_cmd=["python", "-m", "src.remote.worker_entry"],
     )
+
+
+# ---------------------------------------------------------------------------
+# Remote inference sessions (the "serve" stage)
+# ---------------------------------------------------------------------------
+
+# Session outcomes that are a cap doing its job, not an error.
+_DEADLINE_REASONS = ("max_runtime_hours", "max_total_cost_usd")
+
+
+def run_inference_remote(
+    session_id: str,
+    request: Any,
+    sessions: Any,
+    *,
+    plan: Any = None,
+    job_manager: Optional[JobManager] = None,
+    provider: Optional[ComputeProvider] = None,
+    worker_client_factory: Optional[Callable[[str, str], WorkerClient]] = None,
+    poll_interval_s: Optional[float] = None,
+    boot_timeout_min: Optional[float] = None,
+    lifecycle: Optional[RemoteLifecycle] = None,
+    execution_guard: Any = None,
+) -> None:
+    """
+    Run one remote inference session end to end: rent an instance, serve the
+    model with vLLM, mark the session ``ready`` with its OpenAI base URL, hold
+    until a stop / deadline / total-cost cap / idle timeout / worker failure,
+    and always terminate the instance. Never raises; the outcome lands in the
+    session row (``sessions`` is an :class:`InferenceSessionStore`).
+
+    Reuses the training stage machinery: durable claim + lease, intent label
+    per stage ("serve") before provisioning, ``terminate_confirmed`` in a
+    ``finally`` — so the reconciler cleans up an orphaned serve pod exactly
+    like an orphaned training pod.
+    """
+    from config import settings
+    from .inference import build_serve_plan
+    from .sessions import forget_api_key, remember_api_key
+
+    poll_interval_s = poll_interval_s or getattr(settings, "remote_poll_interval_seconds", DEFAULT_POLL_INTERVAL_S)
+    boot_timeout_min = boot_timeout_min or getattr(settings, "remote_boot_timeout_minutes", DEFAULT_BOOT_TIMEOUT_MIN)
+    lifecycle = lifecycle or RemoteLifecycle(sessions.db_path)
+    owner: Optional[str] = None
+    heartbeat_stop = threading.Event()
+    heartbeat_thread: Optional[threading.Thread] = None
+    final_status, stop_reason, error = "failed", "error", None
+
+    try:
+        if provider is None:
+            provider = get_provider(request.provider, api_key=getattr(settings, "runpod_api_key", None))
+        if plan is None:
+            offers = None
+            try:
+                offers = provider.list_gpu_offers()
+            except ProviderError as e:
+                logger.warning("Could not fetch live GPU offers (%s); using static catalog", e)
+            plan = build_serve_plan(request, offers=offers, job_manager=job_manager,
+                                    lifecycle=lifecycle, settings=settings)
+        try:
+            owner = lifecycle.claim(session_id, plan.effective_max_hours)
+        except RemoteAlreadyClaimed:
+            logger.warning("Ignoring duplicate dispatch for inference session %s", session_id)
+            return
+        heartbeat_thread = threading.Thread(
+            target=_heartbeat_loop, args=(lifecycle, session_id, owner, heartbeat_stop), daemon=True)
+        heartbeat_thread.start()
+        sessions.update(session_id, status="provisioning", plan=plan.to_dict(),
+                        served_model_name=plan.served_model_name,
+                        deadline_at=lifecycle.run(session_id)["deadline"])
+
+        api_key = secrets.token_urlsafe(32)
+        remember_api_key(session_id, api_key)
+        spec = _serve_instance_spec(session_id, request, plan, api_key, job_manager=job_manager)
+        client_factory = worker_client_factory or (lambda url, token: HttpWorkerClient(url, token))
+
+        outcome: dict = {}
+
+        def drive(*, client, instance, tick, deadline):
+            outcome["reason"] = _drive_serve_session(
+                session_id=session_id, sessions=sessions, client=client, instance=instance,
+                provider=provider, plan=plan, lifecycle=lifecycle, owner=owner, tick=tick,
+                poll_interval_s=poll_interval_s, settings=settings)
+            return []
+
+        _run_remote_stage(
+            stage=StagePlan(name="serve", target="remote", sizing=plan.sizing),
+            spec=spec, job_id=session_id, config=None, job_manager=sessions,
+            event_loop=None, provider=provider, client_factory=client_factory,
+            poll_interval_s=poll_interval_s, boot_timeout_min=boot_timeout_min,
+            mirror_job_fields=False, lifecycle=lifecycle, owner=owner,
+            execution_guard=execution_guard,
+            # Debug retention is for failures only: stops and caps always end the bill.
+            keep_on_failure=lambda exc: bool(request.keep_instance_on_failure) and not isinstance(
+                exc, (RemoteStopped, RemoteBudgetExceeded)),
+            drive=drive,
+        )
+        stop_reason = outcome.get("reason", "user")
+        final_status = "expired" if stop_reason in _DEADLINE_REASONS else "stopped"
+    except RemoteStopped:
+        final_status, stop_reason = "stopped", "user"
+    except (RemoteBudgetExceeded, RemoteLeaseLost) as e:
+        run = lifecycle.run(session_id) if owner else None
+        if run and time.time() >= run["deadline"]:
+            final_status = "expired"
+            current = sessions.get(session_id)
+            stop_reason = ((current.metrics or {}).get("deadline_reason") if current else None) \
+                or getattr(plan, "deadline_reason", None) or "max_runtime_hours"
+        else:
+            error = str(e)
+    except Exception as e:
+        error = str(e)
+        logger.error("Inference session %s failed: %s", session_id, e)
+    finally:
+        heartbeat_stop.set()
+        if heartbeat_thread is not None:
+            heartbeat_thread.join(timeout=1)
+        forget_api_key(session_id)
+        if owner is not None:
+            lifecycle.finish(session_id, owner, "failed" if final_status == "failed" else "stopped", error)
+            resources = lifecycle.resources(session_id)
+            current = sessions.get(session_id)
+            metrics = dict(current.metrics or {}) if current else {}
+            metrics.update(remote_resources=resources, est_cost_usd=_estimate_spend(resources))
+            sessions.update(session_id, status=final_status, stop_reason=stop_reason,
+                            error=error, ended_at=time.time(), metrics=metrics)
+            if execution_guard is not None:
+                attempts = [a for a in lifecycle.attempts() if a["job_id"] == session_id]
+                if all(a["state"] not in ("provisioning", "provisioning_unknown") for a in attempts):
+                    try:
+                        execution_guard.settle(session_id, resources)
+                    except Exception:
+                        logger.exception("Settlement pending for inference session %s", session_id)
+        elif error is not None:
+            # Failed before claiming (bad plan, no provider key): nothing was rented.
+            sessions.update(session_id, status="failed", stop_reason="error", error=error,
+                            ended_at=time.time())
+        logger.info("Inference session %s ended: %s (%s)", session_id, final_status, stop_reason)
+
+
+def _serve_instance_spec(session_id: str, request: Any, plan: Any, api_key: str,
+                         *, job_manager: Optional[JobManager] = None) -> InstanceSpec:
+    """Instance for a serve stage: worker port + the API-key-guarded serve port."""
+    from .inference import resolve_hf_token, serve_spec
+    from .serve_worker import API_KEY_ENV_VAR
+
+    job_config = None
+    source_job = getattr(request.model, "job_id", None)
+    if source_job and job_manager is not None:
+        job = job_manager.get_job(source_job)
+        job_config = job.config if job else None
+    payload = {
+        "job_id": session_id,
+        "stage": "serve",
+        "serve": serve_spec(plan),
+        # Tokens never ride in the payload; HF_TOKEN travels as its own variable.
+        "config": {"base_model": plan.model_id, "output_name": plan.served_model_name},
+        "artifact_store": plan.artifact_store or {},
+        "artifacts_in": [plan.artifact] if plan.artifact else [],
+        "artifacts_out": [],
+    }
+    env = {
+        JOB_ENV_VAR: base64.b64encode(json.dumps(payload).encode()).decode(),
+        TOKEN_ENV_VAR: secrets.token_urlsafe(32),
+        API_KEY_ENV_VAR: api_key,
+    }
+    hf_token = resolve_hf_token(request, job_config)
+    if hf_token:
+        env["HF_TOKEN"] = hf_token
+    if plan.artifact_store:
+        env.update(artifact_worker_env(plan.artifact_store))
+    return InstanceSpec(
+        name=f"merlina-{session_id}-serve",
+        image=plan.worker_image,
+        gpu_type_id=plan.sizing.gpu_type_id,
+        gpu_count=plan.sizing.gpu_count,
+        container_disk_gb=getattr(request, "container_disk_gb", None)
+                          or max(int(plan.sizing.disk_required_gb), 50),
+        cloud_type=plan.sizing.cloud_type,
+        env=env,
+        http_ports=[WORKER_PORT, SERVE_PORT],
+        docker_start_cmd=["python3", "-m", "src.remote.worker_entry"],
+    )
+
+
+class _TolerantStatusPoller:
+    """``client.status()`` that rides out provider-proxy blips (returns None)
+    for up to ``tolerance_s`` before declaring the worker lost."""
+
+    def __init__(self, client: WorkerClient, tolerance_s: float, label: str):
+        self.client, self.tolerance_s, self.label = client, tolerance_s, label
+        self._since: Optional[float] = None
+
+    def poll(self):
+        try:
+            status = self.client.status()
+        except Exception as e:
+            if _is_auth_error(e):
+                raise RemoteStageError(f"Worker rejected the control plane's token: {e}") from e
+            now = time.monotonic()
+            if self._since is None:
+                self._since = now
+                logger.warning("Worker status for %s unreachable (%s); retrying", self.label, e)
+            elif now - self._since > self.tolerance_s:
+                raise RemoteStageError(
+                    f"Worker status unreachable for {self.tolerance_s / 60:.0f} minutes: {e}") from e
+            return None
+        if self._since is not None:
+            logger.info("Worker status for %s reachable again", self.label)
+            self._since = None
+        return status
+
+
+def _drive_serve_session(*, session_id, sessions, client, instance, provider, plan,
+                         lifecycle, owner, tick, poll_interval_s, settings) -> str:
+    """Wait for ``serving``, publish the endpoint, hold. Returns the stop reason;
+    raises :class:`RemoteStageError` when the worker or vLLM fails."""
+    deadline_reason = plan.deadline_reason
+    # The plan priced the session from offers; the provider's actual rate
+    # may differ. Re-derive the total-cost deadline durably (never later).
+    if plan.max_total_cost_usd and instance.cost_per_hr:
+        run = lifecycle.run(session_id)
+        cost_deadline = run["started_at"] + plan.max_total_cost_usd / instance.cost_per_hr * 3600
+        if cost_deadline < run["deadline"]:
+            deadline_reason = "max_total_cost_usd"
+        sessions.update(session_id, deadline_at=lifecycle.tighten_deadline(session_id, owner, cost_deadline))
+
+    def stop_requested() -> bool:
+        current = sessions.get(session_id)
+        return current is None or current.stop_requested
+
+    def record(**fields):
+        current = sessions.get(session_id)
+        sessions.update(session_id, metrics={**(current.metrics if current else {}), **fields})
+
+    sessions.update(session_id, status="starting")
+    record(deadline_reason=deadline_reason, instance={
+        "instance_id": instance.instance_id, "provider": instance.provider,
+        "cost_per_hr": instance.cost_per_hr or plan.sizing.est_cost_per_hr,
+        "gpu_type_id": plan.sizing.gpu_type_id, "gpu_count": plan.sizing.gpu_count})
+
+    def failure(status) -> RemoteStageError:
+        tail = status.serve.get("log_tail")
+        if tail:
+            record(log_tail=tail)
+        return RemoteStageError(f"Serve stage failed on the worker: {status.error or 'unknown error'}")
+
+    tolerance_s = getattr(settings, "remote_status_error_tolerance_minutes",
+                          DEFAULT_STATUS_ERROR_TOLERANCE_MIN) * 60
+    poller = _TolerantStatusPoller(client, tolerance_s, f"inference session {session_id}")
+
+    # ---- Phase 1: model download + vLLM startup ----
+    while True:
+        tick()
+        if stop_requested():
+            raise RemoteStopped()
+        status = poller.poll()
+        if status is not None:
+            if status.state == STATE_FAILED:
+                raise failure(status)
+            if status.state == STATE_SERVING:
+                break
+            if status.is_terminal:
+                raise RemoteStageError("Worker finished before it started serving")
+        time.sleep(poll_interval_s)
+
+    base_url = (provider.proxy_url(instance, SERVE_PORT) or "").rstrip("/")
+    if not base_url:
+        raise RemoteStageError(f"Provider {provider.name} returned no serve proxy URL")
+    base_url += status.serve.get("openai_base_path") or "/v1"
+    served = status.serve.get("served_model_name") or plan.served_model_name
+    sessions.update(session_id, status="ready", base_url=base_url, served_model_name=served,
+                    ready_at=time.time())
+    logger.info("Inference session %s ready at %s (model %r)", session_id, base_url, served)
+
+    # ---- Phase 2: hold until something ends the session ----
+    idle_limit_s = plan.idle_timeout_minutes * 60 if plan.idle_timeout_minutes else None
+    last_stats = None
+    while True:
+        try:
+            tick()
+        except RemoteBudgetExceeded:
+            return deadline_reason
+        if stop_requested():
+            return "user"
+        status = poller.poll()
+        if status is not None:
+            if status.state == STATE_FAILED:
+                raise failure(status)
+            if status.is_terminal:
+                return "worker_stopped"
+            stats = {k: status.serve.get(k) for k in
+                     ("requests", "inflight", "idle_seconds", "rejected_requests")}
+            if stats != last_stats:
+                record(serve=stats)
+                last_stats = stats
+            if idle_limit_s and (status.serve.get("idle_seconds") or 0) >= idle_limit_s:
+                logger.info("Inference session %s idle for %.0f min; stopping",
+                            session_id, idle_limit_s / 60)
+                return "idle_timeout"
+        time.sleep(poll_interval_s)
+
+
+def _estimate_spend(resources: List[dict], now: Optional[float] = None) -> Optional[float]:
+    """Dollars billed so far across a run's resources (None when unpriced)."""
+    now = now or time.time()
+    total, priced = 0.0, False
+    for r in resources:
+        if r.get("cost_per_hr") is None:
+            continue
+        priced = True
+        end = r.get("terminated_at") or now
+        total += max(0.0, end - r["started_at"]) / 3600 * r["cost_per_hr"]
+    return round(total, 4) if priced else None
 
 
 # ---------------------------------------------------------------------------

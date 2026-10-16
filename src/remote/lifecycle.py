@@ -98,6 +98,18 @@ class RemoteLifecycle:
             if not result.rowcount:
                 raise RemoteLeaseLost("Remote execution lease or total job deadline expired")
 
+    def tighten_deadline(self, job_id, owner, deadline):
+        """Move the total deadline earlier (never later); returns the result.
+
+        Used when the real hourly price is only known after provisioning, so a
+        total-cost cap becomes a durable deadline the reconciler also enforces.
+        """
+        with self.connect() as db:
+            db.execute("UPDATE remote_runs SET deadline=MIN(deadline, ?) WHERE job_id=? AND owner=?",
+                       (deadline, job_id, owner))
+            row = db.execute("SELECT deadline FROM remote_runs WHERE job_id=?", (job_id,)).fetchone()
+        return row[0] if row else None
+
     def intent(self, job_id, owner, stage_name, provider):
         """Commit ownership and stable discovery label BEFORE calling the provider."""
         now = self.clock()
