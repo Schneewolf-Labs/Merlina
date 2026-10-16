@@ -1,0 +1,39 @@
+# Merlina serve worker - remote inference sessions
+#
+# What a rented GPU instance runs for a remote inference session
+# (POST /remote/inference): the stock vLLM OpenAI-server image plus the
+# handful of Merlina modules the serve worker needs. It deliberately does
+# NOT contain the training stack - the worker only pulls artifacts, launches
+# `vllm serve`, guards it with an API-key proxy and reports status.
+#
+# The module list below is the serve worker's whole import surface;
+# tests/test_remote_serve_image.py fails if a new import is not copied.
+#
+# Build:  docker build -f Dockerfile.serve -t ghcr.io/schneewolf-labs/merlina-serve:latest .
+# CI builds and pushes it alongside the main image (.github/workflows/docker.yml).
+# Point Merlina at another tag with REMOTE_SERVE_IMAGE or per request (worker_image).
+
+# Pin an exact vLLM release; bump deliberately (new model support, fixes).
+FROM vllm/vllm-openai:v0.30.0
+
+# vLLM already ships pydantic, requests and huggingface_hub. The worker also
+# needs pydantic-settings (config.py) and s3fs (S3/R2 artifact pulls).
+RUN python3 -m pip install --no-cache-dir "pydantic-settings>=2.0.0" "s3fs>=2023.1.0"
+
+WORKDIR /app
+
+COPY version.py config.py ./
+COPY src/__init__.py src/constants.py src/exceptions.py src/job_manager.py \
+     src/websocket_manager.py src/
+COPY src/remote/__init__.py src/remote/spec.py src/remote/worker_client.py \
+     src/remote/worker_entry.py src/remote/serve_worker.py src/remote/artifacts.py \
+     src/remote/s3_artifacts.py src/remote/artifact_capabilities.py src/remote/
+
+# 8000: token-authenticated worker status API (control plane only)
+# 8001: OpenAI-compatible endpoint behind the API-key proxy
+# vLLM itself listens on 127.0.0.1:8002 and is never exposed.
+EXPOSE 8000 8001
+
+# The base image's entrypoint is `vllm serve`; the worker launches vLLM itself.
+ENTRYPOINT []
+CMD ["python3", "-m", "src.remote.worker_entry"]

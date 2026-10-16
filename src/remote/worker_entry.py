@@ -17,6 +17,10 @@ Stages:
           CPU (``merge_lora_to_directory``), and pushes/publishes the
           result. Needs RAM and disk, not GPU — this is the stage you run
           on a different, cheaper machine.
+  serve — launches vLLM behind an API-key proxy and holds in the
+          ``serving`` state until stopped (``src/remote/serve_worker.py``).
+          Runs in the slim vLLM-based serve image, so everything it touches
+          must stay stdlib + artifact-store code.
 
 The module top level imports no ML libraries, so the status server and
 payload handling are unit-testable anywhere; heavy imports happen inside
@@ -65,6 +69,8 @@ class WorkerState:
         self._state = STATE_STARTING
         self._error: Optional[str] = None
         self._artifacts: List[str] = []
+        self._serve: Dict[str, Any] = {}
+        self._serve_probe = None
 
     def set_state(self, state: str) -> None:
         with self._lock:
@@ -79,13 +85,32 @@ class WorkerState:
         with self._lock:
             self._artifacts.append(name)
 
+    def set_serve(self, **fields: Any) -> None:
+        """Merge serve-stage details into the ``serve`` block of /status."""
+        with self._lock:
+            self._serve.update(fields)
+
+    def set_serve_probe(self, probe) -> None:
+        """A callable returning live serve stats, merged in at snapshot time."""
+        with self._lock:
+            self._serve_probe = probe
+
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
-            return {
+            snap = {
                 "state": self._state,
                 "error": self._error,
                 "artifacts": list(self._artifacts),
             }
+            serve, probe = dict(self._serve), self._serve_probe
+        if probe is not None:
+            try:
+                serve.update(probe())
+            except Exception:
+                logger.debug("serve probe failed", exc_info=True)
+        if serve:
+            snap["serve"] = serve
+        return snap
 
 
 def build_status_payload(state: WorkerState, job_manager: Optional[JobManager],
@@ -306,9 +331,16 @@ def run_merge_stage(payload: Dict[str, Any], job_manager: JobManager,
                            output_dir=str(merged_dir))
 
 
+def run_serve_stage(payload: Dict[str, Any], job_manager: JobManager,
+                    state: WorkerState) -> None:
+    from src.remote.serve_worker import run_serve_stage as _run
+    _run(payload, job_manager, state)
+
+
 STAGE_RUNNERS = {
     "train": run_train_stage,
     "merge": run_merge_stage,
+    "serve": run_serve_stage,
 }
 
 
