@@ -9,7 +9,8 @@ expose one HTTP port works.
 Endpoints:
   GET  /health                  → {"ok": true, ...}
   GET  /status?since_step=N     → WorkerStatus payload (see below)
-  POST /stop                    → request graceful stop
+  POST /stop                    → request graceful stop (a "serve" stage
+                                  shuts vLLM down and exits)
 
 All requests carry ``X-Merlina-Worker-Token``; the worker rejects
 anything else, since provider proxy URLs are guessable.
@@ -27,12 +28,18 @@ import requests
 logger = logging.getLogger(__name__)
 
 WORKER_PORT = 8000
+# A "serve" stage exposes the OpenAI-compatible endpoint here, behind an
+# API-key proxy (vLLM itself only listens on the instance's loopback).
+SERVE_PORT = 8001
 TOKEN_HEADER = "X-Merlina-Worker-Token"
 
 # Worker top-level states
 STATE_STARTING = "starting"
 STATE_RUNNING = "running"
 STATE_PUSHING = "pushing_artifacts"
+# Non-terminal: a "serve" stage reached this once vLLM answers requests and
+# holds it until stopped. ``WorkerStatus.serve`` carries the details.
+STATE_SERVING = "serving"
 STATE_DONE = "done"
 STATE_FAILED = "failed"
 TERMINAL_STATES = (STATE_DONE, STATE_FAILED)
@@ -46,6 +53,9 @@ class WorkerStatus:
     job: Dict[str, Any] = field(default_factory=dict)      # mirrored JobRecord fields
     new_metrics: List[Dict[str, Any]] = field(default_factory=list)
     artifacts: List[str] = field(default_factory=list)
+    # Serve stage only: openai_base_path, served_model_name, requests,
+    # idle_seconds, log_tail (on failure), ...
+    serve: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def is_terminal(self) -> bool:
@@ -59,6 +69,7 @@ class WorkerStatus:
             job=data.get("job") or {},
             new_metrics=data.get("new_metrics") or [],
             artifacts=data.get("artifacts") or [],
+            serve=data.get("serve") or {},
         )
 
 

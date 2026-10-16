@@ -231,6 +231,16 @@ async def _reconcile_jobs_after_restart():
         except Exception as e:
             logger.warning(f"Worker reattach scan failed: {e}")
         try:
+            # Session threads never survive a restart; the reconciler below
+            # terminates their pods once the dead controller's lease lapses.
+            orphaned = _inference_sessions.fail_orphans(
+                "Merlina restarted while this session was active; its instance is "
+                "terminated by the remote reconciler.", created_before=_PROCESS_STARTED_AT)
+            if orphaned:
+                logger.warning(f"Marked {len(orphaned)} orphaned remote inference session(s) failed")
+        except Exception:
+            logger.exception("Could not reconcile remote inference sessions after restart")
+        try:
             # Startup pass, then periodic passes while remote work is outstanding:
             # a run whose lease was still valid at restart must be re-checked.
             from src.remote.cleanup import start_reconciler
@@ -1571,6 +1581,161 @@ async def preview_remote_plan(config: TrainingConfig):
         return plan.to_dict()
     except RemotePlanError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ===== Remote inference sessions (vLLM on rented GPUs) =====
+#
+# Train remotely -> serve the adapter/merged model on a rented GPU behind an
+# OpenAI-compatible API -> point an eval harness at base_url -> stop. Sessions
+# persist in the jobs DB (their own table); the API key lives in memory only.
+
+from src.remote.inference import RemoteInferenceRequest  # noqa: E402  (pydantic only)
+from src.remote.sessions import InferenceSessionStore  # noqa: E402
+
+_inference_sessions = InferenceSessionStore(settings.database_path)
+_PROCESS_STARTED_AT = datetime.now().timestamp()   # older sessions have no live controller
+
+
+async def _live_gpu_offers(provider_name: str):
+    """Live provider offers when a key is configured; None falls back to the static catalog."""
+    if not settings.runpod_api_key:
+        return None
+    from src.remote.providers import ProviderError, get_provider
+    try:
+        prov = get_provider(provider_name, api_key=settings.runpod_api_key)
+        return await asyncio.to_thread(prov.list_gpu_offers)
+    except ProviderError as e:
+        logger.warning(f"Could not fetch live GPU offers: {e}")
+        return None
+
+
+async def _plan_inference_session(request: RemoteInferenceRequest):
+    from src.remote.inference import build_serve_plan
+    from src.remote.lifecycle import RemoteLifecycle
+    from src.remote.plan import RemotePlanError
+
+    offers = await _live_gpu_offers(request.provider)
+    try:
+        return await asyncio.to_thread(
+            build_serve_plan, request, offers=offers, job_manager=job_manager,
+            lifecycle=RemoteLifecycle(job_manager.db_path), settings=settings,
+        )
+    except RemotePlanError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+def _launch_inference_session(session_id: str, request: RemoteInferenceRequest, plan) -> None:
+    """Drive a session on its own thread (sessions hold for hours, so they
+    don't take a slot in the remote training queue)."""
+    from src.remote.orchestrator import run_inference_remote
+    threading.Thread(
+        target=run_inference_remote,
+        args=(session_id, request, _inference_sessions),
+        kwargs={"plan": plan, "job_manager": job_manager},
+        name=f"RemoteInference-{session_id}",
+        daemon=True,
+    ).start()
+
+
+def _session_view(session, *, include_key: bool) -> dict:
+    from src.remote.sessions import api_key_for
+    data = session.to_public_dict()
+    if include_key:
+        key = None if session.is_terminal else api_key_for(session.session_id)
+        data["api_key"] = key
+        if session.base_url and key:
+            data["openai"] = {
+                "base_url": session.base_url,
+                "model": session.served_model_name,
+                "example": (f"curl {session.base_url}/chat/completions "
+                            "-H \"Authorization: Bearer $API_KEY\" -H 'Content-Type: application/json' "
+                            f"-d '{{\"model\": \"{session.served_model_name}\", "
+                            "\"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}]}'"),
+            }
+    return data
+
+
+@app.post("/remote/inference/plan", tags=["Remote Inference"],
+          summary="Dry-run a remote inference session (no provisioning)")
+async def plan_remote_inference(request: RemoteInferenceRequest):
+    """
+    Size, price and time-box a remote inference session without renting
+    anything: GPU type and count, tensor parallelism, $/hr, estimated VRAM
+    (weights at real checkpoint size + KV cache + overhead), the effective
+    deadline and the maximum total cost. Approve spend from this, then POST
+    the same body to ``/remote/inference``.
+    """
+    plan = await _plan_inference_session(request)
+    return plan.to_dict()
+
+
+@app.post("/remote/inference", tags=["Remote Inference"],
+          summary="Start a remote inference session")
+async def start_remote_inference(request: RemoteInferenceRequest):
+    """
+    Rent a GPU instance and serve a model (HF repo, or a remote training
+    job's adapter/merged artifact) with vLLM behind an OpenAI-compatible API.
+    Poll ``GET /remote/inference/{session_id}`` until ``status == "ready"``
+    for ``base_url`` and ``api_key``. The instance is always terminated on
+    stop, idle timeout, ``max_runtime_hours`` or ``max_total_cost_usd``.
+    """
+    if not settings.runpod_api_key:
+        raise HTTPException(status_code=400, detail="Remote inference needs RUNPOD_API_KEY in .env")
+    active = await asyncio.to_thread(_inference_sessions.count_active)
+    if active >= settings.remote_max_inference_sessions:
+        raise HTTPException(
+            status_code=409,
+            detail=f"{active} inference session(s) already active "
+                   f"(REMOTE_MAX_INFERENCE_SESSIONS={settings.remote_max_inference_sessions}); "
+                   "stop one first.")
+    plan = await _plan_inference_session(request)
+
+    from src.remote.sessions import new_session_id
+    session_id = new_session_id()
+    await asyncio.to_thread(_inference_sessions.create, session_id, request.model_dump())
+    await asyncio.to_thread(_inference_sessions.update, session_id, plan=plan.to_dict(),
+                            served_model_name=plan.served_model_name)
+    _launch_inference_session(session_id, request, plan)
+    cost = (f"~${plan.sizing.est_cost_per_hr:.2f}/hr" if plan.sizing.est_cost_per_hr
+            else "price unknown")
+    return {
+        "session_id": session_id,
+        "status": "queued",
+        "plan": plan.to_dict(),
+        "message": (f"Summoning {plan.sizing.gpu_count}x {plan.sizing.gpu_type_id} ({cost}) to "
+                    f"serve '{plan.served_model_name}'; it will be dismissed within "
+                    f"{plan.effective_max_hours:g} h at the latest."),
+    }
+
+
+@app.get("/remote/inference", tags=["Remote Inference"], summary="List remote inference sessions")
+async def list_remote_inference(limit: int = 100):
+    """All sessions, newest first. Never includes API keys."""
+    sessions = await asyncio.to_thread(_inference_sessions.list, max(1, min(limit, 1000)))
+    return {"sessions": [_session_view(s, include_key=False) for s in sessions]}
+
+
+@app.get("/remote/inference/{session_id}", tags=["Remote Inference"],
+         summary="Get a remote inference session (base_url + api_key)")
+async def get_remote_inference(session_id: str):
+    """Session status. Once ``ready``: ``base_url`` (OpenAI-compatible, ends in
+    ``/v1``), ``served_model_name`` and the session's ``api_key``."""
+    session = await asyncio.to_thread(_inference_sessions.get, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Inference session {session_id} not found")
+    return _session_view(session, include_key=True)
+
+
+@app.post("/remote/inference/{session_id}/stop", tags=["Remote Inference"],
+          summary="Stop a remote inference session")
+async def stop_remote_inference(session_id: str):
+    """Request a stop; the controller terminates the instance within one poll interval."""
+    session = await asyncio.to_thread(_inference_sessions.get, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Inference session {session_id} not found")
+    if not session.is_terminal:
+        session = await asyncio.to_thread(_inference_sessions.request_stop, session_id)
+    return _session_view(session, include_key=False)
 
 
 @app.post("/estimate/vram", response_model=dict, tags=["Training"], summary="Estimate training VRAM for a configuration")

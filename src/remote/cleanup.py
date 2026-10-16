@@ -45,6 +45,10 @@ def reconcile_once(lifecycle, providers, *, job_manager=None, execution_guard_fa
     if stop_grace_seconds is None:
         from config import settings
         stop_grace_seconds = settings.remote_stop_grace_minutes * 60
+    # Inference sessions own remote resources too; without this their live
+    # pods would look like resources of a deleted job and be terminated.
+    from .sessions import with_inference_sessions
+    job_manager = with_inference_sessions(job_manager)
     expired = lifecycle.expire_runs()
     for job_id in expired:
         if job_manager:

@@ -24,6 +24,7 @@ from .spec import (
     SizingDecision,
     StagePlan,
     RemotePlan,
+    ServePlan,
 )
 
 __all__ = [
@@ -34,4 +35,5 @@ __all__ = [
     "SizingDecision",
     "StagePlan",
     "RemotePlan",
+    "ServePlan",
 ]

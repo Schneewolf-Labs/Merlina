@@ -90,6 +90,13 @@ class ModelSpecs:
     moe_intermediate_size: Optional[int] = None
     first_k_dense_layers: int = 0
 
+    # Attention/KV facts used by serve-time KV-cache sizing. MLA models
+    # (DeepSeek-V2/V3-style) cache a compressed latent of width
+    # kv_lora_rank + qk_rope_head_dim instead of per-head K/V.
+    kv_lora_rank: Optional[int] = None
+    qk_rope_head_dim: Optional[int] = None
+    max_position_embeddings: Optional[int] = None
+
     total_params_b: Optional[float] = None
     active_params_b: Optional[float] = None
     weight_bytes_total: Optional[int] = None   # from safetensors index metadata
@@ -126,7 +133,7 @@ class SizingDecision:
 @dataclass
 class StagePlan:
     """One stage of a piecemeal remote run."""
-    name: str                              # "train" | "merge"
+    name: str                              # "train" | "merge" | "serve"
     target: str                            # "remote" | "local" | "skip"
     sizing: Optional[SizingDecision] = None
     artifacts_in: List[str] = field(default_factory=list)
@@ -150,5 +157,45 @@ class RemotePlan:
 
     def to_dict(self) -> Dict[str, Any]:
         """JSON-safe summary for API responses and job metadata."""
+        from dataclasses import asdict
+        return asdict(self)
+
+
+@dataclass
+class ServePlan:
+    """
+    Dry-run plan for a remote inference session: what gets served, on which
+    instance, at what price, and when it is forcibly torn down. Built by
+    :func:`src.remote.inference.build_serve_plan`; the same object drives
+    the real session, so what the owner approves is what runs.
+    """
+    model_source: Dict[str, Any]           # {"hf_repo", "revision"} | {"job_id", "artifact"}
+    model_id: str                          # what vLLM loads (HF id, or the base for an adapter)
+    revision: Optional[str]
+    served_model_name: str                 # name clients pass as "model"
+    base_served_model_name: Optional[str]  # adapter sessions also serve the bare base
+    lora: bool                             # serve base + LoRA adapter (vLLM --enable-lora)
+    max_lora_rank: Optional[int]
+    artifact: Optional[str]                # "merged" | "adapter" when pulled from a store
+    artifact_store: Optional[Dict[str, Any]]
+    model_specs: Optional[ModelSpecs]
+    sizing: SizingDecision
+    tensor_parallel_size: int
+    max_model_len: int
+    max_num_seqs: int
+    gpu_memory_utilization: float
+    vram_breakdown: Dict[str, float]
+    max_runtime_hours: float
+    max_total_cost_usd: Optional[float]
+    idle_timeout_minutes: Optional[float]
+    effective_max_hours: float             # min(runtime cap, total-cost cap / $/hr)
+    deadline_reason: str                   # "max_runtime_hours" | "max_total_cost_usd"
+    est_max_total_cost_usd: Optional[float]
+    worker_image: str
+    vllm_args: List[str] = field(default_factory=list)
+    vllm_command: List[str] = field(default_factory=list)   # display only; never holds the key
+    warnings: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
         from dataclasses import asdict
         return asdict(self)

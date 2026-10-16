@@ -22,6 +22,7 @@ Start here if you want to use Merlina to train models:
 - **[Tokenizer Format Guide](user/tokenizer-format.md)** - Use automatic chat formatting (recommended!)
 - **[MCP Server Guide](user/mcp.md)** - Drive Merlina from an LLM agent via Model Context Protocol
 - **[Remote Training](user/remote-training.md)** - Current self-hosted RunPod workflow
+- **[Remote Inference](user/remote-inference.md)** - Serve trained models on rented GPUs (vLLM, OpenAI-compatible) for evals
 - **[Internal Dataset Store](internal-dataset-store.md)** - Existing S3/MinIO/R2 dataset support
 - **[Storage Tiers](storage-tiers.md)** - Browse, sync and prune your S3/MinIO/R2 buckets
 

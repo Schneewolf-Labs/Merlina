@@ -17,6 +17,7 @@
    - [Dataset Management](#dataset-management)
    - [Configuration Management](#configuration-management)
    - [Model Management](#model-management)
+   - [Remote Inference](#remote-inference)
 6. [WebSocket API](#websocket-api)
 7. [Request/Response Schemas](#requestresponse-schemas)
 8. [Error Handling](#error-handling)
@@ -1259,6 +1260,143 @@ Lists currently cached model tokenizers.
   "count": 2
 }
 ```
+
+---
+
+### Remote Inference
+
+Serve a model on a rented GPU (your RunPod account, `RUNPOD_API_KEY`) with
+vLLM behind an OpenAI-compatible endpoint, and always tear it down. User
+guide: [docs/user/remote-inference.md](docs/user/remote-inference.md).
+
+#### Plan a Session (dry run)
+
+```http
+POST /remote/inference/plan
+```
+
+Sizes, prices and time-boxes a session **without provisioning anything**.
+
+**Request Body** (same body as `POST /remote/inference`):
+```json
+{
+  "model": {"job_id": "job_20261016_101500_ab12cd", "artifact": "adapter"},
+  "max_runtime_hours": 2,
+  "max_total_cost_usd": 5,
+  "idle_timeout_minutes": 20,
+  "max_model_len": 8192,
+  "max_num_seqs": 8
+}
+```
+
+`model` is either `{"hf_repo": "org/name", "revision": "..."}` or
+`{"job_id": "...", "artifact": "adapter" | "merged"}` (remote training jobs
+only). Other fields: `served_model_name`, `hf_token` (never stored),
+`gpu_type_id`, `gpu_count`, `cloud_type`, `container_disk_gb`,
+`max_cost_per_hr`, `tensor_parallel_size`, `gpu_memory_utilization`,
+`vllm_args`, `worker_image`, `keep_instance_on_failure`.
+
+**Response (abridged):**
+```json
+{
+  "model_id": "org/base",
+  "served_model_name": "my-tune",
+  "base_served_model_name": "org/base",
+  "lora": true,
+  "sizing": {"gpu_type_id": "NVIDIA L40S", "gpu_count": 1, "est_cost_per_hr": 1.10},
+  "tensor_parallel_size": 1,
+  "vram_breakdown": {"weights_gb": 15.2, "kv_cache_gb": 8.0, "overhead_gb": 2.0,
+                     "lora_gb": 2.0, "total_gb": 27.2, "weights_exact": true},
+  "effective_max_hours": 2.0,
+  "deadline_reason": "max_runtime_hours",
+  "est_max_total_cost_usd": 2.2,
+  "vllm_command": ["vllm", "serve", "org/base", "--enable-lora", "..."],
+  "warnings": []
+}
+```
+
+**Status Codes:**
+- `200 OK` - Plan built
+- `400 Bad Request` - Cannot be planned (unknown/local/unfinished job, missing artifact, nothing fits)
+- `422 Unprocessable Entity` - Invalid request (e.g. `max_runtime_hours` > 24, reserved `vllm_args`)
+
+---
+
+#### Start a Session
+
+```http
+POST /remote/inference
+```
+
+Same body as the plan. Returns immediately; the session provisions in the background.
+
+**Response:**
+```json
+{
+  "session_id": "inf_20261016_103000_1a2b3c",
+  "status": "queued",
+  "plan": {"...": "as above"},
+  "message": "Summoning 1x NVIDIA L40S (~$1.10/hr) to serve 'my-tune'; ..."
+}
+```
+
+**Status Codes:**
+- `200 OK` - Session started
+- `400 Bad Request` - No `RUNPOD_API_KEY`, or the plan failed
+- `409 Conflict` - `REMOTE_MAX_INFERENCE_SESSIONS` already active
+
+---
+
+#### Get a Session
+
+```http
+GET /remote/inference/{session_id}
+```
+
+Session statuses: `queued` → `provisioning` → `starting` → `ready` →
+(`stopping`) → `stopped` | `expired` | `failed`. Once `ready`, the response
+includes the endpoint and its key:
+
+```json
+{
+  "session_id": "inf_20261016_103000_1a2b3c",
+  "status": "ready",
+  "base_url": "https://<pod-id>-8001.proxy.runpod.net/v1",
+  "served_model_name": "my-tune",
+  "api_key": "<random per-session key>",
+  "deadline_at": 1792150000.0,
+  "stop_reason": null,
+  "metrics": {"instance": {"gpu_type_id": "NVIDIA L40S", "cost_per_hr": 1.1},
+              "serve": {"requests": 42, "inflight": 1, "idle_seconds": 0.0}}
+}
+```
+
+`api_key` is only returned here, only while the session is active, and is
+never persisted. Ended sessions include `stop_reason` (`user`,
+`idle_timeout`, `max_runtime_hours`, `max_total_cost_usd`, `worker_stopped`,
+`error`, `orphaned`), `metrics.est_cost_usd`, and on vLLM failures
+`metrics.log_tail`.
+
+---
+
+#### List Sessions
+
+```http
+GET /remote/inference?limit=100
+```
+
+Newest first. Never includes API keys.
+
+---
+
+#### Stop a Session
+
+```http
+POST /remote/inference/{session_id}/stop
+```
+
+Requests a stop. The instance is terminated within one poll interval.
+Stopping an ended session is a no-op.
 
 ---
 

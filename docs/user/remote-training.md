@@ -122,3 +122,11 @@ the worker runs the exact same training pipeline as local Merlina
 models that don't fit one GPU), pushes the adapter to the artifact repo,
 and reports done; the control plane pulls the adapter into `./models/`,
 runs or skips the merge per plan, and tears everything down.
+
+## Next: serve and evaluate it
+
+A finished remote job's adapter (or remote-merged weights) can be served
+straight from its artifact store on a rented GPU, behind an
+OpenAI-compatible endpoint, for evals. Pass
+`{"model": {"job_id": "<job_id>"}}` to `POST /remote/inference`. See
+[Remote Inference](remote-inference.md).

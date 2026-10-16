@@ -625,6 +625,19 @@ with local GPU slots; preflight has a remote branch (`_check_remote_config`)
 that skips local GPU/VRAM/disk checks; endpoints `POST /remote/plan`
 (preview sizing without provisioning) and `GET /remote/offers`.
 
+**Remote inference (serve stage):** `src/remote/inference.py` (request
+models + `build_serve_plan`, backing `POST /remote/inference/plan`),
+`run_inference_remote` in `orchestrator.py`, `serve_worker.py` (on the
+instance: vLLM subprocess on loopback + API-key proxy on :8001),
+`sessions.py` (`remote_inference_sessions` table, in-memory API keys, and
+the `with_inference_sessions` bridge the reconciler needs so live serve pods
+aren't mistaken for deleted jobs). Serve sizing (`estimate_serve_vram_gb`)
+uses real checkpoint bytes + KV cache, not the training estimator.
+`Dockerfile.serve` copies only the serve worker's import surface, so keep
+`serve_worker.py` stdlib-only, and add any new module it imports to the
+Dockerfile (`tests/test_remote_serve_image.py` enforces this). Guide:
+`docs/user/remote-inference.md`.
+
 **Limitations (current):** HF Hub datasets/models only (uploads and local
 paths don't travel), text-LLM modes only, on-demand instances only (no
 spot/resume). Tests: `tests/test_remote_*.py` (all run without network or
