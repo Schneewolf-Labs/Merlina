@@ -158,6 +158,11 @@ class Settings(BaseSettings):
     # Container image the provisioned worker instances run. Must contain
     # Merlina (the worker entry is `python -m src.remote.worker_entry`).
     remote_worker_image: str = "ghcr.io/schneewolf-labs/merlina:latest"
+    # Image for remote inference sessions (vLLM + the slim serve worker,
+    # built from Dockerfile.serve). Overridable per request (worker_image).
+    remote_serve_image: str = "ghcr.io/schneewolf-labs/merlina-serve:latest"
+    # Concurrent remote inference sessions (each one is a billing GPU pod).
+    remote_max_inference_sessions: int = 2
     # Remote jobs don't occupy a local GPU, so they get their own queue.
     remote_max_concurrent_jobs: int = 2
     # Control-plane polling cadence against remote workers (seconds).

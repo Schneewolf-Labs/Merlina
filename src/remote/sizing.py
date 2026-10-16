@@ -87,6 +87,9 @@ def parse_model_specs(model_id: str, config: Dict[str, Any],
         num_shared_experts=_get("n_shared_experts"),
         moe_intermediate_size=_get("moe_intermediate_size"),
         first_k_dense_layers=_get("first_k_dense_replace", default=0) or 0,
+        kv_lora_rank=_get("kv_lora_rank"),
+        qk_rope_head_dim=_get("qk_rope_head_dim"),
+        max_position_embeddings=_get("max_position_embeddings", "n_positions"),
         weight_bytes_total=weight_bytes_total,
     )
 
@@ -132,20 +135,22 @@ def _estimate_params_b(specs: ModelSpecs, active_only: bool) -> Optional[float]:
     return total / 1e9
 
 
-def fetch_model_specs(model_id: str, hf_token: Optional[str] = None) -> ModelSpecs:
+def fetch_model_specs(model_id: str, hf_token: Optional[str] = None,
+                      revision: Optional[str] = None) -> ModelSpecs:
     """
     Fetch ``config.json`` (and the safetensors index, when present) from
     the HuggingFace Hub and parse it into :class:`ModelSpecs`.
     """
     from huggingface_hub import hf_hub_download
 
-    config_path = hf_hub_download(model_id, "config.json", token=hf_token)
+    config_path = hf_hub_download(model_id, "config.json", token=hf_token, revision=revision)
     with open(config_path) as f:
         config = json.load(f)
 
     weight_bytes = None
     try:
-        index_path = hf_hub_download(model_id, "model.safetensors.index.json", token=hf_token)
+        index_path = hf_hub_download(model_id, "model.safetensors.index.json", token=hf_token,
+                                     revision=revision)
         with open(index_path) as f:
             index = json.load(f)
         weight_bytes = (index.get("metadata") or {}).get("total_size")
@@ -246,6 +251,109 @@ def estimate_train_vram_gb(
     return round(estimate.total_gb, 1)
 
 
+# ---------------------------------------------------------------------------
+# Serve-time (vLLM) sizing
+# ---------------------------------------------------------------------------
+
+GIB = 1024 ** 3
+# KV cache is held in bf16/fp16 by default (vLLM --kv-cache-dtype auto).
+KV_BYTES_PER_ELEMENT = 2
+# Used when config.json lacks the attention fields needed to compute the
+# per-token KV footprint. 1 MiB/token is more than any common dense or GQA
+# decoder needs (Llama-3-70B: 0.31 MiB; Qwen2.5-72B: 0.31 MiB; a 27B
+# Gemma: ~0.48 MiB), so unknown models are over- rather than under-sized.
+DEFAULT_KV_BYTES_PER_TOKEN = 1024 ** 2
+# Activations, sampler buffers and CUDA graphs on top of weights + KV:
+# a floor plus a fraction of the weights (larger models capture larger
+# graphs). Per-GPU CUDA context is accounted for by pick_instance.
+SERVE_OVERHEAD_FLOOR_GB = 2.0
+SERVE_OVERHEAD_WEIGHT_FRACTION = 0.05
+# Room for one LoRA adapter's weights and vLLM's LoRA buffers.
+SERVE_LORA_ALLOWANCE_GB = 2.0
+
+
+def kv_bytes_per_token(specs: ModelSpecs) -> int:
+    """
+    KV-cache bytes one token occupies across all layers.
+
+    - MLA (``kv_lora_rank`` set): one compressed latent of
+      ``kv_lora_rank + qk_rope_head_dim`` per layer.
+    - Otherwise: K and V per KV head, ``2 * kv_heads * head_dim`` per layer.
+    - Missing fields: :data:`DEFAULT_KV_BYTES_PER_TOKEN` (conservative).
+    """
+    layers = specs.num_layers
+    if layers and specs.kv_lora_rank:
+        width = specs.kv_lora_rank + (specs.qk_rope_head_dim or 0)
+        return int(layers * width * KV_BYTES_PER_ELEMENT)
+    kv_heads = specs.num_key_value_heads or specs.num_attention_heads
+    if layers and kv_heads and specs.head_dim:
+        return int(layers * 2 * kv_heads * specs.head_dim * KV_BYTES_PER_ELEMENT)
+    return DEFAULT_KV_BYTES_PER_TOKEN
+
+
+def serve_weights_gb(specs: ModelSpecs) -> float:
+    """
+    Weight memory at the checkpoint's REAL on-disk size.
+
+    The safetensors index ``total_size`` is what vLLM loads, so FP8/FP4
+    checkpoints (e.g. a ~167 GB FP8 MoE) size at their actual bytes instead
+    of the bf16 assumption training sizing makes. Without an index, fall
+    back to bf16 bytes for the estimated parameter count.
+    """
+    if specs.weight_bytes_total:
+        return specs.weight_bytes_total / GIB
+    return (specs.total_params_b or 1.0) * 1e9 * BYTES_PER_PARAM_BF16 / GIB
+
+
+def serve_vram_breakdown(specs: ModelSpecs, max_model_len: int, max_num_seqs: int,
+                         *, lora: bool = False) -> Dict[str, Any]:
+    """Component breakdown behind :func:`estimate_serve_vram_gb` (GiB)."""
+    weights = serve_weights_gb(specs)
+    kv_tokens = max(1, int(max_model_len)) * max(1, int(max_num_seqs))
+    kv = kv_bytes_per_token(specs) * kv_tokens / GIB
+    overhead = max(SERVE_OVERHEAD_FLOOR_GB, weights * SERVE_OVERHEAD_WEIGHT_FRACTION)
+    lora_gb = SERVE_LORA_ALLOWANCE_GB if lora else 0.0
+    total = weights + kv + overhead + lora_gb
+    return {
+        "weights_gb": round(weights, 1),
+        "weights_exact": bool(specs.weight_bytes_total),
+        "kv_cache_gb": round(kv, 1),
+        "kv_bytes_per_token": kv_bytes_per_token(specs),
+        "kv_tokens": kv_tokens,
+        "overhead_gb": round(overhead, 1),
+        "lora_gb": lora_gb,
+        "total_gb": round(total, 1),
+    }
+
+
+def estimate_serve_vram_gb(specs: ModelSpecs, max_model_len: int, max_num_seqs: int,
+                           *, lora: bool = False) -> float:
+    """
+    Estimate total VRAM (GiB, across all GPUs) to serve a model with vLLM.
+
+    weights (real checkpoint bytes) + a KV-cache allowance for
+    ``max_num_seqs`` concurrent sequences at full ``max_model_len`` +
+    runtime overhead (+ a LoRA allowance). The KV term is the worst case;
+    vLLM pages KV, so it only *needs* room for one full sequence to start,
+    but a plan that can't hold the requested concurrency is a plan that
+    queues requests.
+    """
+    return serve_vram_breakdown(specs, max_model_len, max_num_seqs, lora=lora)["total_gb"]
+
+
+def tensor_parallel_counts(specs: Optional[ModelSpecs], max_count: int = 8) -> List[int]:
+    """GPU counts vLLM tensor parallelism can use for this model.
+
+    vLLM requires the attention heads to divide evenly across GPUs; powers
+    of two are what providers sell. Unknown head counts allow all of them.
+    """
+    counts = [c for c in (1, 2, 4, 8) if c <= max_count]
+    heads = specs.num_attention_heads if specs else None
+    if heads:
+        counts = [c for c in counts if heads % c == 0] or [1]
+    return counts
+
+
 def estimate_disk_gb(specs: ModelSpecs, *, merge_stage: bool = False) -> float:
     """
     Disk needed on the instance: base weights download + checkpoints.
@@ -273,6 +381,7 @@ def pick_instance(
     max_cost_per_hr: Optional[float] = None,
     gpu_type_id: Optional[str] = None,
     gpu_count: Optional[int] = None,
+    gpu_counts: Optional[List[int]] = None,
 ) -> SizingDecision:
     """
     Choose the cheapest feasible (gpu_type, count) for a training stage.
@@ -282,6 +391,8 @@ def pick_instance(
     and the *sum* of usable VRAM must cover the requirement, minus
     per-GPU runtime overhead. Explicit ``gpu_type_id``/``gpu_count``
     overrides skip the search but still get a feasibility check.
+    ``gpu_counts`` restricts the search to those counts (vLLM tensor
+    parallelism needs a count that divides the attention heads).
 
     Raises ``ValueError`` when nothing fits (or the explicit pick can't).
     """
@@ -321,6 +432,8 @@ def pick_instance(
         if price is None:
             continue  # not sold on this cloud type
         for count in range(1, max(offer.max_gpu_count, 1) + 1):
+            if gpu_counts is not None and count not in gpu_counts:
+                continue
             if usable(offer, count) < vram_required_gb:
                 continue
             cost = price * count if price else None
