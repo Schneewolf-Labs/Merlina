@@ -37,6 +37,7 @@ and operational setup are required before accepting paid workloads.
 - 🗜️ **4-bit Quantization** - Train large models on consumer GPUs
 - 🪄 **GGUF Export** - Quantize any trained model to GGUF via llama.cpp (Q4_K_M, Q5_K_M, Q8_0, F16, and more)
 - 🔮 **llama-server Inference** - Swap between transformers (base + LoRA) and a llama-server GGUF backend from the UI
+- ☁️ **Remote Training & Inference** - Train on rented RunPod GPUs, then serve the result with vLLM behind an OpenAI-compatible endpoint for evals — spend-capped and always torn down ([training](docs/user/remote-training.md), [inference](docs/user/remote-inference.md))
 - 📦 **Export & Artifacts** - Dedicated Export section for post-hoc GGUF, HuggingFace uploads, and per-model artifact browsing / cleanup
 - 📊 **Real-time Monitoring** - WebSocket updates with live metrics and GPU stats
 - 💾 **Persistent Job Storage** - SQLite database preserves jobs across restarts
@@ -271,6 +272,13 @@ merlina/
 - `POST /inference/unload` — Free VRAM / stop llama-server
 - `GET /inference/status` — Current backend + model
 
+**Remote Inference (rented GPUs, vLLM):**
+- `POST /remote/inference/plan` — Dry run: GPU, $/hr, VRAM, deadline, max total cost
+- `POST /remote/inference` — Start a session (HF repo or a remote training job's adapter/merged artifact)
+- `GET /remote/inference` — List sessions
+- `GET /remote/inference/{id}` — Status, `base_url`, `served_model_name`, `api_key`
+- `POST /remote/inference/{id}/stop` — Stop and terminate the instance
+
 **Validation & Info:**
 - `POST /validate` — Validate configuration before training
 - `GET /version` — Current version info
@@ -386,6 +394,7 @@ docker run --gpus all -p 8000:8000 merlina
 - ⚙️ **[Configuration Management](docs/user/CONFIG_MANAGEMENT.md)** — Save and reuse training configs
 - 🆕 **[New Features Guide](docs/user/new-features.md)** — What's new in v1.1+
 - 🔌 **[MCP Server Guide](docs/user/mcp.md)** — Drive Merlina from an LLM agent via Model Context Protocol
+- ☁️ **[Remote Inference](docs/user/remote-inference.md)** — Serve trained models on rented GPUs for evals
 - 📋 **[Examples](examples/)** — Ready-to-use training configurations
 - 📡 **[API Reference](API.md)** — Full REST and WebSocket API docs
 

@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Merlina 3.0.0 — "Wishcraft" (development)
 
+- **Remote inference: train → serve → eval on rented GPUs.**
+  `POST /remote/inference` rents a RunPod instance and serves a HF repo, or a
+  finished remote training job's adapter (base + vLLM LoRA) or merged
+  weights, with vLLM behind an OpenAI-compatible endpoint. Each session gets
+  its own API key, enforced on every path by a proxy on the instance.
+  `POST /remote/inference/plan` is a dry run that sizes weights at their real
+  checkpoint bytes (FP8/FP4-aware) plus a KV-cache allowance, and reports the
+  GPU, $/hr, deadline and maximum total cost. Sessions are capped by
+  `max_runtime_hours` (default 2, max 24), an optional `max_total_cost_usd`,
+  and an optional idle timeout, and the instance is always terminated. They
+  reuse the remote lifecycle, so the reconciler cleans up orphaned serve
+  pods. New `Dockerfile.serve` image (`REMOTE_SERVE_IMAGE`).
 - **Persist every metric the trainer logs**, not just the total loss.
   ORPO's NLL and odds-ratio loss, preference rewards, reward margin and
   accuracy (and whatever any other loss function logs) are stored per step

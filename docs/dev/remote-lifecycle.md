@@ -117,3 +117,57 @@ confirmed termination.
 
 Local worker reattachment skips remote jobs; the API's periodic reconciler (see
 above) handles them, and live remote leases remain owned by their controller.
+
+## Serve stage (remote inference sessions)
+
+Remote inference (`run_inference_remote`, [user guide](../user/remote-inference.md))
+reuses this machinery rather than adding a parallel lifecycle. A session ID
+(`inf_…`) is claimed exactly like a job ID. Its one stage is named `serve`,
+so it gets the same intent label before provisioning, attempt record,
+resource row, `terminate_confirmed` in a `finally`, and reconciler coverage.
+
+What differs:
+
+- **Non-terminal "done".** `_run_remote_stage(..., drive=...)` lets a stage
+  replace "poll to a terminal worker state" with its own driver. The serve
+  driver waits for the worker state `serving`, publishes
+  `base_url = proxy_url(instance, 8001) + "/v1"`, then holds and polls at
+  the normal interval. Stops, idle timeouts and deadlines are normal
+  returns: the attempt is recorded `completed` and the instance terminated.
+  Worker or vLLM failures raise and are recorded `failed`. Training stages
+  call `_run_remote_stage` without `drive` and behave as before.
+- **Debug retention only for failures.** `keep_on_failure` may be a
+  predicate. The serve stage retains only for real failures, never for
+  `RemoteStopped` or `RemoteBudgetExceeded`.
+- **Cost-derived deadline.** The claim uses the plan's effective hours,
+  `min(max_runtime_hours, max_total_cost_usd / planned $/hr)`. Once the
+  provider reports the instance's actual rate,
+  `RemoteLifecycle.tighten_deadline` can move the durable deadline earlier,
+  never later. Both the controller and the reconciler enforce it.
+- **Ports.** The serve instance exposes 8000 (token-authenticated worker
+  status, as for every stage) and 8001 (the API-key proxy in front of vLLM).
+  vLLM binds `127.0.0.1:8002` only. Pod env carries both the worker token
+  and the session API key (`MERLINA_SERVE_API_KEY`). Neither is persisted
+  locally. The API key also lives in the API process's memory
+  (`sessions.remember_api_key`) for `GET /remote/inference/{id}`.
+- **Persistence.** Sessions live in `remote_inference_sessions` (same SQLite
+  file as jobs, not the `jobs` table, so they never appear as training jobs).
+  The reconciler resolves owners through `get_job()`, and treats a missing
+  record as a deleted job whose resources are due. So `reconcile_once` wraps
+  its `job_manager` with `sessions.with_inference_sessions`, which routes
+  `inf_…` IDs to the session table. Otherwise a live serve pod would be
+  terminated on the next pass.
+- **Restart.** Session controllers are threads in the API process and never
+  survive a restart. At startup, sessions created before the process started
+  are marked `failed` (`stop_reason: orphaned`). Their leases lapse, and the
+  reconciler terminates their pods as usual.
+- **Worker.** `worker_entry.STAGE_RUNNERS["serve"]` →
+  `serve_worker.run_serve_stage`: pull artifacts if needed, launch
+  `vllm serve` (key via `VLLM_API_KEY`, worker credentials stripped from its
+  env), wait for `/health`, start the proxy, report `serving` with request
+  counters (`requests`, `inflight`, `idle_seconds`), hold until `/stop`, then
+  SIGTERM/SIGKILL vLLM's process group. If vLLM dies, the state becomes
+  `failed`, and the redacted log tail is included in `/status`.
+- **Image.** `Dockerfile.serve` = pinned `vllm/vllm-openai` + only the
+  modules the serve worker imports. `tests/test_remote_serve_image.py`
+  fails when a new import is not copied, or when the training stack leaks in.
