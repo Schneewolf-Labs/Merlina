@@ -14,11 +14,12 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      # Optional .env for HF_TOKEN, WANDB_API_KEY, etc. (see .env.example)
+      # Optional .env: STORAGE_INTERNAL_*/STORAGE_EXTERNAL_* object storage (store: models,
+      # swl:// datasets, remote artifacts), HF_TOKEN, WANDB_API_KEY, RUNPOD_API_KEY (see .env.example)
       - path: .env
         required: false
     volumes:
-      # Jobs DB, uploads, and HF model cache
+      # Jobs DB, uploads, HF model cache, and the store: model cache
       - ./data:/app/data
       # Trained models / LoRA adapters / GGUF exports
       - ./models:/app/models

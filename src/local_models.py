@@ -108,14 +108,32 @@ def list_models_dir_models(models_dir: Path) -> list:
     return models
 
 
-def list_local_models(models_dir: Path, _scan=None) -> dict:
+def list_store_models(_store=None) -> list:
+    """Full models in the model store (``models/``), as ``store:<name>`` picks.
+    Adapters and GGUF-only entries are skipped; an unconfigured or unreachable
+    store just yields nothing."""
+    try:
+        if _store is None:
+            from src.remote.artifacts import model_store
+            _store = model_store()
+        entries = _store.list_artifacts()
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Could not list the model store: %s", exc)
+        return []
+    return [{"model_id": f"store:{e['name']}", "name": e["name"], "source": "store",
+             "size_bytes": e.get("size")}
+            for e in entries if e.get("has_config") and e.get("kind") != "adapter"]
+
+
+def list_local_models(models_dir: Path, _scan=None, include_store: bool = False) -> dict:
     """All locally available base models, for the offline model picker.
 
     Returns ``{offline_mode, models}`` where each model has at least
     ``model_id`` (what goes into TrainingConfig.base_model) and ``source``
-    (``hf_cache`` or ``models_dir``).
+    (``hf_cache``, ``models_dir``, or ``store`` with ``include_store``).
     """
-    models = list_hf_cached_models(_scan=_scan) + list_models_dir_models(models_dir)
+    models = (list_hf_cached_models(_scan=_scan) + list_models_dir_models(models_dir)
+              + (list_store_models() if include_store else []))
     return {
         "offline_mode": offline_mode_active(),
         "models": models,

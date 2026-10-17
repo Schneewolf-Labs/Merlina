@@ -44,6 +44,11 @@ class ArtifactStore(ABC):
     def describe(self) -> dict:
         """JSON-safe description, used to reconstruct the store on workers."""
 
+    def verify_writable(self) -> None:
+        """Prove the store accepts a write before any GPU is rented (raises
+        ArtifactStoreError). A run whose artifacts can't be pushed would
+        train to completion and then lose the result. Default: no-op."""
+
 
 class LocalArtifactStore(ArtifactStore):
     """Directory-backed store, for tests and shared-volume handoff."""
@@ -138,6 +143,22 @@ class HFHubArtifactStore(ArtifactStore):
             raise
         except Exception as e:
             raise ArtifactStoreError(f"Failed to pull artifact {name!r} from {self.repo_id}: {e}") from e
+
+    def verify_writable(self) -> None:
+        """Create the run repo and write, then delete, a tiny probe file. A
+        full storage quota (HTTP 403) or a read-only token fails here."""
+        import io
+        probe = ".merlina-write-probe"
+        try:
+            self._ensure_repo()
+            api = self._api()
+            api.upload_file(path_or_fileobj=io.BytesIO(b"probe"), path_in_repo=probe,
+                            repo_id=self.repo_id, commit_message="merlina: write probe")
+            api.delete_file(probe, repo_id=self.repo_id, commit_message="merlina: remove write probe")
+        except Exception as e:
+            raise ArtifactStoreError(
+                f"The HF artifact repo {self.repo_id} can't be written ({e}); fix it or set "
+                "ARTIFACT_STORE=external before renting GPUs") from e
 
     def exists(self, name: str) -> bool:
         try:

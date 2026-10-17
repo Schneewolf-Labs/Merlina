@@ -40,7 +40,7 @@ STORAGE_EXTERNAL_SECRET_KEY=...
 DATASET_TIER=internal        # which tier this process resolves swl:// against
 DATASET_MIRROR=false         # mirror HF datasets into the internal tier on first use
 
-ARTIFACT_STORE=external      # hf_hub (default) | external | internal
+ARTIFACT_STORE=external      # external | internal | hf_hub (unset: external if configured, else hf_hub)
 ARTIFACT_BUCKET=             # optional; defaults to the tier's bucket
 ARTIFACT_PREFIX=merlina/runs
 ```

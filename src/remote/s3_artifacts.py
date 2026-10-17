@@ -298,10 +298,32 @@ class S3ArtifactStore(ArtifactStore):
                     continue
                 out.append({"name": name, "files": len(manifest["files"]),
                             "size": sum(f["size"] for f in manifest["files"]),
-                            "created_at": manifest.get("created_at")})
+                            "created_at": manifest.get("created_at"),
+                            "has_config": any(f["path"] == "config.json" for f in manifest["files"]),
+                            "kind": (manifest.get("metadata") or {}).get("kind")})
 
         walk(root, "", 1)
         return out
+
+    def verify_writable(self) -> None:
+        """Write, read back and delete a tiny probe object under this prefix."""
+        key = "/".join(part for part in (self.bucket, self.prefix, f".write-probe-{uuid.uuid4().hex}") if part)
+        try:
+            self.fs.pipe_file(key, b"probe")
+            if self.fs.cat_file(key) != b"probe":
+                raise ArtifactStoreError("probe object read back differently")
+        except ArtifactStoreError:
+            raise
+        except Exception as e:
+            raise ArtifactStoreError(
+                f"The artifact store s3://{key.rsplit('/', 1)[0]} can't be written ({type(e).__name__}); "
+                "check the bucket and STORAGE_* keys before renting GPUs") from None
+        try:
+            rm = getattr(self.fs, "rm_file", None) or getattr(self.fs, "rm", None)
+            if rm:
+                rm(key)
+        except Exception:
+            pass                    # a leftover 5-byte probe is harmless
 
     def files(self, name: str) -> list:
         """The committed generation's file list: ``[{path, size, sha256}]``."""
