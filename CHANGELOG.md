@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Merlina 3.0.0 — "Wishcraft" (development)
+## [3.0.0] - 2026-10-17 "Wishcraft"
 
-#### Upgrading from 2.x
+### Upgrading from 2.x
 
 - **Storage settings were renamed.** `S3_*`, `R2_*` and `MERLINA_ARTIFACT_*`
   became `STORAGE_INTERNAL_*`, `STORAGE_EXTERNAL_*`, `ARTIFACT_STORE` and
@@ -33,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Database:** new tables and columns are added automatically on first
   start. No manual migration is needed.
 
-#### Added / changed
+### Added / changed
 
 - **Remote inference: train → serve → eval on rented GPUs.**
   `POST /remote/inference` rents a RunPod instance and serves a HF repo, or a

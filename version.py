@@ -17,7 +17,7 @@ VERSION_PATCH = __version_info__[2]
 
 # Release information
 RELEASE_NAME = "Wishcraft"  # Codename for this release
-RELEASE_DATE = "2026-10-11"  # Development cycle start; release is not yet published
+RELEASE_DATE = "2026-10-17"
 
 def get_version() -> str:
     """Returns the current version string."""
