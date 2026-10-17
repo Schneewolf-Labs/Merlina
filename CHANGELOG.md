@@ -38,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checks that the model exists, and VRAM estimates and remote sizing read
   `config.json` from the store. VLM key grafting now also works for local
   base models. ([docs](docs/user/store-models.md))
+- **Publish to the model store.** `publish_to_store` (with a checkbox in the
+  training form) publishes the finished model to `models/<name>`, merged
+  first when `merge_lora_before_upload` is set. This covers text, DDP, VLM
+  and diffusion runs. `POST /models/{name}/publish` publishes an existing
+  model, optionally merging it. Remote merge workers publish straight to
+  R2. Uploads include `README.md` (also written locally) and `gguf/`, never
+  checkpoints, and are recorded with `destination: "store"` in the upload
+  history. `merlina models push` now accepts adapter and GGUF directories.
+  Model cards name `swl://` datasets.
 - **Hub model mirroring.** `merlina models mirror <org/repo>` copies a Hub
   model into the store as `store:hf/<org>/<repo>`, pinned to the commit
   sha and re-published only when the Hub moves. With `MODEL_MIRROR=true`,

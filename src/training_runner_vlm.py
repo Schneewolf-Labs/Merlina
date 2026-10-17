@@ -572,6 +572,14 @@ def run_vlm_training_sync(
                 f"{final_output_dir} is ready to upload manually."
             )
 
+        # Stage-1/2 checkpoints are full models: publish them as they are.
+        if not was_stopped and bool(getattr(config, "publish_to_store", False)):
+            from src.training_runner import _run_background_store_publish
+            config_no_merge = config.model_copy(update={"use_lora": False}) \
+                if hasattr(config, "model_copy") else config
+            _run_background_store_publish(config_no_merge, final_output_dir, "vlm",
+                                          job_id, job_manager, is_vlm=True)
+
         # Mark done
         job_manager.update_job(
             job_id,

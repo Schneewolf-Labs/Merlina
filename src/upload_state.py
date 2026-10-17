@@ -20,7 +20,9 @@ Shape (``format_version=1``):
           "commit_message": "...",
           "artifacts": ["adapter", "gguf:Q4_K_M", "gguf:Q8_0"],
           "status": "success" | "failed",
-          "error": null
+          "error": null,
+          "destination": "hub" | "store"   # store: repo_id is the store name,
+                                           # repo_url the s3:// location
         },
         ...
       ]
@@ -58,6 +60,7 @@ class UploadEvent:
     artifacts: List[str] = field(default_factory=list)
     status: str = "success"  # "success" | "failed"
     error: Optional[str] = None
+    destination: str = "hub"  # "hub" | "store"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -73,6 +76,7 @@ class UploadEvent:
             artifacts=list(data.get("artifacts", [])),
             status=data.get("status", "success"),
             error=data.get("error"),
+            destination=data.get("destination", "hub"),
         )
 
 
@@ -114,6 +118,7 @@ def record_upload(
     artifacts: List[str],
     status: str = "success",
     error: Optional[str] = None,
+    destination: str = "hub",
 ) -> UploadEvent:
     """Append an upload event to the sidecar and return the event."""
     event = UploadEvent(
@@ -125,6 +130,7 @@ def record_upload(
         artifacts=list(artifacts),
         status=status,
         error=error,
+        destination=destination,
     )
 
     state = read_upload_state(model_dir)

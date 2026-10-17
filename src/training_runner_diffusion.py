@@ -584,6 +584,17 @@ def run_diffusion_training_sync(
                 daemon=False,
             ).start()
 
+        if not was_stopped and bool(getattr(config, "publish_to_store", False)):
+            import threading
+            from src.training_runner import _run_background_store_publish
+            threading.Thread(
+                target=_run_background_store_publish,
+                args=(config, final_output_dir, config.training_mode, job_id, job_manager),
+                kwargs={"is_diffusion": True},
+                name=f"DiffusionStorePublish-{job_id}",
+                daemon=False,
+            ).start()
+
     except Exception as e:
         logger.exception(f"Diffusion training failed: {e}")
         job_manager.update_job(job_id, status="failed", error=str(e))

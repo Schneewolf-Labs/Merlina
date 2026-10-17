@@ -157,8 +157,9 @@ def _models_push(args: argparse.Namespace) -> int:
         print(f"error: {src} contains symlinks ({links[0].name}, ...); push a real copy "
               "(e.g. `kessel flatten` an overlay first)", file=sys.stderr)
         return 2
-    if not (src / "config.json").is_file():
-        print(f"error: {src} has no config.json", file=sys.stderr)
+    if not ((src / "config.json").is_file() or (src / "adapter_config.json").is_file()
+            or any(src.rglob("*.gguf"))):
+        print(f"error: {src} has no config.json, adapter_config.json or .gguf files", file=sys.stderr)
         return 2
     store = _model_store()
     if store is None:

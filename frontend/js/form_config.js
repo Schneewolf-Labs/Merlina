@@ -277,6 +277,9 @@ export function buildTrainingConfig({ gpuManager = null, includeSecrets = true }
         use_4bit: bool('use-4bit', true),
         use_wandb: bool('use-wandb', false),
         push_to_hub: bool('push-hub', false),
+        publish_to_store: bool('publish-store', false),
+        // Defaults to the output name; no form field yet.
+        store_model_name: null,
         merge_lora_before_upload: bool('merge-lora-before-upload', true),
         hf_hub_private: bool('hf-hub-private', true),
         // Org/user namespace the model is uploaded under. Empty = the

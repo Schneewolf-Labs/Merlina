@@ -37,6 +37,38 @@ merlina models push /mnt/models/C0 C0             # -> <artifact bucket>/models/
 - **Names:** letters, digits, `.`, `_` and `-`, with up to three `/`
   separators (`hf/meta-llama/Llama-3.1-8B`).
 
+## Publishing trained models to the store
+
+- **During training:** set `publish_to_store: true` (or tick **Publish to the
+  model store** in the form). When training finishes, the model goes to
+  `models/<output_name>` (or `store_model_name`). A LoRA run is merged
+  first when `merge_lora_before_upload` is on (the default), reusing the
+  same merge as a Hub upload or GGUF export. Otherwise the adapter is
+  published as is.
+- **After training:** `POST /models/{name}/publish`
+  (`{"store_name": ..., "merged": false, "include_gguf": true}`) publishes
+  an existing model directory as a background job.
+- **From the CLI:** `merlina models push ./models/<name> <name>` pushes any
+  directory: a full model, an adapter or GGUF files.
+
+**What gets uploaded**
+- The model files, plus `README.md`. The model card is also written into
+  the local output directory.
+- `gguf/` exports if they exist.
+- Never `checkpoint-*` folders or the upload sidecar.
+
+**Where the result is recorded**
+- The job's `store_publish` metric.
+- The model's upload history (`upload_state.json`), with
+  `destination: "store"`.
+
+**Remote runs**
+- With a remote merge, the merge worker publishes straight to R2, so the
+  merged model never travels through your machine.
+- With a local merge, or for an adapter-only run, the control plane
+  publishes.
+- Remote publishing needs `ARTIFACT_STORE=external`.
+
 ## Mirroring Hub models
 
 ```bash
