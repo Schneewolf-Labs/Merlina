@@ -259,11 +259,9 @@ def fix_vlm_state_dict_on_disk(
     missing_keys: dict[str, str] = {}  # key -> base shard file
     if base_model_name:
         try:
-            from huggingface_hub import hf_hub_download
-            base_index_path = hf_hub_download(
-                base_model_name,
-                filename="model.safetensors.index.json",
-                local_dir=os.path.join(model_dir, "_base_index"),
+            base_index_path = _base_model_file(
+                base_model_name, "model.safetensors.index.json",
+                os.path.join(model_dir, "_base_index"),
             )
             with open(base_index_path) as f:
                 base_index = json.load(f)
@@ -361,10 +359,24 @@ def _fix_single(model_dir, tensors, needs_key_fix, missing_keys, base_model_name
     save_file(OrderedDict(sorted(fixed.items())), os.path.join(model_dir, "model.safetensors"))
 
 
+def _base_model_file(base_model_name: str, filename: str, local_dir: str) -> str:
+    """Path to one file of the base model: from its directory when it is a
+    local path or a ``store:`` ref (pulled into the model cache), else
+    downloaded from the Hub."""
+    from src.model_refs import resolve_model_ref
+    resolved = resolve_model_ref(base_model_name)
+    if os.path.isdir(resolved):
+        path = os.path.join(resolved, filename)
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"{filename} not found in {resolved}")
+        return path
+    from huggingface_hub import hf_hub_download
+    return hf_hub_download(resolved, filename=filename, local_dir=local_dir)
+
+
 def _graft_missing_keys(model_dir, missing_keys, base_model_name):
     """Download and return missing tensors from the base model."""
     from safetensors.torch import load_file
-    from huggingface_hub import hf_hub_download
 
     grafted = {}
     # Group missing keys by their source shard
@@ -375,11 +387,7 @@ def _graft_missing_keys(model_dir, missing_keys, base_model_name):
     cache_dir = os.path.join(model_dir, "_base_shards")
     for shard_name, keys in shard_to_keys.items():
         try:
-            shard_path = hf_hub_download(
-                base_model_name,
-                filename=shard_name,
-                local_dir=cache_dir,
-            )
+            shard_path = _base_model_file(base_model_name, shard_name, cache_dir)
             shard_tensors = load_file(shard_path)
             for key in keys:
                 if key in shard_tensors:

@@ -103,6 +103,27 @@ class HuggingFaceLoader(DatasetLoader):
         }
 
 
+def _materialize_stream(iterable_dataset, max_samples: Optional[int], batch_size: int,
+                        label: str) -> Dataset:
+    """Turn a streaming dataset into a regular one, ``batch_size`` rows at a
+    time (peak memory ~ one batch), stopping after ``max_samples``."""
+    rows, tables, count = [], [], 0
+    for row in iterable_dataset:
+        rows.append(row)
+        count += 1
+        if len(rows) >= batch_size:
+            tables.append(pa.Table.from_pylist(rows))
+            logger.info(f"  Streamed {count} rows so far...")
+            rows = []
+        if max_samples and count >= max_samples:
+            break
+    if rows:
+        tables.append(pa.Table.from_pylist(rows))
+    if not tables:
+        raise ValueError(f"{label} returned no rows")
+    return Dataset(pa.concat_tables(tables))
+
+
 class StreamingHuggingFaceLoader(DatasetLoader):
     """
     Load dataset from HuggingFace Hub using streaming mode.
@@ -178,35 +199,9 @@ class StreamingHuggingFaceLoader(DatasetLoader):
             if self.config_name:
                 kwargs["name"] = self.config_name
             iterable_dataset = load_dataset(self.repo_id, **kwargs)
-
-            # Materialize streaming dataset into batches
-            rows = []
-            tables = []
-            count = 0
-
-            for row in iterable_dataset:
-                rows.append(row)
-                count += 1
-
-                # Flush batch to Arrow table to keep memory bounded
-                if len(rows) >= self.batch_size:
-                    tables.append(pa.Table.from_pylist(rows))
-                    logger.info(f"  Streamed {count} rows so far...")
-                    rows = []
-
-                if self.max_samples and count >= self.max_samples:
-                    break
-
-            # Flush remaining rows
-            if rows:
-                tables.append(pa.Table.from_pylist(rows))
-
-            if not tables:
-                raise ValueError(f"Dataset '{self.repo_id}' (split: {self.split}) returned no rows")
-
-            # Concatenate all Arrow tables and wrap as Dataset
-            combined_table = pa.concat_tables(tables)
-            dataset = Dataset(combined_table)
+            dataset = _materialize_stream(
+                iterable_dataset, self.max_samples, self.batch_size,
+                f"Dataset '{self.repo_id}' (split: {self.split})")
 
             logger.info(f"Successfully streamed {len(dataset)} samples from {self.repo_id}")
             return dataset
@@ -250,18 +245,25 @@ class InternalStoreLoader(DatasetLoader):
         store: InternalStore,
         split: str = "train",
         max_samples: Optional[int] = None,
+        streaming: bool = False,
+        batch_size: int = StreamingHuggingFaceLoader.DEFAULT_BATCH_SIZE,
     ) -> None:
         """
         Args:
             uri: An ``swl://name`` or ``swl://name@rev`` address.
             store: A configured :class:`InternalStore`.
             split: Split to load (default "train").
-            max_samples: Optional cap on rows (applied after load).
+            max_samples: Optional cap on rows. With ``streaming`` only that many
+                rows are read from the shards; otherwise applied after load.
+            streaming: Read the parquet shards as a stream and materialize
+                ``batch_size`` rows at a time instead of downloading them whole.
         """
         self.uri = uri
         self.store = store
         self.split = split
         self.max_samples = max_samples
+        self.streaming = streaming
+        self.batch_size = batch_size
         self.name, self.rev = parse_swl_uri(uri)
         # Resolved lazily in load(); captured for provenance in get_source_info().
         self._resolved_rev: Optional[str] = None
@@ -274,12 +276,14 @@ class InternalStoreLoader(DatasetLoader):
             self._resolved_rev = manifest.rev
             self._hf_revision = manifest.hf_revision
 
-            dataset = load_dataset(
-                manifest.format,
-                data_files=manifest.data_files,
-                split=self.split,
-                storage_options=self.store.storage_options(),
-            )
+            kwargs = dict(data_files=manifest.data_files, split=self.split,
+                          storage_options=self.store.storage_options())
+            if self.streaming:
+                dataset = _materialize_stream(
+                    load_dataset(manifest.format, streaming=True, **kwargs),
+                    self.max_samples, self.batch_size, f"swl://{self.name}@{manifest.rev}")
+            else:
+                dataset = load_dataset(manifest.format, **kwargs)
 
             if self.max_samples is not None and len(dataset) > self.max_samples:
                 dataset = dataset.select(range(self.max_samples))

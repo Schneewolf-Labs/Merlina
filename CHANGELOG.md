@@ -29,6 +29,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   jobs that can be served) and `POST /remote/inference/{id}/chat` (one chat
   completion, relayed through the control plane). Sessions now record the
   worker's boot phase.
+- **Base models from object storage: `store:<name>`.** Training, the
+  Playground, tokenizer preview, layer detection, merges and GGUF export
+  accept `store:<name>` for a model pushed with `merlina models push`. The
+  first use pulls it into a local cache keyed by generation; later jobs
+  reuse it, and when the store is unreachable the newest cached copy is
+  used. Adapters, cards and job records keep the reference. Pre-flight
+  checks that the model exists, and VRAM estimates and remote sizing read
+  `config.json` from the store. VLM key grafting now also works for local
+  base models. ([docs](docs/user/store-models.md))
+- **Fewer Hub-only dataset paths.**
+  - `merlina datasets put <file> <name>` and
+    `POST /dataset/uploads/{id}/store` save our own JSON, JSONL, CSV or
+    Parquet files as `swl://name@rev`. The revision is the content hash.
+    Private datasets can't be written to the external tier.
+  - Remote runs honor `DATASET_MIRROR`: HF sources are mirrored on the
+    control plane and shipped to the worker, which never calls the Hub.
+  - Streaming works from the internal store, and from an existing mirror.
+  - VLM and diffusion runs accept `swl://` datasets.
+  - `dataset_name="swl://..."` now maps to an internal source instead of
+    the HF loader.
+- **Publish to the model store.** `publish_to_store` (with a checkbox in the
+  training form) publishes the finished model to `models/<name>`, merged
+  first when `merge_lora_before_upload` is set. This covers text, DDP, VLM
+  and diffusion runs. `POST /models/{name}/publish` publishes an existing
+  model, optionally merging it. Remote merge workers publish straight to
+  R2. Uploads include `README.md` (also written locally) and `gguf/`, never
+  checkpoints, and are recorded with `destination: "store"` in the upload
+  history. `merlina models push` now accepts adapter and GGUF directories.
+  Model cards name `swl://` datasets.
+- **Hub model mirroring.** `merlina models mirror <org/repo>` copies a Hub
+  model into the store as `store:hf/<org>/<repo>`, pinned to the commit
+  sha and re-published only when the Hub moves. With `MODEL_MIRROR=true`,
+  every Hub base model is mirrored on first use and loaded from the store
+  after that, which keeps jobs working through Hub outages and deleted
+  repos. If mirroring fails, Merlina falls back to the Hub. In offline
+  mode, pre-flight accepts a cached mirror.
+- **Remote runs with `store:` base models.** Remote training, the remote
+  merge stage and remote LoRA serving pull a `store:` base from R2. The
+  worker payload names the model store, and workers register it because
+  they have no `ARTIFACT_STORE` of their own. Pre-flight refuses the LAN-only
+  internal tier. A local base path now gets a hint to push it and use
+  `store:<name>`. The serve image includes `src/model_refs.py`, and the
+  Docker workflow's PR path filter now covers the store modules.
+- **Pre-flight accepts a deleted or gated HF dataset when its mirror
+  exists.** With mirroring on (`prefer_internal`), a missing or gated repo
+  that has a copy in the internal store is now a warning. Before, it was a
+  hard error, although the loader would have served the mirror.
 - **Serve models from object storage, no Hub repo needed.**
   `merlina models push <dir> <name>` uploads a model directory to the
   artifact bucket under `models/<name>`. Files are hashed in place and

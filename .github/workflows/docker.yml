@@ -16,6 +16,9 @@ on:
       - Dockerfile.serve
       - src/remote/serve_worker.py
       - src/remote/worker_entry.py
+      - src/remote/artifacts.py
+      - src/remote/s3_artifacts.py
+      - src/model_refs.py
       - .dockerignore
       - docker-compose.yml
       - requirements.txt

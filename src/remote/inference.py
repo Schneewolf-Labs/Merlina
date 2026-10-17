@@ -37,8 +37,8 @@ from .sizing import (
     FALLBACK_GPU_CATALOG,
     estimate_disk_gb,
     fetch_model_specs,
-    parse_model_specs,
     pick_instance,
+    store_model_specs,
     serve_vram_breakdown,
     tensor_parallel_counts,
 )
@@ -56,7 +56,8 @@ MAX_SERVE_RUNTIME_HOURS = 24.0
 MIN_USEFUL_SESSION_HOURS = 0.25
 SERVE_DISK_FLOOR_GB = 50
 
-_STORE_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+from src.model_refs import _NAME_RE as _STORE_MODEL_RE  # noqa: E402  (names may nest: hf/<org>/<repo>)
+from src.model_refs import ModelRefError, is_store_ref, remote_store_description  # noqa: E402
 _HF_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?$")
 
 
@@ -85,8 +86,8 @@ class InferenceModelSource(BaseModel):
         if sum(map(bool, (self.hf_repo, self.store_model, self.job_id))) != 1:
             raise ValueError("Set exactly one of model.hf_repo, model.store_model or model.job_id")
         if self.store_model and not _STORE_MODEL_RE.match(self.store_model):
-            raise ValueError("model.store_model must be a plain name like 'C0' "
-                             "(letters, digits, '.', '_', '-')")
+            raise ValueError("model.store_model must be a name like 'C0' or 'hf/org/repo' "
+                             "(letters, digits, '.', '_', '-', up to three '/')")
         if self.hf_repo and not _HF_REPO_RE.match(self.hf_repo):
             raise ValueError("model.hf_repo must be a HuggingFace repo id like 'org/name' "
                              "(local paths don't travel to rented instances)")
@@ -201,26 +202,11 @@ def _store_source(name: str, request: RemoteInferenceRequest, store) -> Dict[str
             f"No model {name!r} in the store (models/{name}); push it with "
             f"`merlina models push <dir> {name}`")
     return {
-        "source_kind": "artifact", "model_id": f"store:models/{name}", "revision": None,
+        "source_kind": "artifact", "model_id": f"store:{name}", "revision": None,
         "artifact": name, "artifact_store": store.describe(), "lora": False,
         "max_lora_rank": None, "served_model_name": request.served_model_name or name,
         "base_served_model_name": None, "job_config": None, "warnings": [], "store": store,
     }
-
-
-def store_model_specs(store, name: str) -> ModelSpecs:
-    """``ModelSpecs`` from a stored model's ``config.json`` and safetensors index."""
-    config = json.loads(store.read_file(name, "config.json"))
-    weight_bytes = None
-    try:
-        index = json.loads(store.read_file(name, "model.safetensors.index.json"))
-        weight_bytes = (index.get("metadata") or {}).get("total_size")
-    except FileNotFoundError:
-        pass
-    if not weight_bytes:
-        weight_bytes = sum(f["size"] for f in store.files(name)
-                           if f["path"].endswith(".safetensors")) or None
-    return parse_model_specs(f"store:models/{name}", config, weight_bytes)
 
 
 def resolve_model_source(request: RemoteInferenceRequest, *, job_manager=None,
@@ -244,8 +230,9 @@ def resolve_model_source(request: RemoteInferenceRequest, *, job_manager=None,
     if not (cfg.get("remote") or {}).get("enabled"):
         raise RemotePlanError(
             f"Job {src.job_id} trained locally, so its output is on this machine rather than "
-            "in an artifact store a rented instance can reach. Push it to the HuggingFace Hub "
-            "and serve it with model.hf_repo instead.")
+            "in an artifact store a rented instance can reach. Push it with "
+            "`merlina models push ./models/<name> <name>` and serve it with "
+            "model.store_model (or publish it to the Hub and use model.hf_repo).")
     if job.status != "completed":
         raise RemotePlanError(f"Job {src.job_id} is {job.status!r}; only completed jobs can be served")
     store = (job.metrics or {}).get("artifact_store")
@@ -274,14 +261,22 @@ def resolve_model_source(request: RemoteInferenceRequest, *, job_manager=None,
                 f"The adapter fully retrains {cfg['modules_to_save']} (modules_to_save), which "
                 "vLLM LoRA serving does not apply — outputs would differ from the trained model. "
                 "Serve the 'merged' artifact for this job instead.")
+    model_store_desc = None
+    if lora and is_store_ref(base_model):
+        # The adapter's base lives in object storage: the worker pulls it too.
+        try:
+            model_store_desc = remote_store_description(base_model)
+        except ModelRefError as e:
+            raise RemotePlanError(str(e)) from e
     output_name = str(cfg.get("output_name") or src.job_id).rsplit("/", 1)[-1]
+
     served = request.served_model_name or output_name
     return {
         "source_kind": "artifact", "model_id": base_model, "revision": None,
         "artifact": src.artifact, "artifact_store": store, "lora": lora,
         "max_lora_rank": max_lora_rank, "served_model_name": served,
         "base_served_model_name": base_model if lora else None,
-        "job_config": cfg, "warnings": warnings,
+        "job_config": cfg, "warnings": warnings, "model_store": model_store_desc,
     }
 
 
@@ -397,6 +392,7 @@ def build_serve_plan(
         max_lora_rank=source["max_lora_rank"],
         artifact=source["artifact"],
         artifact_store=source["artifact_store"],
+        model_store=source.get("model_store"),
         model_specs=model_specs,
         sizing=decision,
         tensor_parallel_size=tp,

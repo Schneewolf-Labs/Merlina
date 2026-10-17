@@ -238,7 +238,21 @@ class S3ArtifactStore(ArtifactStore):
             if source.is_symlink() or (not source.is_file() and not source.is_dir()):
                 raise ArtifactStoreError("Artifact sources cannot contain links or special files")
             if source.is_file():
-                sources.append((safe_path(source.relative_to(local_dir).as_posix()), source))
+                sources.append((source.relative_to(local_dir).as_posix(), source))
+        self.push_files(name, sources, workers=workers)
+
+    def push_files(self, name: str, sources, *, workers: int = 1) -> None:
+        """Publish an explicit ``[(relative_path, local_file)]`` list as a new
+        generation of ``name`` (in-place mode: hashed where they are, uploaded
+        in parallel, size-checked and re-hashed; one manifest PUT commits)."""
+        safe_path(name)
+        checked = []
+        for relative, source in sources:
+            source = Path(source)
+            if source.is_symlink() or not source.is_file():
+                raise ArtifactStoreError("Artifact sources must be regular files")
+            checked.append((safe_path(relative), source))
+        sources = checked
         generation = uuid.uuid4().hex
 
         def upload(item):
@@ -260,23 +274,33 @@ class S3ArtifactStore(ArtifactStore):
         except Exception:
             raise ArtifactStoreError("Artifact upload failed; previous committed generation is preserved") from None
 
-    def list_artifacts(self) -> list:
-        """Committed artifacts under this prefix: ``[{name, size, files, created_at}]``."""
+    def list_artifacts(self, max_depth: int = 4) -> list:
+        """Committed artifacts under this prefix, including nested names such
+        as ``hf/<org>/<repo>``: ``[{name, size, files, created_at}]``."""
         root = "/".join(part for part in (self.bucket, self.prefix) if part)
-        try:
-            entries = self.fs.ls(root, detail=False)
-        except FileNotFoundError:
-            return []
         out = []
-        for entry in sorted(entries):
-            name = entry.rstrip("/").rsplit("/", 1)[-1]
+
+        def walk(path, rel, depth):
             try:
-                manifest = self._manifest(safe_path(name))
-            except (FileNotFoundError, ArtifactStoreError):
-                continue        # a folder without a committed manifest
-            out.append({"name": name, "files": len(manifest["files"]),
-                        "size": sum(f["size"] for f in manifest["files"]),
-                        "created_at": manifest.get("created_at")})
+                entries = self.fs.ls(path, detail=False)
+            except FileNotFoundError:
+                return
+            for entry in sorted(entries):
+                leaf = entry.rstrip("/").rsplit("/", 1)[-1]
+                if leaf in ("manifest.json", "generations"):
+                    continue
+                name = f"{rel}/{leaf}" if rel else leaf
+                try:
+                    manifest = self._manifest(safe_path(name))
+                except (FileNotFoundError, ArtifactStoreError):
+                    if depth < max_depth:
+                        walk(f"{root}/{name}", name, depth + 1)
+                    continue
+                out.append({"name": name, "files": len(manifest["files"]),
+                            "size": sum(f["size"] for f in manifest["files"]),
+                            "created_at": manifest.get("created_at")})
+
+        walk(root, "", 1)
         return out
 
     def files(self, name: str) -> list:

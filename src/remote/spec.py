@@ -170,7 +170,7 @@ class ServePlan:
     the real session, so what the owner approves is what runs.
     """
     model_source: Dict[str, Any]           # {"hf_repo", "revision"} | {"store_model"} | {"job_id", "artifact"}
-    model_id: str                          # what vLLM loads (HF id, "store:models/<name>", or an adapter's base)
+    model_id: str                          # what vLLM loads (HF id, "store:<name>", or an adapter's base)
     revision: Optional[str]
     served_model_name: str                 # name clients pass as "model"
     base_served_model_name: Optional[str]  # adapter sessions also serve the bare base
@@ -195,6 +195,7 @@ class ServePlan:
     vllm_args: List[str] = field(default_factory=list)
     vllm_command: List[str] = field(default_factory=list)   # display only; never holds the key
     warnings: List[str] = field(default_factory=list)
+    model_store: Optional[Dict[str, Any]] = None  # store: base of an adapter, pulled by the worker
 
     def to_dict(self) -> Dict[str, Any]:
         from dataclasses import asdict

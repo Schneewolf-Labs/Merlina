@@ -33,6 +33,8 @@ import wandb
 from datasets import load_dataset, Dataset
 from transformers import AutoTokenizer
 
+from src.model_refs import resolve_model_ref
+
 from grimoire import GrimoireTrainer
 
 from artemis_vlm import (
@@ -117,7 +119,8 @@ def _load_image_caption_dataset(config: Any) -> Tuple[Dataset, Optional[Dataset]
     Dataset (image bytes stored once, PIL decode stays lazy at train time).
     """
     dataset_cfg = config.dataset
-    repo_id = getattr(dataset_cfg.source, "repo_id", None) or dataset_cfg.source.path
+    repo_id = (getattr(dataset_cfg.source, "repo_id", None) or getattr(dataset_cfg.source, "uri", None)
+               or dataset_cfg.source.path)
     split = getattr(dataset_cfg.source, "split", None) or "train"
     token = config.hf_token or os.environ.get("HF_TOKEN")
     max_samples = getattr(dataset_cfg, "max_samples", None)
@@ -130,7 +133,12 @@ def _load_image_caption_dataset(config: Any) -> Tuple[Dataset, Optional[Dataset]
         f"streaming={streaming} max_samples={max_samples}"
     )
 
-    if streaming and max_samples:
+    if str(repo_id).startswith("swl://"):
+        # Internal store: parquet keeps the Image feature, so rows decode to
+        # PIL lazily like a Hub dataset. Loaded whole, then capped.
+        from dataset_handlers.factory import load_swl_dataset
+        raw = load_swl_dataset(repo_id, max_samples=max_samples)
+    elif streaming and max_samples:
         # Stream the corpus, materialize first N samples to Arrow.
         # Only the shards that hold those N samples get downloaded.
         # JPEG bytes are stored once via the Image() feature so PIL
@@ -217,14 +225,18 @@ def _load_stage2_dataset(config: Any) -> Tuple[Dataset, Optional[Dataset]]:
     nullable `image`, plus `layer`/`source`/`reasoning` (ignored here).
     """
     dataset_cfg = config.dataset
-    repo_id = getattr(dataset_cfg.source, "repo_id", None) or dataset_cfg.source.path
+    repo_id = (getattr(dataset_cfg.source, "repo_id", None) or getattr(dataset_cfg.source, "uri", None)
+               or dataset_cfg.source.path)
     split = getattr(dataset_cfg.source, "split", None) or "train"
     token = config.hf_token or os.environ.get("HF_TOKEN")
     max_samples = getattr(dataset_cfg, "max_samples", None)
 
     logger.info(f"Loading Stage-2 (ArtemisMix) dataset: {repo_id} split={split}")
 
-    if os.path.isdir(repo_id) and os.path.exists(os.path.join(repo_id, "dataset_info.json")):
+    if str(repo_id).startswith("swl://"):
+        from dataset_handlers.factory import load_swl_dataset
+        raw = load_swl_dataset(repo_id)
+    elif os.path.isdir(repo_id) and os.path.exists(os.path.join(repo_id, "dataset_info.json")):
         from datasets import load_from_disk
         raw = load_from_disk(repo_id)
         if hasattr(raw, "keys"):             # DatasetDict -> pick split
@@ -278,7 +290,7 @@ def _load_artemis_model_and_processor(
     stage = (getattr(config, "stage", None) or "stage1").lower()
 
     if stage == "stage2":
-        ckpt = config.base_model  # an ArtemisVLM (A3) checkpoint directory
+        ckpt = resolve_model_ref(config.base_model)  # an ArtemisVLM (A3) checkpoint directory
         logger.info(f"Loading Artemis Stage-2 checkpoint (continue from A3): {ckpt}")
         model = ArtemisVLMForConditionalGeneration.from_pretrained(ckpt, dtype=torch_dtype)
         tokenizer = AutoTokenizer.from_pretrained(ckpt, trust_remote_code=True)
@@ -292,8 +304,8 @@ def _load_artemis_model_and_processor(
 
     from transformers import Qwen3VLForConditionalGeneration
 
-    text_path = config.base_model
-    vision_id = config.vision_model_id or "Qwen/Qwen3-VL-2B-Instruct"
+    text_path = resolve_model_ref(config.base_model)
+    vision_id = resolve_model_ref(config.vision_model_id or "Qwen/Qwen3-VL-2B-Instruct")
     image_token_id = config.image_token_id or 22
 
     logger.info(f"Assembling Artemis: text={text_path} | vision={vision_id}")
@@ -569,6 +581,14 @@ def run_vlm_training_sync(
                 "follow-up; the saved checkpoint at "
                 f"{final_output_dir} is ready to upload manually."
             )
+
+        # Stage-1/2 checkpoints are full models: publish them as they are.
+        if not was_stopped and bool(getattr(config, "publish_to_store", False)):
+            from src.training_runner import _run_background_store_publish
+            config_no_merge = config.model_copy(update={"use_lora": False}) \
+                if hasattr(config, "model_copy") else config
+            _run_background_store_publish(config_no_merge, final_output_dir, "vlm",
+                                          job_id, job_manager, is_vlm=True)
 
         # Mark done
         job_manager.update_job(

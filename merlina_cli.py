@@ -101,6 +101,24 @@ def _datasets_promote(args: argparse.Namespace) -> int:
     return 0
 
 
+def _datasets_put(args: argparse.Namespace) -> int:
+    from dataset_handlers.internal_store import InternalStoreError
+    from dataset_handlers.put import put_dataset
+
+    from dataset_handlers.internal_store import is_private_name
+    if args.store == "external" and (args.private or is_private_name(args.name)):
+        print("error: private datasets never go to the external tier", file=sys.stderr)
+        return 2
+    store = _resolve_store(args.store)
+    try:
+        name, rev, created = put_dataset(store, args.file, args.name, private=args.private)
+    except (InternalStoreError, FileNotFoundError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print(f"swl://{name}@{rev} ({'stored' if created else 'already stored'}; latest -> {rev})")
+    return 0
+
+
 def _datasets_info(args: argparse.Namespace) -> int:
     from dataset_handlers.internal_store import InternalStoreError
 
@@ -146,7 +164,7 @@ def _models_push(args: argparse.Namespace) -> int:
 
     src = Path(args.dir)
     if not _STORE_MODEL_RE.match(args.name):
-        print("error: name must be letters, digits, '.', '_' or '-'", file=sys.stderr)
+        print("error: name must be letters, digits, '.', '_' or '-', with up to three '/' (e.g. hf/org/repo)", file=sys.stderr)
         return 2
     if not src.is_dir() or src.is_symlink():
         print(f"error: {src} is not a directory", file=sys.stderr)
@@ -157,8 +175,9 @@ def _models_push(args: argparse.Namespace) -> int:
         print(f"error: {src} contains symlinks ({links[0].name}, ...); push a real copy "
               "(e.g. `kessel flatten` an overlay first)", file=sys.stderr)
         return 2
-    if not (src / "config.json").is_file():
-        print(f"error: {src} has no config.json", file=sys.stderr)
+    if not ((src / "config.json").is_file() or (src / "adapter_config.json").is_file()
+            or any(src.rglob("*.gguf"))):
+        print(f"error: {src} has no config.json, adapter_config.json or .gguf files", file=sys.stderr)
         return 2
     store = _model_store()
     if store is None:
@@ -176,6 +195,25 @@ def _models_push(args: argparse.Namespace) -> int:
         print(f"error: {e}", file=sys.stderr)
         return 1
     print(f"  pushed; serve with {{\"model\": {{\"store_model\": \"{args.name}\"}}}}")
+    return 0
+
+
+def _models_mirror(args: argparse.Namespace) -> int:
+    from src.model_mirror import ModelMirrorError, ensure_model_mirror
+
+    store = _model_store()
+    if store is None:
+        return 1
+    try:
+        ref = ensure_model_mirror(args.repo_id, store=store, revision=args.revision,
+                                  token=os.environ.get("HF_TOKEN"), force=args.force,
+                                  workers=args.workers)
+    except ModelMirrorError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    source = (store._manifest(ref[len("store:"):]).get("metadata") or {}).get("source") or {}
+    print(f"{args.repo_id} -> {ref} (commit {str(source.get('hf_sha', '?'))[:12]}, {store.tier} tier)")
+    print(f'  use it as {{"base_model": "{ref}"}}, or set MODEL_MIRROR=true to use mirrors automatically')
     return 0
 
 
@@ -486,6 +524,14 @@ def main(argv=None) -> int:
         help="Show what would be copied (shards + size) without transferring anything",
     )
 
+    put_p = ds_sub.add_parser("put", help="Store a local JSON/JSONL/CSV/Parquet file as swl://<name>@<rev>")
+    put_p.add_argument("file", help="Dataset file")
+    put_p.add_argument("name", help="Dataset name, e.g. b3/pr-review-dpo")
+    put_p.add_argument("--private", action="store_true",
+                       help="Mark the revision private (never promoted to the external tier)")
+    put_p.add_argument("--store", default="internal", choices=["internal", "external"],
+                       help="Which tier to write (default: internal)")
+
     info_p = ds_sub.add_parser("info", help="Show a stored dataset revision's manifest")
     info_p.add_argument("name", help="Dataset ref: swl://name[@rev], name, or name@rev")
     info_p.add_argument(
@@ -505,6 +551,13 @@ def main(argv=None) -> int:
     push_p.add_argument("--workers", type=int, default=8, help="Parallel uploads (default: 8)")
     push_p.add_argument("--dry-run", action="store_true",
                         help="Show what would be uploaded without uploading")
+    mirror_p = md_sub.add_parser(
+        "mirror", help="Copy a HuggingFace Hub model into the store as hf/<org>/<repo>")
+    mirror_p.add_argument("repo_id", help="Hub model id, e.g. Qwen/Qwen3-8B")
+    mirror_p.add_argument("--revision", default=None, help="Branch, tag or commit (default: main)")
+    mirror_p.add_argument("--force", action="store_true",
+                          help="Re-publish even if the mirror is already at the Hub's commit")
+    mirror_p.add_argument("--workers", type=int, default=8, help="Parallel uploads (default: 8)")
     minfo_p = md_sub.add_parser("info", help="Show a stored model's manifest summary")
     minfo_p.add_argument("name")
 
@@ -579,6 +632,8 @@ def main(argv=None) -> int:
             return _datasets_promote(args)
         if args.ds_command == "info":
             return _datasets_info(args)
+        if args.ds_command == "put":
+            return _datasets_put(args)
         ds_parser.print_help()
         return 2
 
@@ -587,6 +642,8 @@ def main(argv=None) -> int:
             return _models_push(args)
         if args.md_command == "info":
             return _models_info(args)
+        if args.md_command == "mirror":
+            return _models_mirror(args)
         md_parser.print_help()
         return 2
 

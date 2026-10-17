@@ -77,12 +77,12 @@ def test_read_file_verifies_digest(store, model_dir):
 def test_plan_sizes_from_stored_config(store, model_dir):
     store.push_dir(model_dir, "C0", snapshot=False)
     plan = build_serve_plan(req(), settings=SETTINGS, model_store=store)
-    assert plan.model_id == "store:models/C0"
+    assert plan.model_id == "store:C0"
     assert plan.served_model_name == "C0"
     assert plan.artifact == "C0" and not plan.lora
     assert plan.artifact_store["bucket"] == "merlina" and plan.artifact_store["prefix"] == "models"
     assert plan.model_specs.weight_bytes_total == FP8_TOTAL_SIZE
-    assert "<store:models/C0>" in plan.vllm_command
+    assert "<store:C0>" in plan.vllm_command
     spec = serve_spec(plan)
     assert spec["source_kind"] == "artifact" and spec["artifact"] == "C0"
 
@@ -104,8 +104,7 @@ def test_request_validation():
         req(store_model="C0", hf_repo="a/b")
     with pytest.raises(ValidationError):
         req(store_model="../C0")
-    with pytest.raises(ValidationError):
-        req(store_model="models/C0")
+    assert req(store_model="hf/Qwen/Qwen3-8B").model.store_model == "hf/Qwen/Qwen3-8B"
 
 
 def test_worker_pulls_stored_model(store, model_dir, tmp_path, monkeypatch):

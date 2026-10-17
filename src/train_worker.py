@@ -61,6 +61,7 @@ from dataset_handlers.formatters import get_chat_template_for_format
 from dataset_handlers.factory import create_loader_from_config
 
 from src.job_manager import JobManager
+from src.model_refs import is_store_ref, resolve_model_ref, restore_adapter_base_ref
 from src.trainer_metrics import extract_extra_metrics, finite_or_none
 from src.model_card import generate_wandb_run_name
 from src.utils import build_grimoire_config, fix_vlm_state_dict_on_disk
@@ -82,7 +83,7 @@ _stop_requested = False
 def _detect_is_vlm(model_name: str) -> bool:
     """Detect if a model is a VLM by checking its config for vision components."""
     try:
-        auto_config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+        auto_config = AutoConfig.from_pretrained(resolve_model_ref(model_name), trust_remote_code=True)
         if hasattr(auto_config, 'vision_config') or hasattr(auto_config, 'visual'):
             return True
         architectures = getattr(auto_config, 'architectures', []) or []
@@ -154,9 +155,10 @@ def _do_hub_upload(config, final_output_dir: str, training_mode: str, job_id: st
     if config.use_lora and config.merge_lora_before_upload:
         try:
             logger.info("Merging LoRA adapter with base model on CPU...")
-            auto_cls, _ = _get_auto_model_class(config.base_model, getattr(config, "model_type", "auto"))
+            base_path = resolve_model_ref(config.base_model)
+            auto_cls, _ = _get_auto_model_class(base_path, getattr(config, "model_type", "auto"))
             base = auto_cls.from_pretrained(
-                config.base_model,
+                base_path,
                 low_cpu_mem_usage=True,
                 torch_dtype=torch.bfloat16,
                 device_map="cpu",
@@ -167,7 +169,7 @@ def _do_hub_upload(config, final_output_dir: str, training_mode: str, job_id: st
 
             # Save locally, fix VLM key issues, then upload
             import tempfile, shutil as _shutil
-            _, is_vlm = _get_auto_model_class(config.base_model, getattr(config, "model_type", "auto"))
+            _, is_vlm = _get_auto_model_class(base_path, getattr(config, "model_type", "auto"))
             merge_dir = tempfile.mkdtemp(prefix="merlina_merge_")
             merged.save_pretrained(merge_dir)
             tokenizer = AutoTokenizer.from_pretrained(final_output_dir)
@@ -218,6 +220,39 @@ def _do_hub_upload(config, final_output_dir: str, training_mode: str, job_id: st
     if job_manager:
         final_status = "stopped" if was_stopped else "completed"
         job_manager.update_job(job_id, status=final_status, progress=1.0, output_dir=final_output_dir)
+
+
+def _do_store_publish(config, final_output_dir: str, training_mode: str, job_id: str, job_manager):
+    """publish_to_store for DDP runs (rank 0, inline): merge on CPU first when
+    merge_lora_before_upload, then push to models/<name>."""
+    import shutil as _shutil
+    import tempfile
+    from src.store_publish import publish_to_store
+
+    name = getattr(config, "store_model_name", None) or str(config.output_name).rsplit("/", 1)[-1]
+    merge_dir = None
+    try:
+        if config.use_lora and config.merge_lora_before_upload:
+            from src.gguf_exporter import merge_lora_to_directory
+            merge_dir = tempfile.mkdtemp(prefix="merlina_store_merge_")
+            merge_lora_to_directory(config.base_model, Path(final_output_dir), Path(merge_dir),
+                                    model_type=getattr(config, "model_type", "auto"))
+        result = {"status": "success", **publish_to_store(
+            final_output_dir, name, merged_dir=merge_dir, config=config, training_mode=training_mode)}
+    except Exception as e:
+        logger.error(f"Store publish failed: {e}", exc_info=True)
+        result = {"status": "failed", "error": str(e)}
+    finally:
+        if merge_dir:
+            _shutil.rmtree(merge_dir, ignore_errors=True)
+    if job_manager:
+        try:
+            job = job_manager.get_job(job_id)
+            metrics = dict(job.metrics or {}) if job else {}
+            metrics["store_publish"] = result
+            job_manager.update_job(job_id, metrics=metrics)
+        except Exception:
+            logger.exception("Could not record the store publish result")
 
 
 def _sigterm_handler(signum, frame):
@@ -486,12 +521,14 @@ def run_worker(args):
                 bnb_4bit_use_double_quant=True,
             )
 
-        tokenizer = AutoTokenizer.from_pretrained(config.base_model, trust_remote_code=True)
+        # The parent pulls store: refs before launching, so every rank hits the cache.
+        model_path = resolve_model_ref(config.base_model)
+        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
 
         model_type = getattr(config, "model_type", "auto")
-        auto_model_cls, is_vlm = _get_auto_model_class(config.base_model, model_type)
+        auto_model_cls, is_vlm = _get_auto_model_class(model_path, model_type)
 
         # KEY FIX: In DDP mode, each process loads the full model on its own GPU.
         # device_map="auto" would spread across GPUs, breaking DDP.
@@ -499,7 +536,7 @@ def run_worker(args):
         logger.info(f"Loading model on device cuda:{local_rank} (DDP mode)")
 
         model = auto_model_cls.from_pretrained(
-            config.base_model,
+            model_path,
             quantization_config=bnb_config,
             attn_implementation=attn_implementation,
             torch_dtype=torch_dtype if not bnb_config else None,
@@ -819,6 +856,8 @@ def run_worker(args):
 
             final_output_dir = f"./models/{config.output_name}"
             trainer.save_model(final_output_dir)
+            if is_main and is_store_ref(config.base_model):
+                restore_adapter_base_ref(final_output_dir, config.base_model)
 
             final_step = trainer.global_step
             final_max_steps = trainer.max_steps
@@ -870,6 +909,9 @@ def run_worker(args):
                         progress=final_progress,
                         output_dir=final_output_dir,
                     )
+
+            if is_main and getattr(config, "publish_to_store", False) and not was_stopped:
+                _do_store_publish(config, final_output_dir, training_mode, args.job_id, job_manager)
 
             # Finish wandb
             if config.use_wandb and wandb is not None and wandb.run is not None:

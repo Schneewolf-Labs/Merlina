@@ -326,6 +326,12 @@ def run_merge_stage(payload: Dict[str, Any], job_manager: JobManager,
         for artifact in payload.get("artifacts_out") or ["merged"]:
             store.push_dir(merged_dir, artifact)
             state.add_artifact(artifact)
+    if payload.get("publish_store"):
+        from src.store_publish import publish_to_store
+        name = config_dict.get("store_model_name") or str(config_dict["output_name"]).rsplit("/", 1)[-1]
+        result = publish_to_store(merged_dir, name,
+                                  store=store_from_description(payload["publish_store"]))
+        state.add_artifact(result["ref"])
 
     job_manager.update_job(job_id, status="completed", progress=1.0,
                            output_dir=str(merged_dir))
@@ -367,6 +373,10 @@ def main() -> None:
 
     logger.info("Remote worker starting stage %r for job %s", stage, job_id)
     try:
+        if payload.get("model_store"):
+            # store: base models resolve against the store the control plane named.
+            from src.model_refs import register_store
+            register_store(store_from_description(payload["model_store"]))
         runner(payload, job_manager, state)
         state.set_state(STATE_DONE)
         logger.info("Stage %r complete", stage)
