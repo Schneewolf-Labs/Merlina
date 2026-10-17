@@ -70,6 +70,7 @@ from src.trainer_metrics import extract_extra_metrics, finite_or_none
 from src.memory_guard import reclaim_cuda_cache
 from src.websocket_manager import websocket_manager
 from src.preflight_checks import is_local_model_path
+from src.model_refs import is_store_ref, resolve_model_ref, restore_adapter_base_ref
 from src.checkpoint_policy import (
     resolve_save_steps,
     epoch_end_saves,
@@ -92,7 +93,7 @@ _VLM_ARCH_PATTERNS = ['ForConditionalGeneration', 'ForVision', 'ImageText']
 def _detect_is_vlm(model_name: str) -> bool:
     """Detect if a model is a VLM by checking its config for vision components."""
     try:
-        auto_config = AutoConfig.from_pretrained(model_name, trust_remote_code=True)
+        auto_config = AutoConfig.from_pretrained(resolve_model_ref(model_name), trust_remote_code=True)
         # Check for vision config (most reliable indicator)
         if hasattr(auto_config, 'vision_config') or hasattr(auto_config, 'visual'):
             return True
@@ -148,7 +149,7 @@ def _save_processor(base_model: str, output_dir: str) -> bool:
     Returns True if a processor was saved, False otherwise.
     """
     try:
-        processor = AutoProcessor.from_pretrained(base_model, trust_remote_code=True)
+        processor = AutoProcessor.from_pretrained(resolve_model_ref(base_model), trust_remote_code=True)
         # AutoProcessor falls back to bare tokenizers when no preprocessor_config
         # is present. We only want to claim success when we got a real
         # multi-modal processor (image and/or video processor attached).
@@ -179,7 +180,7 @@ def _save_generation_config(base_model: str, output_dir: str) -> bool:
     """
     try:
         from transformers import GenerationConfig
-        gen_config = GenerationConfig.from_pretrained(base_model, trust_remote_code=True)
+        gen_config = GenerationConfig.from_pretrained(resolve_model_ref(base_model), trust_remote_code=True)
         gen_config.save_pretrained(output_dir)
         logger.info(f"✅ Generation config saved to {output_dir}")
         return True
@@ -995,6 +996,11 @@ def run_training_distributed(
             event_loop,
         )
 
+        # Pull a store: base model once, here, so the DDP ranks all find it
+        # in the cache instead of queueing on the pull lock past NCCL timeouts.
+        if is_store_ref(config.base_model):
+            resolve_model_ref(config.base_model)
+
         # Serialize config
         with open(config_path, "w") as f:
             json.dump(config.model_dump(), f)
@@ -1331,9 +1337,15 @@ def run_training_sync(
         # Load model and tokenizer
         job_manager.update_job(job_id, status="loading_model", progress=0.1)
 
-        # Determine if loading from local path or HuggingFace
-        is_local = is_local_model_path(config.base_model)
-        model_source = "local directory" if is_local else "HuggingFace Hub"
+        # Determine if loading from object storage, a local path or HuggingFace.
+        # store: refs are pulled into the local model cache here (once per
+        # generation); config.base_model keeps the ref for cards and uploads.
+        if is_store_ref(config.base_model):
+            model_source = "object storage"
+        elif is_local_model_path(config.base_model):
+            model_source = "local directory"
+        else:
+            model_source = "HuggingFace Hub"
         logger.info(f"Loading model from {model_source}: {config.base_model}")
 
         send_websocket_update(
@@ -1346,8 +1358,9 @@ def run_training_sync(
             event_loop
         )
 
+        model_path = resolve_model_ref(config.base_model)
         tokenizer = AutoTokenizer.from_pretrained(
-            config.base_model,
+            model_path,
             trust_remote_code=True
         )
 
@@ -1355,7 +1368,7 @@ def run_training_sync(
             tokenizer.pad_token = tokenizer.eos_token
 
         model_type = getattr(config, 'model_type', 'auto')
-        auto_model_cls, is_vlm = _get_auto_model_class(config.base_model, model_type)
+        auto_model_cls, is_vlm = _get_auto_model_class(model_path, model_type)
 
         # Single-GPU rigs: pin everything to cuda:0 to avoid accelerate's auto-dispatch
         # spilling MoE experts to CPU (bnb 4-bit refuses any CPU/disk-resident modules).
@@ -1365,7 +1378,7 @@ def run_training_sync(
             device_map = "auto"
 
         model = auto_model_cls.from_pretrained(
-            config.base_model,
+            model_path,
             quantization_config=bnb_config,
             attn_implementation=attn_implementation,
             dtype=torch_dtype if not bnb_config else None,
@@ -1766,6 +1779,7 @@ def run_training_sync(
 
         final_output_dir = f"./models/{config.output_name}"
         trainer.save_model(final_output_dir)
+        restore_adapter_base_ref(final_output_dir, config.base_model if is_store_ref(config.base_model) else None)
 
         # For VLMs, save the processor (image processor, preprocessor_config.json, etc.)
         # and generation config from the base model so the output directory has

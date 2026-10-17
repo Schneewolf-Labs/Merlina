@@ -33,6 +33,8 @@ import wandb
 from datasets import load_dataset, Dataset
 from transformers import AutoTokenizer
 
+from src.model_refs import resolve_model_ref
+
 from grimoire import GrimoireTrainer
 
 from artemis_vlm import (
@@ -278,7 +280,7 @@ def _load_artemis_model_and_processor(
     stage = (getattr(config, "stage", None) or "stage1").lower()
 
     if stage == "stage2":
-        ckpt = config.base_model  # an ArtemisVLM (A3) checkpoint directory
+        ckpt = resolve_model_ref(config.base_model)  # an ArtemisVLM (A3) checkpoint directory
         logger.info(f"Loading Artemis Stage-2 checkpoint (continue from A3): {ckpt}")
         model = ArtemisVLMForConditionalGeneration.from_pretrained(ckpt, dtype=torch_dtype)
         tokenizer = AutoTokenizer.from_pretrained(ckpt, trust_remote_code=True)
@@ -292,8 +294,8 @@ def _load_artemis_model_and_processor(
 
     from transformers import Qwen3VLForConditionalGeneration
 
-    text_path = config.base_model
-    vision_id = config.vision_model_id or "Qwen/Qwen3-VL-2B-Instruct"
+    text_path = resolve_model_ref(config.base_model)
+    vision_id = resolve_model_ref(config.vision_model_id or "Qwen/Qwen3-VL-2B-Instruct")
     image_token_id = config.image_token_id or 22
 
     logger.info(f"Assembling Artemis: text={text_path} | vision={vision_id}")

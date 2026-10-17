@@ -260,23 +260,33 @@ class S3ArtifactStore(ArtifactStore):
         except Exception:
             raise ArtifactStoreError("Artifact upload failed; previous committed generation is preserved") from None
 
-    def list_artifacts(self) -> list:
-        """Committed artifacts under this prefix: ``[{name, size, files, created_at}]``."""
+    def list_artifacts(self, max_depth: int = 4) -> list:
+        """Committed artifacts under this prefix, including nested names such
+        as ``hf/<org>/<repo>``: ``[{name, size, files, created_at}]``."""
         root = "/".join(part for part in (self.bucket, self.prefix) if part)
-        try:
-            entries = self.fs.ls(root, detail=False)
-        except FileNotFoundError:
-            return []
         out = []
-        for entry in sorted(entries):
-            name = entry.rstrip("/").rsplit("/", 1)[-1]
+
+        def walk(path, rel, depth):
             try:
-                manifest = self._manifest(safe_path(name))
-            except (FileNotFoundError, ArtifactStoreError):
-                continue        # a folder without a committed manifest
-            out.append({"name": name, "files": len(manifest["files"]),
-                        "size": sum(f["size"] for f in manifest["files"]),
-                        "created_at": manifest.get("created_at")})
+                entries = self.fs.ls(path, detail=False)
+            except FileNotFoundError:
+                return
+            for entry in sorted(entries):
+                leaf = entry.rstrip("/").rsplit("/", 1)[-1]
+                if leaf in ("manifest.json", "generations"):
+                    continue
+                name = f"{rel}/{leaf}" if rel else leaf
+                try:
+                    manifest = self._manifest(safe_path(name))
+                except (FileNotFoundError, ArtifactStoreError):
+                    if depth < max_depth:
+                        walk(f"{root}/{name}", name, depth + 1)
+                    continue
+                out.append({"name": name, "files": len(manifest["files"]),
+                            "size": sum(f["size"] for f in manifest["files"]),
+                            "created_at": manifest.get("created_at")})
+
+        walk(root, "", 1)
         return out
 
     def files(self, name: str) -> list:

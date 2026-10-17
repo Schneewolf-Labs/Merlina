@@ -48,6 +48,10 @@ def is_local_model_path(model_path: str) -> bool:
     Returns:
         True if it's a local path, False if it's a HuggingFace model ID
     """
+    # store:<name> refs live in object storage, not on this disk
+    if model_path.startswith("store:"):
+        return False
+
     # Check for path indicators
     path = Path(model_path)
 
@@ -226,6 +230,11 @@ class PreflightValidator:
             self.errors.append(
                 f"Base model '{config.base_model}' is a local path — remote workers "
                 "can only load models from the HuggingFace Hub."
+            )
+        if str(config.base_model).startswith("store:"):
+            self.errors.append(
+                f"Base model '{config.base_model}' is in object storage — remote training "
+                "from store: models isn't supported yet; train it locally."
             )
 
         return details
@@ -525,6 +534,8 @@ class PreflightValidator:
     def _check_model_access(self, config: Any) -> Dict[str, Any]:
         """Check if model is accessible (local path or HuggingFace)"""
         model_path = config.base_model
+        if isinstance(model_path, str) and model_path.startswith("store:"):
+            return self._check_store_model(model_path)
         is_local = is_local_model_path(model_path)
 
         if is_local:
@@ -607,13 +618,68 @@ class PreflightValidator:
                 "has_token": bool(config.hf_token or os.getenv("HF_TOKEN"))
             }
 
-    def _check_hf_dataset_resolves(self, repo_id: str, hf_token: Optional[str], label: str) -> None:
+    def _check_store_model(self, ref: str) -> Dict[str, Any]:
+        """A store: base model must exist in the store, or be cached locally
+        when the store is unreachable (the loader falls back to the cache)."""
+        from src.model_refs import ModelRefError, cached_ref_path, store_name
+        try:
+            name = store_name(ref)
+        except ModelRefError as e:
+            self.errors.append(str(e))
+            return {"model": ref, "store": True, "exists": False}
+        try:
+            from src.remote.artifacts import model_store
+            store = model_store()
+            exists = store.exists(name)
+        except FileNotFoundError:
+            exists = False
+        except Exception as e:
+            cached = cached_ref_path(ref)
+            if cached:
+                self.warnings.append(f"Model store unreachable ({e}); training will use the "
+                                     f"cached copy of {ref}.")
+                return {"model": ref, "store": True, "exists": True, "cached": True}
+            self.errors.append(f"Can't reach the model store for {ref} ({e}) and it isn't cached.")
+            return {"model": ref, "store": True, "exists": False}
+        if not exists:
+            hint = (f" or `merlina models mirror {name[3:]}`" if name.startswith("hf/") else "")
+            self.errors.append(f"No model {name!r} in the store (models/{name}). Push it with "
+                               f"`merlina models push <dir> {name}`{hint}.")
+        return {"model": ref, "store": True, "exists": exists}
+
+    def _hf_mirror_available(self, source: Any) -> bool:
+        """Whether a missing/gated HF dataset would still load from its
+        internal-store mirror (mirroring on, and a mirrored copy exists)."""
+        if source is None:
+            return False
+        try:
+            from dataset_handlers.factory import default_internal_store, default_prefer_internal
+            from dataset_handlers.internal_store import LATEST
+            from dataset_handlers.mirror import mirror_name
+            if not (getattr(source, "prefer_internal", False) or default_prefer_internal()):
+                return False
+            if getattr(source, "streaming", False):
+                return False        # streaming bypasses the mirror
+            store = default_internal_store()
+            if store is None:
+                return False
+            name = mirror_name(source.repo_id, getattr(source, "config_name", None),
+                               getattr(source, "split", None) or "train")
+            return store.exists(name, LATEST)
+        except Exception as e:
+            logger.debug(f"Mirror lookup failed: {e}")
+            return False
+
+    def _check_hf_dataset_resolves(self, repo_id: str, hf_token: Optional[str], label: str,
+                                   source: Any = None) -> None:
         """Verify an HF Hub dataset id actually resolves before GPU time is spent.
 
         Unresolvable repos are hard errors (this is exactly the case where a
         job would otherwise fail — or worse, silently fall back — at load
-        time). Network / hub outages only warn, so offline setups serving
-        from the local HF cache aren't blocked.
+        time), unless mirroring is on and the internal store holds a copy:
+        the loader serves the mirror when the Hub can't resolve the repo.
+        Network / hub outages only warn, so offline setups serving from the
+        local HF cache aren't blocked.
         """
         try:
             from huggingface_hub import HfApi
@@ -625,15 +691,27 @@ class PreflightValidator:
             )
             return
 
+        def mirrored(problem: str) -> bool:
+            if not self._hf_mirror_available(source):
+                return False
+            self.warnings.append(
+                f"{label} '{repo_id}' is {problem} on the HuggingFace Hub; training will "
+                "use the mirrored copy in the internal dataset store.")
+            return True
+
         try:
             HfApi().dataset_info(repo_id, token=hf_token or None, timeout=10.0)
         except GatedRepoError:
+            if mirrored("gated"):
+                return
             self.errors.append(
                 f"{label} '{repo_id}' is gated and the provided hf_token does not "
                 "grant access. Accept the dataset's terms on huggingface.co and/or "
                 "provide a valid hf_token."
             )
         except RepositoryNotFoundError:
+            if mirrored("not found"):
+                return
             self.errors.append(
                 f"{label} '{repo_id}' does not resolve on the HuggingFace Hub. "
                 "Check the id for typos, or provide hf_token if it is a private "
@@ -677,7 +755,7 @@ class PreflightValidator:
                 )
             else:
                 self._check_hf_dataset_resolves(
-                    dataset_source.repo_id, hf_token, "Dataset"
+                    dataset_source.repo_id, hf_token, "Dataset", source=dataset_source
                 )
 
         elif dataset_source.source_type == "local_file":
@@ -708,7 +786,7 @@ class PreflightValidator:
                 if not repo_id:
                     self.errors.append("Additional HuggingFace dataset source requires repo_id")
                 else:
-                    self._check_hf_dataset_resolves(repo_id, hf_token, "Additional dataset")
+                    self._check_hf_dataset_resolves(repo_id, hf_token, "Additional dataset", source=extra)
             elif source_type == "local_file":
                 file_path = getattr(extra, "file_path", None)
                 if not file_path:

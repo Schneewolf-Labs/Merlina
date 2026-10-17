@@ -1590,6 +1590,7 @@ async def preview_remote_plan(config: TrainingConfig):
 # persist in the jobs DB (their own table); the API key lives in memory only.
 
 from src.remote.inference import RemoteInferenceRequest  # noqa: E402  (pydantic only)
+from src.model_refs import ModelRefError, resolve_model_ref  # noqa: E402
 from src.remote.sessions import InferenceSessionStore  # noqa: E402
 
 _inference_sessions = InferenceSessionStore(settings.database_path)
@@ -3449,7 +3450,7 @@ def preview_formatted_dataset(config: DatasetConfig, offset: int = 0, limit: int
                 logger.info(f"Loading tokenizer for preview: {config.model_name}")
                 try:
                     loaded = AutoTokenizer.from_pretrained(
-                        config.model_name, trust_remote_code=True,
+                        resolve_model_ref(config.model_name), trust_remote_code=True,
                     )
                     with _tokenizer_cache_lock:
                         tokenizer_cache[config.model_name] = loaded
@@ -3785,7 +3786,7 @@ def _diffusion_generate_locked(req: DiffusionGenerateRequest):
 
     cmd = [
         sys.executable, str(script),
-        "--base-model", req.base_model,
+        "--base-model", resolve_model_ref(req.base_model),
         "--lora-dir", str(lora_dir),
         "--out-dir", str(out_dir),
         "--adapter", req.adapter,
@@ -4686,7 +4687,7 @@ def preload_model_tokenizer(request: ModelPreloadRequest):
 
             # Load tokenizer (this will download model files if needed)
             tokenizer = AutoTokenizer.from_pretrained(
-                model_name,
+                resolve_model_ref(model_name),
                 trust_remote_code=True,
                 token=request.hf_token
             )
@@ -4786,7 +4787,7 @@ def detect_model_layers(request: ModelLayersRequest):
 
         # Load model with minimal memory footprint for layer detection
         model = AutoModelForCausalLM.from_pretrained(
-            model_name,
+            resolve_model_ref(model_name),
             torch_dtype=torch.float16,
             device_map="cpu",  # Load on CPU to minimize GPU memory
             trust_remote_code=True,
@@ -5093,9 +5094,16 @@ def _load_inference_model_locked(request: InferenceLoadRequest):
             f"on base model '{base_model_name}'"
         )
     else:
-        # It's either a HuggingFace model ID or a local full model path
+        # It's a HuggingFace model ID, a store: ref or a local full model path
         base_model_name = model_name
         logger.info(f"Loading model: {model_name}")
+
+    # A store: base (given directly, or recorded in the adapter's config) is
+    # loaded from the local model cache, pulling it first if needed.
+    try:
+        base_model_name = resolve_model_ref(base_model_name)
+    except ModelRefError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     try:
         # Determine dtype

@@ -333,6 +333,37 @@ def _profile_from_hub(model_id: str, hf_token: Optional[str]) -> Optional[ModelP
     return profile
 
 
+_DTYPE_BYTES = {"bfloat16": 2, "float16": 2, "float32": 4}
+
+
+def _profile_from_store(model_id: str) -> Optional[ModelProfile]:
+    """A store: model: its local cache copy when present (exact counts),
+    else config.json and the safetensors index read from the store."""
+    from .model_refs import cached_ref_path, store_name
+
+    cached = cached_ref_path(model_id)
+    if cached:
+        return _profile_from_local_path(cached)
+    try:
+        from .remote.artifacts import model_store
+        store = model_store()
+        name = store_name(model_id)
+        cfg = json.loads(store.read_file(name, "config.json"))
+    except Exception as e:
+        logger.debug(f"Could not read config.json for {model_id} from the store: {e}")
+        return None
+    profile = _profile_from_config_dict(model_id, cfg, source="store_config")
+    try:
+        index = json.loads(store.read_file(name, "model.safetensors.index.json"))
+        total = (index.get("metadata") or {}).get("total_size")
+        per = _DTYPE_BYTES.get(str(cfg.get("torch_dtype") or cfg.get("dtype") or ""))
+        if total and per:
+            profile.num_params = float(total) / per
+    except Exception as e:
+        logger.debug(f"No safetensors index for {model_id} in the store: {e}")
+    return profile
+
+
 def _profile_from_name(model_id: str) -> Optional[ModelProfile]:
     size_b = get_model_size_from_name(model_id)
     if size_b is None:
@@ -371,7 +402,9 @@ def get_model_profile(model_id: str, hf_token: Optional[str] = None,
     from .preflight_checks import is_local_model_path
 
     profile: Optional[ModelProfile] = None
-    if is_local_model_path(model_id):
+    if str(model_id).startswith("store:"):
+        profile = _profile_from_store(model_id)
+    elif is_local_model_path(model_id):
         profile = _profile_from_local_path(model_id)
     else:
         profile = _profile_from_hub(model_id, hf_token)

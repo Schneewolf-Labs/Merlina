@@ -139,8 +139,14 @@ def fetch_model_specs(model_id: str, hf_token: Optional[str] = None,
                       revision: Optional[str] = None) -> ModelSpecs:
     """
     Fetch ``config.json`` (and the safetensors index, when present) from
-    the HuggingFace Hub and parse it into :class:`ModelSpecs`.
+    the HuggingFace Hub, or from object storage for a ``store:`` ref, and
+    parse it into :class:`ModelSpecs`.
     """
+    if str(model_id).startswith("store:"):
+        from src.model_refs import store_name
+        from .artifacts import model_store
+        return store_model_specs(model_store(), store_name(model_id))
+
     from huggingface_hub import hf_hub_download
 
     config_path = hf_hub_download(model_id, "config.json", token=hf_token, revision=revision)
@@ -158,6 +164,21 @@ def fetch_model_specs(model_id: str, hf_token: Optional[str] = None,
         pass  # single-file or non-safetensors repos have no index
 
     return parse_model_specs(model_id, config, weight_bytes)
+
+
+def store_model_specs(store, name: str) -> ModelSpecs:
+    """``ModelSpecs`` from a stored model's ``config.json`` and safetensors index."""
+    config = json.loads(store.read_file(name, "config.json"))
+    weight_bytes = None
+    try:
+        index = json.loads(store.read_file(name, "model.safetensors.index.json"))
+        weight_bytes = (index.get("metadata") or {}).get("total_size")
+    except FileNotFoundError:
+        pass
+    if not weight_bytes:
+        weight_bytes = sum(f["size"] for f in store.files(name)
+                           if f["path"].endswith(".safetensors")) or None
+    return parse_model_specs(f"store:{name}", config, weight_bytes)
 
 
 def specs_to_profile(specs: ModelSpecs) -> "ModelProfile":

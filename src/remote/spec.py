@@ -170,7 +170,7 @@ class ServePlan:
     the real session, so what the owner approves is what runs.
     """
     model_source: Dict[str, Any]           # {"hf_repo", "revision"} | {"store_model"} | {"job_id", "artifact"}
-    model_id: str                          # what vLLM loads (HF id, "store:models/<name>", or an adapter's base)
+    model_id: str                          # what vLLM loads (HF id, "store:<name>", or an adapter's base)
     revision: Optional[str]
     served_model_name: str                 # name clients pass as "model"
     base_served_model_name: Optional[str]  # adapter sessions also serve the bare base

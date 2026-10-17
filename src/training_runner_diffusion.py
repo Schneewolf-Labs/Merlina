@@ -31,6 +31,7 @@ import torch
 import wandb
 
 from src.job_manager import JobManager
+from src.model_refs import resolve_model_ref
 from src.training_runner import (
     WebSocketCallback,
     _cleanup_training_resources,
@@ -106,7 +107,7 @@ def _run_sample_subprocess(
 
     cmd = [
         sys.executable, str(script_path),
-        "--base-model", base_model,
+        "--base-model", resolve_model_ref(base_model),
         "--lora-dir", str(lora_dir),
         "--out-dir", str(out_dir),
         "--adapter", _adapter_family_short_name(adapter_family),
@@ -379,7 +380,7 @@ def run_diffusion_training_sync(
             adapter_kwargs["defer_transformer"] = True
         # model_name overrides base_model when set; otherwise fall back so
         # diffusion jobs can reuse the existing single base_model field.
-        model_path = getattr(config, "model_name", None) or config.base_model
+        model_path = resolve_model_ref(getattr(config, "model_name", None) or config.base_model)
         adapter = adapter_cls(model_path, **adapter_kwargs)
 
         # ── Pre-compute embeddings ───────────────────────────────

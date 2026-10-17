@@ -29,6 +29,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   jobs that can be served) and `POST /remote/inference/{id}/chat` (one chat
   completion, relayed through the control plane). Sessions now record the
   worker's boot phase.
+- **Base models from object storage: `store:<name>`.** Training, the
+  Playground, tokenizer preview, layer detection, merges and GGUF export
+  accept `store:<name>` for a model pushed with `merlina models push`. The
+  first use pulls it into a local cache keyed by generation; later jobs
+  reuse it, and when the store is unreachable the newest cached copy is
+  used. Adapters, cards and job records keep the reference. Pre-flight
+  checks that the model exists, and VRAM estimates and remote sizing read
+  `config.json` from the store. VLM key grafting now also works for local
+  base models. ([docs](docs/user/store-models.md))
+- **Pre-flight accepts a deleted or gated HF dataset when its mirror
+  exists.** With mirroring on (`prefer_internal`), a missing or gated repo
+  that has a copy in the internal store is now a warning. Before, it was a
+  hard error, although the loader would have served the mirror.
 - **Serve models from object storage, no Hub repo needed.**
   `merlina models push <dir> <name>` uploads a model directory to the
   artifact bucket under `models/<name>`. Files are hashed in place and

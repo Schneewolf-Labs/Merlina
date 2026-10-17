@@ -13,6 +13,7 @@ from typing import Any, Optional
 from huggingface_hub import HfApi
 
 from src.preflight_checks import is_local_model_path
+from src.model_refs import is_store_ref
 from src.utils import calculate_effective_batch_size
 from src.config_manager import (
     SECRET_FIELDS as _CONFIG_SECRET_FIELDS,
@@ -53,7 +54,14 @@ def generate_model_readme(
         base_model = getattr(config, "model_name", None) or getattr(config, "base_model", "")
     else:
         base_model = config.base_model
-    if is_local_model_path(base_model):
+    hub_base_model = base_model
+    if is_store_ref(base_model):
+        # Object-storage models: a Hub mirror (store:hf/<org>/<repo>) is
+        # credited to its Hub id; our own stored models get no Hub link.
+        name = base_model[len("store:"):]
+        hub_base_model = name[3:] if name.startswith("hf/") else None
+        base_model_display = hub_base_model or base_model
+    elif is_local_model_path(base_model):
         # For local models, just use the directory name
         base_model_display = os.path.basename(base_model.rstrip('/'))
     else:
@@ -116,8 +124,9 @@ def generate_model_readme(
             frontmatter_lines.append(f"- {repo_id}")
 
     # Add base model
-    frontmatter_lines.append(f"base_model:")
-    frontmatter_lines.append(f"- {base_model}")
+    if hub_base_model:
+        frontmatter_lines.append(f"base_model:")
+        frontmatter_lines.append(f"- {hub_base_model}")
 
     frontmatter_lines.append("---")
 

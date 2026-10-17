@@ -532,8 +532,13 @@ def merge_lora_to_directory(
 
     from .training_runner import _get_auto_model_class  # circular-safe lazy import
 
+    from .model_refs import resolve_model_ref
+
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    # Everything below only loads from the base, so a store: ref can be
+    # swapped for its local cache directory.
+    base_model = resolve_model_ref(base_model)
 
     reload_cls, _ = _get_auto_model_class(base_model, model_type)
     logger.info("Reloading base model on CPU for merge: %s", base_model)

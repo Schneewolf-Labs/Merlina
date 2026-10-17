@@ -146,7 +146,7 @@ def _models_push(args: argparse.Namespace) -> int:
 
     src = Path(args.dir)
     if not _STORE_MODEL_RE.match(args.name):
-        print("error: name must be letters, digits, '.', '_' or '-'", file=sys.stderr)
+        print("error: name must be letters, digits, '.', '_' or '-', with up to three '/' (e.g. hf/org/repo)", file=sys.stderr)
         return 2
     if not src.is_dir() or src.is_symlink():
         print(f"error: {src} is not a directory", file=sys.stderr)
