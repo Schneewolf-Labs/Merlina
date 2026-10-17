@@ -133,6 +133,10 @@ def run_training_remote(
         plan = build_remote_plan(config, offers=offers, job_id=job_id)
         if store is None:
             store = _default_store(config, job_id)
+        # Fail here, not after hours of rented training, if artifacts can't land.
+        _update(job_manager, event_loop, job_id, status="provisioning", progress=0.0,
+                message="Checking the artifact store")
+        store.verify_writable()
         from .inputs import stage_remote_inputs
         prepared_config = stage_remote_inputs(config.model_dump(), uploaded_datasets, store)
         job_manager.update_job(job_id, metrics={

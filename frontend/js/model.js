@@ -72,6 +72,7 @@ class ModelManager {
                 const groups = [
                     { source: 'hf_cache', label: '🤗 HuggingFace Cache' },
                     { source: 'models_dir', label: '📦 Merlina Models Folder' },
+                    { source: 'store', label: '🗄️ Model Store (store:)' },
                 ];
                 for (const { source, label } of groups) {
                     const entries = models.filter(m => m.source === source);

@@ -98,8 +98,9 @@ class Settings(BaseSettings):
     # copy when the Hub is unreachable. See src/model_mirror.py.
     model_mirror: bool = False
 
-    # Where remote/hosted runs keep artifacts: "hf_hub" (default; private HF
-    # repos), or a tier name ("external" / "internal"), which reuses that
+    # Where remote/hosted runs keep artifacts (and store: models live): a tier
+    # name ("external" / "internal"), or "hf_hub" (private HF repos). Unset:
+    # "external" when that tier is configured, else "hf_hub". A tier reuses that
     # tier's endpoint and credentials. Remote (RunPod) runs need "external":
     # the internal tier is LAN-only.
     artifact_store: Optional[str] = None
@@ -423,7 +424,10 @@ def resolve_artifact_location(settings) -> ArtifactLocation:
         if not bucket_override and legacy_bucket and legacy_bucket != tier_settings(settings, tier)["bucket"]:
             bucket_override = legacy_bucket
     elif not store:
-        store = legacy or "hf_hub"
+        # Unset: the external tier (R2) when it's configured, so a server with
+        # object storage never quietly falls back to HF repos (and HF quota).
+        ext = tier_settings(settings, "external")
+        store = legacy or ("external" if ext["endpoint"] and ext["bucket"] else "hf_hub")
     if store == "hf_hub":
         return ArtifactLocation(kind="hf_hub", prefix=prefix)
     if store not in STORAGE_TIER_NAMES:

@@ -61,6 +61,11 @@ class InferenceManager {
             manualGroup.style.display = 'block';
             hfTokenGroup.style.display = 'block';
             document.getElementById('inference-model-name').placeholder = 'meta-llama/Meta-Llama-3-8B-Instruct';
+        } else if (source === 'store') {
+            trainedGroup.style.display = 'none';
+            manualGroup.style.display = 'block';
+            hfTokenGroup.style.display = 'none';
+            document.getElementById('inference-model-name').placeholder = 'store:C0';
         } else {
             // local path
             trainedGroup.style.display = 'none';
@@ -208,9 +213,10 @@ class InferenceManager {
             };
         }
 
-        // Free-form entry (HF model ID or local path) — always transformers.
-        const modelName = document.getElementById('inference-model-name').value.trim();
+        // Free-form entry (HF model ID, store model or local path) — always transformers.
+        let modelName = document.getElementById('inference-model-name').value.trim();
         if (!modelName) return null;
+        if (source === 'store' && !modelName.startsWith('store:')) modelName = `store:${modelName}`;
         return {
             model_name: modelName,
             backend: 'transformers',

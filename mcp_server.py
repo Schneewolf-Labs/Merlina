@@ -398,9 +398,11 @@ async def preview_dataset(
     Preview raw samples from a dataset before training.
 
     Args:
-        repo_id: HuggingFace dataset id (for source_type='huggingface') or the
-            uploaded dataset id (for source_type='upload').
-        source_type: 'huggingface' (default) or 'upload'.
+        repo_id: HuggingFace dataset id (for source_type='huggingface'), the
+            uploaded dataset id (for source_type='upload'), or an internal
+            store address like 'swl://name' / 'swl://name@rev' (for
+            source_type='internal').
+        source_type: 'huggingface' (default), 'upload', or 'internal'.
         split: Dataset split (default 'train').
         format_type: Format to validate against: chatml, llama3, mistral,
             qwen3, custom, raw (default 'chatml').
@@ -411,6 +413,8 @@ async def preview_dataset(
     source: dict = {"source_type": source_type, "split": split}
     if source_type == "upload":
         source["dataset_id"] = repo_id
+    elif source_type == "internal":
+        source["uri"] = repo_id
     else:
         source["repo_id"] = repo_id
 
@@ -467,19 +471,26 @@ async def start_training(
     (a local base_model directory, dataset_jsonl_path for diffusion jobs, a
     local_file dataset source) is read from the *Merlina server's* filesystem,
     not from this machine. When the server is remote, use HuggingFace ids
-    (base_model, dataset_repo_id, dataset_name), or upload first with
+    (base_model, dataset_repo_id, dataset_name), object-storage references
+    (base_model='store:<name>', dataset 'swl://<name>'), or upload first with
     upload_dataset / upload_image_dataset and use the returned
     dataset_id / jsonl_path.
 
+    To publish the result to object storage instead of (or as well as) the
+    Hub, pass overrides={"publish_to_store": true}; it then loads as
+    base_model='store:<output_name>'.
+
     Args:
         output_name: Name for the output model (required).
-        dataset_repo_id: HuggingFace dataset id, or uploaded dataset id when
-            dataset_source_type='upload' (required — there is no default
+        dataset_repo_id: HuggingFace dataset id, uploaded dataset id when
+            dataset_source_type='upload', or 'swl://name[@rev]' when
+            dataset_source_type='internal' (required — there is no default
             dataset).
-        base_model: HuggingFace model id or local path to fine-tune.
+        base_model: HuggingFace model id, 'store:<name>' (a model in the
+            object store), or a local path on the server to fine-tune.
         training_mode: 'sft', 'orpo', 'dpo', 'simpo', 'cpo', 'ipo', 'kto', or
             a 'vlm_*'/'diffusion_*' mode.
-        dataset_source_type: 'huggingface' (default) or 'upload'.
+        dataset_source_type: 'huggingface' (default), 'upload', or 'internal'.
         dataset_split: Dataset split (default 'train').
         dataset_format: chatml, llama3, mistral, qwen3, tokenizer, custom, or
             raw (no formatting — columns passed through verbatim).
@@ -498,6 +509,8 @@ async def start_training(
     source: dict = {"source_type": dataset_source_type, "split": dataset_split}
     if dataset_source_type == "upload":
         source["dataset_id"] = dataset_repo_id
+    elif dataset_source_type == "internal":
+        source["uri"] = dataset_repo_id
     else:
         source["repo_id"] = dataset_repo_id
 

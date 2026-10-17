@@ -9,6 +9,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Merlina 3.0.0 — "Wishcraft" (development)
 
+#### Upgrading from 2.x
+
+- **Storage settings were renamed.** `S3_*`, `R2_*` and `MERLINA_ARTIFACT_*`
+  became `STORAGE_INTERNAL_*`, `STORAGE_EXTERNAL_*`, `ARTIFACT_STORE` and
+  `ARTIFACT_PREFIX`. The old names still work as deprecated aliases.
+  `merlina config migrate-env` previews the rewrite of your `.env`, and
+  `--write` applies it with a backup
+  ([details](docs/storage-tiers.md#renamed-settings)).
+- **`ARTIFACT_STORE` defaults to `external` when R2 is configured.** Before,
+  an unset value always meant private HF repos. Set `ARTIFACT_STORE=hf_hub`
+  to keep the old behavior.
+- **Remote training checks the artifact store before renting a GPU.** It
+  writes, reads back and deletes a probe. Bad keys or a full HF quota now
+  fail the job at once, instead of after training.
+- **New, all opt-in:**
+  - `store:<name>` base models and `merlina models push|mirror`
+    ([docs](docs/user/store-models.md));
+  - `MODEL_MIRROR` and `publish_to_store`;
+  - `merlina datasets put`;
+  - remote inference sessions and the Remote GPUs page
+    ([docs](docs/user/remote-inference.md)).
+- **Database:** new tables and columns are added automatically on first
+  start. No manual migration is needed.
+
+#### Added / changed
+
 - **Remote inference: train → serve → eval on rented GPUs.**
   `POST /remote/inference` rents a RunPod instance and serves a HF repo, or a
   finished remote training job's adapter (base + vLLM LoRA) or merged
@@ -21,6 +47,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and an optional idle timeout, and the instance is always terminated. They
   reuse the remote lifecycle, so the reconciler cleans up orphaned serve
   pods. New `Dockerfile.serve` image (`REMOTE_SERVE_IMAGE`).
+- **3.0 polish.**
+  - Remote training probes the artifact store before provisioning (S3 and
+    HF).
+  - `ARTIFACT_STORE` defaults to the external tier when it's configured.
+  - The base-model picker lists store models under "Model Store", and the
+    Playground has a "Model Store" source.
+  - The MCP `preview_dataset` and `start_training` tools accept
+    `source_type='internal'` (`swl://`) and document `store:` base models
+    and `publish_to_store`.
+  - The Docker and compose comments cover object storage.
 - **Remote GPUs in the web UI.** A new section to plan, start, watch, try
   and stop remote inference sessions. Starting takes a fresh plan plus a
   second click that names the GPU and the maximum spend. Each session shows

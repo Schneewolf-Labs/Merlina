@@ -43,7 +43,7 @@ RUN mkdir -p /wheels \
 # ---------------------------------------------------------------------------
 FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
 
-# git: HuggingFace Hub downloads; curl: healthcheck
+# git: HuggingFace Hub downloads (store: models and swl:// datasets come from S3 instead); curl: healthcheck
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git curl \
     && rm -rf /var/lib/apt/lists/*
@@ -76,6 +76,7 @@ ENV HOST=0.0.0.0 \
     UPLOADS_DIR=/app/data/uploads \
     DATABASE_PATH=/app/data/jobs.db \
     HF_HOME=/app/data/huggingface
+# store: base models are cached under $DATA_DIR/model-cache (./data on the host).
 
 EXPOSE 8000
 

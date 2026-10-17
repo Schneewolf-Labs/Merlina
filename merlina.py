@@ -4786,15 +4786,15 @@ async def list_local_base_models():
     """
     List base models available locally for offline training.
 
-    Combines model repos from the HuggingFace cache (previously downloaded)
-    with full models in Merlina's models directory, so users can pick a
-    base model without internet access.
+    Combines model repos from the HuggingFace cache (previously downloaded),
+    full models in Merlina's models directory, and full models in the model
+    store (``store:<name>``), so users can pick a base model without the Hub.
     """
     if settings.models_dir.is_absolute():
         models_dir = settings.models_dir
     else:
         models_dir = SCRIPT_DIR / settings.models_dir
-    return await asyncio.to_thread(list_local_models, models_dir)
+    return await asyncio.to_thread(list_local_models, models_dir, include_store=True)
 
 
 class ModelLayersRequest(BaseModel):
