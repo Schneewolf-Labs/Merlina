@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **DeepSeek-V4 training.** DeepSeek-V4 ships a Python reference encoder instead of a chat
+  template; Merlina now renders with that encoder (format `tokenizer`), so training text
+  matches vLLM's `deepseek_v4` tokenizer mode, tool calls included. Default LoRA targets
+  resolve to the attention projections plus the shared expert (the routed experts are
+  fused weights). `scripts/smoke_deepseek_v4.py` checks both on CPU.
+
+### Changed
+
+- Requires transformers 5.20.1 or later (the first release with DeepSeek-V4).
+
 ## [3.0.0] - 2026-10-17 "Wishcraft"
 
 ### Upgrading from 2.x

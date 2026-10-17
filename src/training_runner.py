@@ -71,6 +71,7 @@ from src.memory_guard import reclaim_cuda_cache
 from src.websocket_manager import websocket_manager
 from src.preflight_checks import is_local_model_path
 from src.model_refs import is_store_ref, resolve_model_ref, restore_adapter_base_ref
+from src.model_families import attach_chat_encoder, resolve_target_modules
 from src.checkpoint_policy import (
     resolve_save_steps,
     epoch_end_saves,
@@ -1415,6 +1416,7 @@ def run_training_sync(
 
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
+        attach_chat_encoder(tokenizer, model_path)
 
         model_type = getattr(config, 'model_type', 'auto')
         auto_model_cls, is_vlm = _get_auto_model_class(model_path, model_type)
@@ -1448,7 +1450,8 @@ def run_training_sync(
                 lora_dropout=config.lora_dropout,
                 bias="none",
                 task_type=lora_task_type,
-                target_modules=config.target_modules,
+                target_modules=resolve_target_modules(
+                    config.target_modules, getattr(model.config, "model_type", None)),
                 modules_to_save=config.modules_to_save if config.modules_to_save else None
             )
             logger.info(f"LoRA enabled with rank={config.lora_r}, alpha={config.lora_alpha}")

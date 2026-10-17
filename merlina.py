@@ -1605,6 +1605,7 @@ async def preview_remote_plan(config: TrainingConfig):
 
 from src.remote.inference import RemoteInferenceRequest  # noqa: E402  (pydantic only)
 from src.model_refs import ModelRefError, resolve_model_ref  # noqa: E402
+from src.model_families import attach_chat_encoder  # noqa: E402
 from src.remote.sessions import InferenceSessionStore  # noqa: E402
 
 _inference_sessions = InferenceSessionStore(settings.database_path)
@@ -3466,9 +3467,9 @@ def preview_formatted_dataset(config: DatasetConfig, offset: int = 0, limit: int
                 # costs a download once and is free afterwards.
                 logger.info(f"Loading tokenizer for preview: {config.model_name}")
                 try:
-                    loaded = AutoTokenizer.from_pretrained(
-                        resolve_model_ref(config.model_name), trust_remote_code=True,
-                    )
+                    model_path = resolve_model_ref(config.model_name)
+                    loaded = attach_chat_encoder(
+                        AutoTokenizer.from_pretrained(model_path, trust_remote_code=True), model_path)
                     with _tokenizer_cache_lock:
                         tokenizer_cache[config.model_name] = loaded
                     formatter = get_formatter(format_type='tokenizer', tokenizer=loaded)
@@ -4744,11 +4745,12 @@ def preload_model_tokenizer(request: ModelPreloadRequest):
                 os.environ["HF_TOKEN"] = request.hf_token
 
             # Load tokenizer (this will download model files if needed)
-            tokenizer = AutoTokenizer.from_pretrained(
-                resolve_model_ref(model_name),
+            model_path = resolve_model_ref(model_name)
+            tokenizer = attach_chat_encoder(AutoTokenizer.from_pretrained(
+                model_path,
                 trust_remote_code=True,
                 token=request.hf_token
-            )
+            ), model_path)
 
             # Cache the tokenizer (thread-safe)
             with _tokenizer_cache_lock:
@@ -4757,14 +4759,16 @@ def preload_model_tokenizer(request: ModelPreloadRequest):
 
         # Extract useful info about the tokenizer
         has_chat_template = hasattr(tokenizer, 'chat_template') and tokenizer.chat_template is not None
+        chat_encoder = getattr(tokenizer, 'merlina_chat_encoder', None)
 
         return {
             "status": "success",
             "model_name": model_name,
             "vocab_size": tokenizer.vocab_size,
             "model_max_length": tokenizer.model_max_length,
-            "has_chat_template": has_chat_template,
-            "chat_template_preview": str(tokenizer.chat_template)[:200] + "..." if has_chat_template else None,
+            "has_chat_template": has_chat_template or bool(chat_encoder),
+            "chat_template_preview": (str(tokenizer.chat_template)[:200] + "..." if has_chat_template
+                                      else f"<{chat_encoder} reference encoder>" if chat_encoder else None),
             "pad_token": tokenizer.pad_token,
             "eos_token": tokenizer.eos_token,
             "bos_token": tokenizer.bos_token,

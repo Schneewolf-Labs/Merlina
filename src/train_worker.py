@@ -62,6 +62,7 @@ from dataset_handlers.factory import create_loader_from_config
 
 from src.job_manager import JobManager
 from src.model_refs import is_store_ref, resolve_model_ref, restore_adapter_base_ref
+from src.model_families import attach_chat_encoder, resolve_target_modules
 from src.trainer_metrics import extract_extra_metrics, finite_or_none
 from src.model_card import generate_wandb_run_name
 from src.utils import build_grimoire_config, fix_vlm_state_dict_on_disk
@@ -526,6 +527,7 @@ def run_worker(args):
         tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
         if tokenizer.pad_token is None:
             tokenizer.pad_token = tokenizer.eos_token
+        attach_chat_encoder(tokenizer, model_path)
 
         model_type = getattr(config, "model_type", "auto")
         auto_model_cls, is_vlm = _get_auto_model_class(model_path, model_type)
@@ -553,7 +555,8 @@ def run_worker(args):
                 lora_dropout=config.lora_dropout,
                 bias="none",
                 task_type="CAUSAL_LM",
-                target_modules=config.target_modules or None,
+                target_modules=resolve_target_modules(
+                    config.target_modules or None, getattr(model.config, "model_type", None)),
                 modules_to_save=config.modules_to_save or None,
             )
 
