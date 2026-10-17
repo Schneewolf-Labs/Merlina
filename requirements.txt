@@ -22,8 +22,8 @@ transformers>=5.20.1
 flash-linear-attention>=0.5.0
 accelerate>=0.24.0
 # Grimoire RL training engine. Published as `grimoire-rl` on PyPI; import
-# name stays `grimoire`. 1.2.0 added the APIs Merlina depends on.
-grimoire-rl>=1.2.0
+# name stays `grimoire`. 2.1.0 adds LoRA on native FP8/FP4 checkpoints (DeepSeek-V4).
+grimoire-rl>=2.1.0
 # ArtemisVLM model classes (Project Artemis); only loaded when training_mode
 # starts with "vlm_". Published as `artemis-vlm` on PyPI.
 artemis-vlm>=0.1.2
