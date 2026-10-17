@@ -179,6 +179,25 @@ def _models_push(args: argparse.Namespace) -> int:
     return 0
 
 
+def _models_mirror(args: argparse.Namespace) -> int:
+    from src.model_mirror import ModelMirrorError, ensure_model_mirror
+
+    store = _model_store()
+    if store is None:
+        return 1
+    try:
+        ref = ensure_model_mirror(args.repo_id, store=store, revision=args.revision,
+                                  token=os.environ.get("HF_TOKEN"), force=args.force,
+                                  workers=args.workers)
+    except ModelMirrorError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    source = (store._manifest(ref[len("store:"):]).get("metadata") or {}).get("source") or {}
+    print(f"{args.repo_id} -> {ref} (commit {str(source.get('hf_sha', '?'))[:12]}, {store.tier} tier)")
+    print(f'  use it as {{"base_model": "{ref}"}}, or set MODEL_MIRROR=true to use mirrors automatically')
+    return 0
+
+
 def _models_info(args: argparse.Namespace) -> int:
     from src.remote.artifacts import ArtifactStoreError
 
@@ -505,6 +524,13 @@ def main(argv=None) -> int:
     push_p.add_argument("--workers", type=int, default=8, help="Parallel uploads (default: 8)")
     push_p.add_argument("--dry-run", action="store_true",
                         help="Show what would be uploaded without uploading")
+    mirror_p = md_sub.add_parser(
+        "mirror", help="Copy a HuggingFace Hub model into the store as hf/<org>/<repo>")
+    mirror_p.add_argument("repo_id", help="Hub model id, e.g. Qwen/Qwen3-8B")
+    mirror_p.add_argument("--revision", default=None, help="Branch, tag or commit (default: main)")
+    mirror_p.add_argument("--force", action="store_true",
+                          help="Re-publish even if the mirror is already at the Hub's commit")
+    mirror_p.add_argument("--workers", type=int, default=8, help="Parallel uploads (default: 8)")
     minfo_p = md_sub.add_parser("info", help="Show a stored model's manifest summary")
     minfo_p.add_argument("name")
 
@@ -587,6 +613,8 @@ def main(argv=None) -> int:
             return _models_push(args)
         if args.md_command == "info":
             return _models_info(args)
+        if args.md_command == "mirror":
+            return _models_mirror(args)
         md_parser.print_help()
         return 2
 

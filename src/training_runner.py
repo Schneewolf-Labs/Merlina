@@ -996,10 +996,10 @@ def run_training_distributed(
             event_loop,
         )
 
-        # Pull a store: base model once, here, so the DDP ranks all find it
-        # in the cache instead of queueing on the pull lock past NCCL timeouts.
-        if is_store_ref(config.base_model):
-            resolve_model_ref(config.base_model)
+        # Pull a store: (or MODEL_MIRROR'd) base model once, here, so the DDP
+        # ranks all find it in the cache instead of queueing on the pull lock
+        # past NCCL timeouts.
+        resolve_model_ref(config.base_model)   # no-op unless store: or MODEL_MIRROR
 
         # Serialize config
         with open(config_path, "w") as f:

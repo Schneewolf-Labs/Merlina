@@ -592,6 +592,13 @@ class PreflightValidator:
             if offline_mode_active():
                 cached = is_model_cached(model_path)
                 if not cached:
+                    # A MODEL_MIRROR copy (pulled before, or still reachable in
+                    # the store) loads without the Hub.
+                    from src.model_mirror import mirror_enabled, mirror_name
+                    from src.model_refs import cached_ref_path
+                    cached = mirror_enabled() and bool(
+                        cached_ref_path(f"store:{mirror_name(model_path)}"))
+                if not cached:
                     self.errors.append(
                         f"Offline mode is enabled but model '{model_path}' was not found "
                         "in the local HuggingFace cache. Download it first (disable offline "

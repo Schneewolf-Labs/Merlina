@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checks that the model exists, and VRAM estimates and remote sizing read
   `config.json` from the store. VLM key grafting now also works for local
   base models. ([docs](docs/user/store-models.md))
+- **Hub model mirroring.** `merlina models mirror <org/repo>` copies a Hub
+  model into the store as `store:hf/<org>/<repo>`, pinned to the commit
+  sha and re-published only when the Hub moves. With `MODEL_MIRROR=true`,
+  every Hub base model is mirrored on first use and loaded from the store
+  after that, which keeps jobs working through Hub outages and deleted
+  repos. If mirroring fails, Merlina falls back to the Hub. In offline
+  mode, pre-flight accepts a cached mirror.
 - **Remote runs with `store:` base models.** Remote training, the remote
   merge stage and remote LoRA serving pull a `store:` base from R2. The
   worker payload names the model store, and workers register it because

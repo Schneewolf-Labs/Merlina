@@ -37,6 +37,30 @@ merlina models push /mnt/models/C0 C0             # -> <artifact bucket>/models/
 - **Names:** letters, digits, `.`, `_` and `-`, with up to three `/`
   separators (`hf/meta-llama/Llama-3.1-8B`).
 
+## Mirroring Hub models
+
+```bash
+merlina models mirror Qwen/Qwen3-8B            # -> store:hf/Qwen/Qwen3-8B
+merlina models mirror Qwen/Qwen3-8B --revision v1.0
+```
+
+This downloads the model once at the Hub's current commit (or
+`--revision`) and publishes it as `hf/<org>/<repo>`. The manifest records
+the repo and commit sha. Running it again re-publishes only if the Hub
+moved (`--force` re-publishes anyway). Formats Merlina never loads are
+skipped (`.pth`, `.pt`, `.gguf`, `.onnx`, `original/`), and so is `.bin`
+when the repo also has safetensors.
+
+Set `MODEL_MIRROR=true` to do this automatically. Every Hub id used as a
+base model is then mirrored on first use and loaded from the store after
+that, while configs and cards keep the plain Hub id. When neither the Hub
+nor the store can be reached, a cached mirror still loads. If mirroring
+fails for any other reason, Merlina logs a warning and loads from the Hub
+as before. The setting only applies on the control plane; remote workers
+download Hub ids directly unless you pass `store:hf/...`.
+
+Model cards credit a `store:hf/<org>/<repo>` base to its Hub id.
+
 ## Remote runs
 
 Remote training, remote merges and remote LoRA serving all accept a
