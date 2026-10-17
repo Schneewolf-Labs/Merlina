@@ -50,7 +50,7 @@ dependencies = [
     "pydantic-settings>=2.0.0",
     "python-multipart>=0.0.6",
     # ML/Training
-    "transformers>=5.0.0",
+    "transformers>=5.20.1",
     "accelerate>=0.24.0",
     "grimoire-rl>=1.2.0",
     "peft>=0.6.0",

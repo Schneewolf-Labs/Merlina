@@ -14,7 +14,7 @@ python-multipart>=0.0.6
 # Requires torch >= 2.5.0 (for transformers 5.x compatibility).
 # torchvision IS required for VLM training (image processors need it) — make sure
 # your pre-installed torch stack includes a matching torchvision build.
-transformers>=5.0.0
+transformers>=5.20.1
 # Fused kernels for hybrid linear-attention models (Qwen3.5/3.6/3.8). Pure Python
 # plus Triton, so it installs anywhere. Its partner causal_conv1d needs nvcc and is
 # built as a wheel in the Dockerfile's first stage — transformers requires BOTH

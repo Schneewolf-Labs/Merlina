@@ -343,7 +343,8 @@ class TokenizerFormatter(DatasetFormatter):
         self.auto_detect_thinking = auto_detect_thinking
 
         # Check if tokenizer has chat template
-        if not hasattr(tokenizer, 'chat_template') or tokenizer.chat_template is None:
+        # merlina_chat_encoder: a code-backed apply_chat_template (src/model_families.py)
+        if not getattr(tokenizer, 'merlina_chat_encoder', None) and getattr(tokenizer, 'chat_template', None) is None:
             logger.warning(
                 "Tokenizer does not have a chat_template. "
                 "Falling back to simple concatenation format."

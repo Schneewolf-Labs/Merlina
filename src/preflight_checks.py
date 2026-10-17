@@ -7,6 +7,7 @@ dataset configuration, and API tokens.
 """
 
 import torch
+import json
 import logging
 import os
 from typing import Dict, List, Tuple, Any, Optional
@@ -853,9 +854,53 @@ class PreflightValidator:
             # Store exceptions can include source addresses, paths and keys.
             self.errors.append("Internal dataset revision is unavailable")
 
+    def _base_model_type(self, config: Any) -> Optional[str]:
+        """The base model's `model_type`, from a local/cached config.json or the store. None if unknown."""
+        from src.model_families import model_type_of
+        base = getattr(config, "base_model", None)
+        if not isinstance(base, str):
+            return None
+        if base.startswith("store:"):
+            try:
+                from src.model_refs import cached_ref_path, store_name
+                cached = cached_ref_path(base)
+                if cached:
+                    return model_type_of(cached)
+                from src.remote.artifacts import model_store
+                return json.loads(model_store().read_file(store_name(base), "config.json")).get("model_type")
+            except Exception as e:
+                logger.debug(f"Store config lookup failed for {base}: {e}")
+                return None
+        return model_type_of(base)
+
+    def _check_model_family(self, config: Any) -> None:
+        """Architecture-specific requirements (see src/model_families.py)."""
+        from src.model_families import DEEPSEEK_V4
+        if self._base_model_type(config) != DEEPSEEK_V4:
+            return
+        dataset = getattr(config, "dataset", None)
+        fmt = getattr(getattr(dataset, "format", None), "format_type", None)
+        if fmt and fmt not in ("tokenizer", "raw"):
+            self.errors.append(
+                f"DeepSeek-V4 has no chat template of its own; train with format 'tokenizer' "
+                f"(it renders with DeepSeek's reference encoder, as vLLM does) or 'raw' for "
+                f"pre-rendered rows, not {fmt!r}.")
+        if not self._is_remote(config):
+            from transformers.models.auto.configuration_auto import CONFIG_MAPPING_NAMES
+            if DEEPSEEK_V4 not in CONFIG_MAPPING_NAMES:
+                import transformers
+                self.errors.append(
+                    f"transformers {transformers.__version__} can't load DeepSeek-V4; "
+                    "upgrade to 5.20.1 or later (pip install -U 'transformers>=5.20.1').")
+        if getattr(config, "use_lora", True) and getattr(config, "use_4bit", False):
+            self.warnings.append(
+                "DeepSeek-V4 checkpoints are FP8; 4-bit loading re-quantizes them with bitsandbytes, "
+                "which hasn't been validated for this architecture.")
+
     def _check_training_config(self, config: Any) -> Dict[str, Any]:
         """Validate training hyperparameters using configurable thresholds."""
         issues = []
+        self._check_model_family(config)
 
         # Check LoRA config using constants (only when LoRA is enabled)
         if getattr(config, "use_lora", True):
