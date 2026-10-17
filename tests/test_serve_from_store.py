@@ -142,3 +142,11 @@ def test_cli_push_refuses_symlinks(store, model_dir, monkeypatch, tmp_path):
     monkeypatch.setattr("src.remote.artifacts.model_store", lambda settings=None: store)
     (model_dir / "link.safetensors").symlink_to(model_dir / "config.json")
     assert cli_main(["models", "push", str(model_dir), "C0"]) == 2
+
+
+def test_list_artifacts_skips_uncommitted(store, model_dir):
+    store.fs.ls = lambda root, detail=False: [f"{root}/C0", f"{root}/half-pushed"]
+    store.push_dir(model_dir, "C0", snapshot=False)
+    listed = store.list_artifacts()
+    assert [m["name"] for m in listed] == ["C0"]
+    assert listed[0]["files"] == 5 and listed[0]["size"] > 0

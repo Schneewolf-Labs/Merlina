@@ -12,6 +12,7 @@ import { InferenceManager } from './inference.js';
 import { ExportManager } from './export.js';
 import { DiskManager } from './disk.js';
 import { StorageManager } from './storage.js';
+import { RemoteManager } from './remote.js';
 import { buildTrainingConfig } from './form_config.js';
 import { initDiffusionDropzone, initDiffusionPlayground } from './diffusion.js';
 import { Studio } from './studio.js';
@@ -50,6 +51,7 @@ class MerlinaApp {
         this.exportManager = new ExportManager();
         this.diskManager = new DiskManager();
         this.storageManager = new StorageManager();
+        this.remoteManager = new RemoteManager();
 
         this.toast = new Toast();
 
@@ -64,6 +66,7 @@ class MerlinaApp {
         window.exportManager = this.exportManager;
         window.diskManager = this.diskManager;
         window.storageManager = this.storageManager;
+        window.remoteManager = this.remoteManager;
 
         // Initialize the app
         this.init();
@@ -134,6 +137,7 @@ class MerlinaApp {
 
         // Initialize the Object storage section (tier browse / sync / delete)
         this.storageManager.init();
+        this.remoteManager.init();
 
         // Initialize the diffusion image-dataset drag-drop UI.
         // Safe no-op when the diffusion fields aren't on this page.
@@ -782,6 +786,13 @@ class MerlinaApp {
         // Lazy-load storage tiers the first time the Object storage section opens.
         if (sectionId === 'storage-section' && this.storageManager) {
             this.storageManager.load();
+        }
+
+        // Remote GPUs polls its sessions only while it is on screen.
+        if (sectionId === 'remote-section') {
+            this.remoteManager?.load();
+        } else {
+            this.remoteManager?.hide();
         }
 
         // Scroll to top

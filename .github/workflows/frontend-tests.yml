@@ -47,6 +47,9 @@ jobs:
     - name: Run object storage unit tests
       run: node --test tests/frontend/test_storage.mjs
 
+    - name: Run remote GPUs unit tests
+      run: node --test tests/frontend/test_remote.mjs
+
   integration-tests:
     name: Frontend Integration Tests
     runs-on: ubuntu-latest

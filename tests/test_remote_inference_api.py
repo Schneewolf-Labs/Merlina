@@ -142,3 +142,85 @@ class TestSessionLifecycleEndpoints:
     def test_sessions_do_not_appear_as_jobs(self, api):
         api.post("/remote/inference", json=BODY)
         assert api.jobs.list_jobs() == []
+
+
+class TestSourcesEndpoint:
+    def test_lists_store_models_and_remote_jobs(self, api, monkeypatch):
+        from src.remote import artifacts
+        from src.remote.lifecycle import RemoteLifecycle
+        from tests.test_remote_inference_plan import finished_remote_job
+
+        class Store:
+            tier = "external"
+
+            def list_artifacts(self):
+                return [{"name": "C0", "files": 53, "size": 166_000_000_000, "created_at": "x"}]
+
+        monkeypatch.setattr(artifacts, "model_store", lambda settings=None: Store())
+        db = (api.jobs, RemoteLifecycle(api.jobs.db_path))
+        finished_remote_job(db, "job_r", artifacts=("adapter", "merged"))
+        finished_remote_job(db, "job_local", remote=False)
+        resp = api.get("/remote/inference/sources")
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["store_models"][0]["name"] == "C0"
+        assert data["store_tier"] == "external" and data["store_error"] is None
+        assert [j["job_id"] for j in data["jobs"]] == ["job_r"]
+        assert data["jobs"][0]["artifacts"] == ["adapter", "merged"]
+        assert "hf_job" not in resp.text
+
+    def test_store_error_is_reported_not_raised(self, api, monkeypatch):
+        from src.remote import artifacts
+        from src.remote.artifacts import ArtifactStoreError
+
+        def no_store(settings=None):
+            raise ArtifactStoreError("needs ARTIFACT_STORE=external")
+
+        monkeypatch.setattr(artifacts, "model_store", no_store)
+        data = api.get("/remote/inference/sources").json()
+        assert data["store_models"] == [] and "ARTIFACT_STORE" in data["store_error"]
+
+
+class TestChatEndpoint:
+    def test_relays_to_the_session_endpoint_with_its_key(self, api, monkeypatch):
+        import io
+        import json as _json
+        import urllib.request
+
+        sid = api.post("/remote/inference", json=BODY).json()["session_id"]
+        api.sessions.update(sid, status="ready", base_url="https://pod-8001.example/v1",
+                            served_model_name="model")
+        remember_api_key(sid, "sk-live-key")
+        seen = {}
+
+        class Resp(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def fake_urlopen(req, timeout=None):
+            seen["url"], seen["auth"] = req.full_url, req.headers.get("Authorization")
+            seen["body"] = _json.loads(req.data)
+            return Resp(_json.dumps({"choices": [{"message": {"role": "assistant", "content": "hi"}}]}).encode())
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        try:
+            resp = api.post(f"/remote/inference/{sid}/chat",
+                            json={"messages": [{"role": "user", "content": "hello"}]})
+            assert resp.status_code == 200, resp.text
+            assert resp.json()["choices"][0]["message"]["content"] == "hi"
+            assert seen["url"] == "https://pod-8001.example/v1/chat/completions"
+            assert seen["auth"] == "Bearer sk-live-key"
+            assert seen["body"]["model"] == "model"
+        finally:
+            forget_api_key(sid)
+
+    def test_refuses_sessions_that_are_not_ready(self, api):
+        sid = api.post("/remote/inference", json=BODY).json()["session_id"]
+        resp = api.post(f"/remote/inference/{sid}/chat",
+                        json={"messages": [{"role": "user", "content": "x"}]})
+        assert resp.status_code == 409
+        assert api.post("/remote/inference/inf_nope/chat",
+                        json={"messages": [{"role": "user", "content": "x"}]}).status_code == 404
