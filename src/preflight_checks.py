@@ -675,8 +675,6 @@ class PreflightValidator:
             from dataset_handlers.mirror import mirror_name
             if not (getattr(source, "prefer_internal", False) or default_prefer_internal()):
                 return False
-            if getattr(source, "streaming", False):
-                return False        # streaming bypasses the mirror
             store = default_internal_store()
             if store is None:
                 return False

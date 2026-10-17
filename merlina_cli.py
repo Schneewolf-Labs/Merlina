@@ -101,6 +101,24 @@ def _datasets_promote(args: argparse.Namespace) -> int:
     return 0
 
 
+def _datasets_put(args: argparse.Namespace) -> int:
+    from dataset_handlers.internal_store import InternalStoreError
+    from dataset_handlers.put import put_dataset
+
+    from dataset_handlers.internal_store import is_private_name
+    if args.store == "external" and (args.private or is_private_name(args.name)):
+        print("error: private datasets never go to the external tier", file=sys.stderr)
+        return 2
+    store = _resolve_store(args.store)
+    try:
+        name, rev, created = put_dataset(store, args.file, args.name, private=args.private)
+    except (InternalStoreError, FileNotFoundError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print(f"swl://{name}@{rev} ({'stored' if created else 'already stored'}; latest -> {rev})")
+    return 0
+
+
 def _datasets_info(args: argparse.Namespace) -> int:
     from dataset_handlers.internal_store import InternalStoreError
 
@@ -506,6 +524,14 @@ def main(argv=None) -> int:
         help="Show what would be copied (shards + size) without transferring anything",
     )
 
+    put_p = ds_sub.add_parser("put", help="Store a local JSON/JSONL/CSV/Parquet file as swl://<name>@<rev>")
+    put_p.add_argument("file", help="Dataset file")
+    put_p.add_argument("name", help="Dataset name, e.g. b3/pr-review-dpo")
+    put_p.add_argument("--private", action="store_true",
+                       help="Mark the revision private (never promoted to the external tier)")
+    put_p.add_argument("--store", default="internal", choices=["internal", "external"],
+                       help="Which tier to write (default: internal)")
+
     info_p = ds_sub.add_parser("info", help="Show a stored dataset revision's manifest")
     info_p.add_argument("name", help="Dataset ref: swl://name[@rev], name, or name@rev")
     info_p.add_argument(
@@ -606,6 +632,8 @@ def main(argv=None) -> int:
             return _datasets_promote(args)
         if args.ds_command == "info":
             return _datasets_info(args)
+        if args.ds_command == "put":
+            return _datasets_put(args)
         ds_parser.print_help()
         return 2
 

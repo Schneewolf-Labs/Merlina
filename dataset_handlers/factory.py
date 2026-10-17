@@ -147,6 +147,8 @@ def create_loader(
             store=store,
             split=split,
             max_samples=max_samples,
+            streaming=streaming,
+            batch_size=streaming_batch_size,
         )
 
     if source_type == "huggingface":
@@ -164,6 +166,21 @@ def create_loader(
                 token=hf_token,
                 max_samples=max_samples,
             )
+        if prefer_internal and store is not None and streaming:
+            # Stream from an existing mirror; never force a full snapshot just
+            # to stream a slice of it (that's what streaming avoids).
+            from .mirror import mirror_name
+            from .internal_store import LATEST
+            name = mirror_name(repo_id, config_name, split)
+            try:
+                mirrored = store.exists(name, LATEST)
+            except Exception:
+                mirrored = False
+            if mirrored:
+                return InternalStoreLoader(
+                    uri=f"swl://{name}", store=store, split="train",
+                    max_samples=max_samples, streaming=True, batch_size=streaming_batch_size,
+                )
         if streaming:
             return StreamingHuggingFaceLoader(
                 repo_id=repo_id,
@@ -364,3 +381,15 @@ def create_pipeline_from_config(
         # still needs the model's template to render calls faithfully.
         tokenizer=tokenizer,
     )
+
+
+def load_swl_dataset(uri: str, max_samples=None):
+    """Load an ``swl://name[@rev]`` dataset from the active store as a regular
+    Dataset. For runners that load datasets themselves (VLM, diffusion)
+    rather than through :func:`create_loader_from_config`."""
+    store = default_internal_store()
+    if store is None:
+        raise LoaderCreationError(
+            f"{uri}: the internal dataset store is not configured "
+            "(set STORAGE_INTERNAL_ENDPOINT / _BUCKET / _ACCESS_KEY / _SECRET_KEY).")
+    return InternalStoreLoader(uri=uri, store=store, split="train", max_samples=max_samples).load()

@@ -980,18 +980,26 @@ class TrainingConfig(BaseModel):
 
         src = self.dataset.source
         src_specified = bool(src.repo_id or src.file_path or src.dataset_id or src.uri)
+        is_internal = self.dataset_name.startswith("swl://")
         if not src_specified:
-            self.dataset.source = DatasetSource(
-                source_type="huggingface",
-                repo_id=self.dataset_name,
-                split=self.dataset_split or "train",
-            )
+            if is_internal:
+                self.dataset.source = DatasetSource(
+                    source_type="internal",
+                    uri=self.dataset_name,
+                    split=self.dataset_split or "train",
+                )
+            else:
+                self.dataset.source = DatasetSource(
+                    source_type="huggingface",
+                    repo_id=self.dataset_name,
+                    split=self.dataset_split or "train",
+                )
         else:
             matches = (
-                src.source_type == "huggingface"
-                and src.repo_id == self.dataset_name
-                and (not self.dataset_split or self.dataset_split == src.split)
-            )
+                (src.source_type == "internal" and src.uri == self.dataset_name)
+                if is_internal else
+                (src.source_type == "huggingface" and src.repo_id == self.dataset_name)
+            ) and (not self.dataset_split or self.dataset_split == src.split)
             if not matches:
                 described = src.repo_id or src.file_path or src.dataset_id or src.uri
                 raise ValueError(
@@ -3664,6 +3672,47 @@ async def upload_dataset_file(file: FastAPIUploadFile = File(...)):
     except Exception as e:
         logger.error(f"Dataset upload failed: {e}")
         raise HTTPException(status_code=400, detail=str(e))
+
+
+class PromoteUploadRequest(BaseModel):
+    name: str = Field(..., description="Dataset name in the internal store (swl://<name>)")
+    private: bool = Field(False, description="Keep this dataset out of `datasets promote` to the external tier")
+
+
+@app.post("/dataset/uploads/{dataset_id}/store", tags=["Datasets"],
+          summary="Save an uploaded dataset into the internal store")
+async def store_uploaded_dataset(dataset_id: str, request: PromoteUploadRequest):
+    """Uploads live in server memory and expire; this writes one into the
+    internal dataset store as ``swl://<name>@<rev>`` (rev = content hash), so
+    it survives restarts and can be trained on by ``swl://`` address,
+    including from remote runs."""
+    from dataset_handlers.factory import get_store
+    from dataset_handlers.internal_store import InternalStoreError
+    from dataset_handlers.put import put_dataset
+
+    with _uploaded_datasets_lock:
+        entry = uploaded_datasets.get(dataset_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Upload {dataset_id} not found (it may have expired)")
+    content = entry["content"] if isinstance(entry, dict) else entry[0]
+    filename = entry["filename"] if isinstance(entry, dict) else entry[1]
+    store = get_store("internal")
+    if store is None:
+        raise HTTPException(status_code=400, detail="The internal dataset store is not configured")
+
+    def _put():
+        import tempfile
+        suffix = Path(filename or "data.jsonl").suffix or ".jsonl"
+        with tempfile.NamedTemporaryFile(suffix=suffix) as tmp:
+            tmp.write(content)
+            tmp.flush()
+            return put_dataset(store, tmp.name, request.name, private=request.private,
+                               source={"uploaded_filename": Path(filename or "").name})
+    try:
+        name, rev, created = await asyncio.to_thread(_put)
+    except InternalStoreError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"uri": f"swl://{name}@{rev}", "name": name, "rev": rev, "created": created}
 
 
 @app.get("/dataset/uploads", tags=["Datasets"], summary="List uploaded datasets")

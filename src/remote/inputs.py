@@ -158,6 +158,37 @@ def _stage_internal(source: dict, work: Path, internal_store=None) -> tuple[Path
     return output, {"source_type": "internal", "uri": f"swl://{name}@{revision}"}
 
 
+def _mirror_for_remote(source: dict) -> bool:
+    if source.get("streaming") or not source.get("repo_id"):
+        return False
+    try:
+        from dataset_handlers.factory import default_prefer_internal
+        return bool(source.get("prefer_internal")) or default_prefer_internal()
+    except Exception:
+        return False
+
+
+def _mirror_hf_source(source: dict, config: dict, internal_store):
+    """Rewrite an HF source in place into the internal mirror it maps to."""
+    from dataset_handlers.mirror import ensure_mirror
+    if internal_store is None:
+        from dataset_handlers.factory import default_internal_store
+        internal_store = default_internal_store()
+    if internal_store is None:
+        raise RemoteInputError("DATASET_MIRROR is on but the internal dataset store isn't configured.")
+    try:
+        name, rev = ensure_mirror(internal_store, source["repo_id"],
+                                  split=source.get("split") or "train",
+                                  config_name=source.get("config_name"),
+                                  token=config.get("hf_token"))
+    except Exception:
+        raise RemoteInputError(f"Could not mirror HF dataset {source.get('repo_id')!r} for the remote run.") from None
+    for key in ("repo_id", "config_name", "file_path", "dataset_id"):
+        source.pop(key, None)
+    source.update(source_type="internal", uri=f"swl://{name}@{rev}", split="train")
+    return internal_store
+
+
 def stage_remote_inputs(config: dict, uploads: dict, store: ArtifactStore,
                         *, internal_store=None) -> dict:
     """Return a copy with durable references; finish every upload before renting.
@@ -167,8 +198,15 @@ def stage_remote_inputs(config: dict, uploads: dict, store: ArtifactStore,
     bytes even if submission is retried with a changed local file.
     """
     prepared = copy.deepcopy(config)
+    mirrored = set()
     for index, source in enumerate(_sources(prepared)):
         kind = source.get("source_type", "huggingface")
+        if kind == "huggingface" and _mirror_for_remote(source):
+            # DATASET_MIRROR: snapshot (or reuse) the mirror on the control
+            # plane and ship that, so the rented worker never calls the Hub.
+            internal_store = _mirror_hf_source(source, config, internal_store)
+            kind = "internal"
+            mirrored.add(index)
         if kind == "huggingface":
             # Drop irrelevant source fields so arbitrary local paths cannot
             # hitch a ride alongside an otherwise valid HF source.
@@ -214,6 +252,8 @@ def stage_remote_inputs(config: dict, uploads: dict, store: ArtifactStore,
                 for key in ("column_mapping", "split"):
                     if key in original_source:
                         source[key] = copy.deepcopy(original_source[key])
+                if index in mirrored:
+                    source["split"] = "train"     # the mirror holds just that split
                 source.update(source_type="local_file", file_format=fmt,
                               file_path=f"artifact://{name}")
         except RemoteInputError:
