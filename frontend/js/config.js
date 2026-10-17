@@ -413,10 +413,10 @@ class ConfigManager {
                     </div>
                     <div class="config-actions">
                         <button class="config-load-btn" data-action="load" data-config="${sanitizeHTML(cfg.filename)}">
-                            📂 Load
+                            Load
                         </button>
                         <button class="config-delete-btn" data-action="delete" data-config="${sanitizeHTML(cfg.filename)}">
-                            🗑️ Delete
+                            Delete
                         </button>
                     </div>
                 </div>

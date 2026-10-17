@@ -3,9 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Merlina - A magical LLM training system for fine-tuning language models with LoRA adapters">
+    <meta name="description" content="Merlina: fine-tune LLMs and image LoRAs locally or on rented GPUs, then serve, export and publish them">
     <meta name="theme-color" content="#7961a9">
-    <title>Merlina - Magical Model Training</title>
+    <title>Merlina</title>
     <link rel="icon" href="favicon.ico" type="image/x-icon">
     <link rel="stylesheet" href="styles.css">
     <!-- Prevent flash of wrong theme -->
@@ -27,49 +27,49 @@
         <aside class="studio-sidebar">
             <a class="brand" href="#model-section" aria-label="Merlina home">
                 <img src="merlina.png" alt="" class="wizard-hat" width="42" height="48">
-                <span><h1>Merlina<span class="brand-star" aria-hidden="true">✧</span></h1><span class="brand-caption">YOUR MODEL, A LITTLE MAGIC</span></span>
+                <span><h1>Merlina</h1></span>
             </a>
             <nav id="section-nav" class="section-nav" aria-label="Studio navigation"><p class="nav-group-label">CREATE</p>
 <button type="button" class="section-nav-btn active" data-section="model-section" aria-controls="model-section" aria-current="page">
         <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 16l9 5 9-5"/></svg>
-        <span class="nav-copy"><span class="nav-label">Model</span><span class="nav-description">Choose your foundation</span></span>
+        <span class="nav-copy"><span class="nav-label">Model</span><span class="nav-description">Base model, GPUs</span></span>
         <span class="nav-step">01</span>
     </button>
 <button type="button" class="section-nav-btn" data-section="dataset-section" aria-controls="dataset-section">
         <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3" width="16" height="18" rx="3"/><path d="M4 9h16M10 9v12M14 14h3M14 17h3"/></svg>
-        <span class="nav-copy"><span class="nav-label">Dataset</span><span class="nav-description">Prepare your ingredients</span></span>
+        <span class="nav-copy"><span class="nav-label">Dataset</span><span class="nav-description">Sources &amp; format</span></span>
         <span class="nav-step">02</span>
     </button>
 <button type="button" class="section-nav-btn" data-section="config-section" aria-controls="config-section">
         <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 17h16"/><circle cx="9" cy="7" r="3"/><circle cx="15" cy="17" r="3"/></svg>
-        <span class="nav-copy"><span class="nav-label">Training</span><span class="nav-description">Make it your own</span></span>
+        <span class="nav-copy"><span class="nav-label">Training</span><span class="nav-description">Method &amp; settings</span></span>
         <span class="nav-step">03</span>
     </button>
 <p class="nav-group-label">EXPLORE</p>
 <button type="button" class="section-nav-btn" data-section="jobs-section" aria-controls="jobs-section">
         <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v16h16M8 14l4-5 4 3 4-6"/></svg>
-        <span class="nav-copy"><span class="nav-label">Jobs</span><span class="nav-description">Follow the progress</span></span>
+        <span class="nav-copy"><span class="nav-label">Jobs</span><span class="nav-description">Runs, logs &amp; metrics</span></span>
 
     </button>
 <button type="button" class="section-nav-btn" data-section="inference-section" aria-controls="inference-section">
         <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 11a8 8 0 0 1-8 8H5l-4 3V11a10 10 0 0 1 20 0Z"/><path d="M7 10h8M7 14h5"/></svg>
-        <span class="nav-copy"><span class="nav-label">Playground</span><span class="nav-description">Try a little magic</span></span>
+        <span class="nav-copy"><span class="nav-label">Playground</span><span class="nav-description">Chat with a model</span></span>
 
     </button>
 <button type="button" class="section-nav-btn" data-section="remote-section" aria-controls="remote-section">
         <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 7V4M12 7V4M17 7V4M7 20v-3M12 20v-3M17 20v-3"/></svg>
-        <span class="nav-copy"><span class="nav-label">Remote GPUs</span><span class="nav-description">Serve on rented hardware</span></span>
+        <span class="nav-copy"><span class="nav-label">Remote GPUs</span><span class="nav-description">vLLM on rented GPUs</span></span>
 
     </button>
 <button type="button" class="section-nav-btn" data-section="export-section" aria-controls="export-section">
         <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3m-4 4 4-4 4 4M4 13v6a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-6"/></svg>
-        <span class="nav-copy"><span class="nav-label">Export & publish</span><span class="nav-description">Share your creation</span></span>
+        <span class="nav-copy"><span class="nav-label">Export & publish</span><span class="nav-description">GGUF &amp; Hub upload</span></span>
 
     </button>
 <p class="nav-group-label">WORKSPACE</p>
 <button type="button" class="section-nav-btn" data-section="cleanup-section" aria-controls="cleanup-section">
         <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="2"/><rect x="3" y="14" width="18" height="6" rx="2"/><path d="M7 7h.01M7 17h.01M11 7h6M11 17h6"/></svg>
-        <span class="nav-copy"><span class="nav-label">Storage</span><span class="nav-description">Keep things tidy</span></span>
+        <span class="nav-copy"><span class="nav-label">Disk</span><span class="nav-description">Checkpoints &amp; caches</span></span>
 
     </button>
 <button type="button" class="section-nav-btn" data-section="storage-section" aria-controls="storage-section">
@@ -78,28 +78,20 @@
 
     </button>
 </nav>
-            <div class="sidebar-note"><span aria-hidden="true">✧</span><p>Big ideas.<br>A little everyday magic.</p></div>
             <a class="sidebar-link" href="/docs" target="_blank" rel="noopener noreferrer">API documentation <svg class="external-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M7 17 17 7M7 7h10v10"/></svg></a>
         </aside>
         <div class="studio-workspace">
         <header class="studio-topbar">
-            <div class="breadcrumbs"><span>Workspace</span><span aria-hidden="true">/</span><strong id="current-page-label">Model</strong></div>
-            <div class="logo"><span class="studio-badge"><span aria-hidden="true">✧</span> Training studio</span></div>
+            <div class="breadcrumbs"><span id="current-group-label">Create</span><span aria-hidden="true">/</span><strong id="current-page-label">Model</strong></div>
         </header>
         <!-- Main Content -->
         <main id="main-content" role="main" tabindex="-1">
             <div class="studio-content">
             <!-- Model Selection (STEP 1) -->
             <section id="model-section" class="card nav-section">
-                <div class="page-heading"><p class="eyebrow">01 / THE FOUNDATION</p><h2 tabindex="-1">Model studio</h2><p class="page-description">Every great model starts with a little curiosity. Let’s find your starting point.</p></div>
-
-
-                <div class="welcome-banner">
-                    <div class="welcome-copy"><span class="welcome-label">A SMALL START. SOMETHING WONDERFUL.</span><h3>A little magic.<br>A model of your own.</h3><p>Choose a base model, add your data, and let’s bring your ideas to life.</p><div class="welcome-tags"><span>Text & vision</span><span>Image LoRA</span><span>Made by you</span></div></div>
-                    <div class="welcome-art" aria-hidden="true"><span class="orbit orbit-one"></span><span class="orbit orbit-two"></span><span class="art-star star-one">✦</span><span class="art-star star-two">✧</span><span class="art-star star-three">✧</span><img src="merlina.png" alt="" width="170" height="188"><span class="mascot-caption">your friendly training companion</span></div>
-                </div>
+                <div class="page-heading"><p class="eyebrow">STEP 1 OF 3</p><h2 tabindex="-1">Model</h2><p class="page-description">Pick the base model to fine-tune and the GPUs to train on.</p></div>
                 <div class="spell-section">
-                    <div class="panel-heading"><span class="panel-icon" aria-hidden="true">◇</span><div><h3>Your base model</h3><p>A familiar foundation for something new.</p></div><span class="subtle-badge">Required</span></div>
+                    <div class="panel-heading"><span class="panel-icon" aria-hidden="true">◇</span><div><h3>Base model</h3></div><span class="subtle-badge">Required</span></div>
                     <div class="form-group">
                         <label for="base-model">Model ID or local path</label>
                         <input type="text" id="base-model" list="local-models-list" placeholder="meta-llama/Meta-Llama-3-8B-Instruct" class="magic-input" required>
@@ -107,7 +99,7 @@
                         <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Use a HuggingFace model ID or a local folder, such as ./models/my-model.</small>
                     </div>
                     <div class="form-group">
-                        <label for="local-model-select">Local models <span id="offline-mode-badge" style="display: none; background: var(--hover-bg); color: var(--dark-purple); padding: 2px 8px; border-radius: 10px; font-size: 0.8em; margin-left: 8px;">🔌 Offline Mode</span></label>
+                        <label for="local-model-select">Local models <span id="offline-mode-badge" style="display: none; background: var(--hover-bg); color: var(--dark-purple); padding: 2px 8px; border-radius: 10px; font-size: 0.8em; margin-left: 8px;">Offline Mode</span></label>
                         <div style="display: flex; gap: 8px;">
                             <select id="local-model-select" class="magic-select" style="flex: 1;">
                                 <option value="">— Select a model already on this machine —</option>
@@ -122,7 +114,7 @@
                             <option value="auto" selected>Auto-detect</option>
                             <option value="causal_lm">Text LLM (CausalLM)</option>
                             <option value="vlm">Vision-Language Model (VLM)</option>
-                            <option value="diffusion">Diffusion / Image LoRA ✨ new</option>
+                            <option value="diffusion">Diffusion / Image LoRA</option>
                         </select>
                         <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Auto-detect is a good starting point. Choose Vision-Language for image understanding, or Diffusion for image generation.</small>
                     </div>
@@ -184,12 +176,12 @@
                         </small>
                     </div>
                 </details>
-<div class="step-footer"><span>Your ideas, one step at a time.</span><button type="button" class="action-button primary-button" data-go-section="dataset-section">Continue to dataset <span aria-hidden="true">→</span></button></div>
+<div class="step-footer"><span></span><button type="button" class="action-button primary-button" data-go-section="dataset-section">Continue to dataset <span aria-hidden="true">→</span></button></div>
             </section>
 
             <!-- Dataset Configuration (STEP 2) -->
             <section id="dataset-section" class="card nav-section" style="display: none;">
-                <div class="page-heading"><p class="eyebrow">02 / THE INGREDIENTS</p><h2 tabindex="-1">Shape your dataset</h2><p class="page-description">Bring your data together, check the format, and give your model something good to learn.</p></div>
+                <div class="page-heading"><p class="eyebrow">STEP 2 OF 3</p><h2 tabindex="-1">Dataset</h2><p class="page-description">Add one or more sources, map their columns, and preview the formatted examples.</p></div>
 
                 <!-- Training Mode Selection (drives required columns below) -->
                 <div class="form-group" id="training-mode-section" style="margin-bottom: 20px;">
@@ -224,7 +216,7 @@
                     <!-- Messages Format Detection (global: visible when any dataset has a messages column) -->
                     <div id="messages-format-notice" style="display: none; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 15px; border-radius: 10px; margin-top: 8px; color: white;">
                         <div style="font-weight: bold; margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
-                            ✨ Messages Format Detected!
+                            Messages format detected
                         </div>
                         <div style="font-size: 0.9em; margin-bottom: 12px; opacity: 0.95;">
                             One or more datasets use the common "messages" format. Enable auto-convert to transform into standard format (prompt, chosen, system).
@@ -239,7 +231,7 @@
                     </div>
 
                     <button type="button" id="add-dataset-btn" class="action-button" style="width: 100%; margin-top: 12px;">
-                        ➕ Add Dataset
+                        Add Dataset
                     </button>
                 </div>
 
@@ -292,7 +284,7 @@
                         <div class="form-group">
                             <label class="magic-checkbox">
                                 <input type="checkbox" id="enable-thinking" checked>
-                                <span>Enable Thinking Mode 🧠</span>
+                                <span>Enable Thinking Mode</span>
                             </label>
                             <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-top: 5px;">
                                 When enabled, the model can use &lt;think&gt; tags to show its reasoning process before responding.
@@ -306,7 +298,7 @@
                         <div class="form-group">
                             <label class="magic-checkbox">
                                 <input type="checkbox" id="auto-detect-thinking" checked>
-                                <span>Auto-detect Thinking per Row 🪄</span>
+                                <span>Auto-detect Thinking per Row</span>
                             </label>
                             <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-top: 5px;">
                                 Detect &lt;think&gt; per row: render with thinking <em>enabled</em> when the row has a reasoning column or
@@ -340,10 +332,10 @@
                     <h3>Dataset Preview</h3>
                     <div style="display: flex; gap: 10px; margin-bottom: 15px;">
                         <button type="button" id="preview-dataset-button" class="action-button" style="flex: 1;">
-                            🔍 Preview Raw Data
+                            Preview Raw Data
                         </button>
                         <button type="button" id="preview-formatted-button" class="action-button" style="flex: 1;">
-                            ✨ Preview Formatted
+                            Preview Formatted
                         </button>
                     </div>
 
@@ -397,7 +389,7 @@
                                 </div>
                             </div>
                             <div style="margin-top: 15px; padding: 10px; background: var(--light-purple); border-radius: 5px; font-size: var(--font-size-sm);">
-                                <strong>📝 Format Type:</strong> <span id="format-type-display"></span>
+                                <strong>Format Type:</strong> <span id="format-type-display"></span>
                             </div>
                         </div>
                         <div style="margin-top: 10px; padding: 8px; background: var(--bg-secondary); border-radius: 5px; text-align: center; font-size: var(--font-size-sm); color: var(--text-muted);">
@@ -410,7 +402,7 @@
                 <div class="spell-section">
                     <h3>Dataset Statistics</h3>
                     <button type="button" id="dataset-stats-button" class="action-button" style="width: 100%;">
-                        📊 Analyze Dataset
+                        Analyze Dataset
                     </button>
                     <div id="dataset-stats-panel" style="margin-top: 15px; display: none;">
                         <div id="dataset-stats-content" style="background: white; padding: 15px; border-radius: 10px; border: 1px solid var(--light-purple);">
@@ -465,30 +457,30 @@
 
             <!-- Training Configuration (STEP 3) -->
             <section id="config-section" class="card nav-section" style="display: none;">
-                <div class="page-heading"><p class="eyebrow">03 / THE RECIPE</p><h2 tabindex="-1">Make it your own</h2><p class="page-description">A few thoughtful settings turn your model and dataset into something uniquely yours.</p></div>
+                <div class="page-heading"><p class="eyebrow">STEP 3 OF 3</p><h2 tabindex="-1">Training</h2><p class="page-description">Choose the method, LoRA and hyperparameters, then start the run.</p></div>
 
                 <!-- Config Management Section -->
                 <div class="spell-section config-toolbar" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 20px; border-radius: 12px; margin-bottom: 25px;">
-                    <h3 style="color: white; margin-bottom: 15px;">Configuration Management</h3>
+                    <h3 style="color: white; margin-bottom: 15px;">Saved configs</h3>
 
                     <div class="form-row" style="gap: 10px; margin-bottom: 15px;">
                         <button type="button" id="save-config-btn" class="action-button" style="flex: 1;">
-                            💾 Save Config
+                            Save Config
                         </button>
                         <button type="button" id="load-config-btn" class="action-button" style="flex: 1;">
-                            📂 Load Config
+                            Load Config
                         </button>
                         <button type="button" id="load-from-job-btn" class="action-button" style="flex: 1;">
-                            🔄 From Job
+                            From Job
                         </button>
                         <button type="button" id="load-from-image-btn" class="action-button" style="flex: 1;">
-                            🔳 From Image
+                            From Image
                         </button>
                         <button type="button" id="load-from-code-btn" class="action-button" style="flex: 1;">
-                            🪄 From Code
+                            From Code
                         </button>
                         <button type="button" id="manage-configs-btn" class="action-button" style="flex: 1;">
-                            🗂️ Manage
+                            Manage
                         </button>
                     </div>
                     <input type="file" id="load-config-image-input" accept="image/png,.png" style="display: none;">
@@ -501,7 +493,7 @@
                 <form id="training-form">
                     <!-- Training Method -->
                     <div class="spell-section" id="training-method-section">
-                        <h3>What are you training?</h3>
+                        <h3>Method</h3>
                         <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-bottom: 10px;">
                             Choose a training method — this also determines which dataset columns are required.
                         </small>
@@ -526,7 +518,7 @@
                             <small id="training-mode-description" style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-top: 8px;"></small>
                         </div>
                         <button type="button" id="apply-preset-btn" class="action-button primary-button" style="width: 100%; margin-top: 12px;">
-                            📋 Apply Suggested Settings
+                            Apply Suggested Settings
                         </button>
                         <div id="preset-notes" style="display: none; margin-top: 10px; padding: 12px; background: var(--hover-bg); border-radius: 8px; border-left: 3px solid var(--primary-purple); font-size: var(--font-size-sm); color: var(--text-secondary);"></div>
                     </div>
@@ -551,7 +543,6 @@
                                 <input type="file" id="diffusion-image-files" multiple accept="image/*"
                                        style="position: absolute; inset: 0; opacity: 0; cursor: pointer;">
                                 <div id="diffusion-dropzone-prompt" style="pointer-events: none;">
-                                    <div style="font-size: 2.4em; margin-bottom: 8px;">🪄✨</div>
                                     <div style="font-weight: bold; color: var(--primary-purple); margin-bottom: 4px;">
                                         Drop your images here
                                     </div>
@@ -570,8 +561,8 @@
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
                                 <strong id="diffusion-thumbnail-count">0 images selected</strong>
                                 <div>
-                                    <button type="button" id="diffusion-clear-images" class="action-button" style="border: 1px solid var(--primary-purple);">🗑 Clear</button>
-                                    <button type="button" id="diffusion-save-dataset" class="action-button primary-button">💾 Save & Use Dataset</button>
+                                    <button type="button" id="diffusion-clear-images" class="action-button" style="border: 1px solid var(--primary-purple);">Clear</button>
+                                    <button type="button" id="diffusion-save-dataset" class="action-button primary-button">Save & Use Dataset</button>
                                 </div>
                             </div>
                             <div id="diffusion-thumbnails" style="
@@ -587,12 +578,12 @@
                         </div>
 
                         <details style="margin: 16px 0;">
-                            <summary style="cursor: pointer; color: var(--text-muted); font-size: 0.9em;">⚙️ Advanced: paste a JSONL path or HF dataset name instead</summary>
+                            <summary style="cursor: pointer; color: var(--text-muted); font-size: 0.9em;">Advanced: paste a JSONL path or HF dataset name instead</summary>
                             <div class="form-group" style="margin-top: 12px;">
                                 <label>Dataset JSONL Path</label>
                                 <div style="display: flex; gap: 6px;">
                                     <input type="text" id="diffusion-dataset-jsonl" placeholder="/path/to/train.jsonl" class="magic-input" style="flex: 1;">
-                                    <button type="button" id="diffusion-jsonl-preview" class="action-button primary-button" style="white-space: nowrap;">👁 Preview &amp; Edit</button>
+                                    <button type="button" id="diffusion-jsonl-preview" class="action-button primary-button" style="white-space: nowrap;">Preview &amp; Edit</button>
                                 </div>
                                 <small style="color: var(--text-muted); font-size: var(--font-size-sm);">JSONL with {prompt, image} (or {prompt, chosen, rejected}) rows. ⚠️ This is a path on the machine running Merlina, not your computer — if the server is remote, use the drag-drop upload above (which sets this automatically) or an HF dataset name below. Click Preview to inspect + inline-edit captions before training.</small>
                             </div>
@@ -604,7 +595,7 @@
                                     <div>
                                         <button type="button" id="diffusion-jsonl-prev-page" class="action-button" style="border: 1px solid var(--primary-purple);">← prev</button>
                                         <button type="button" id="diffusion-jsonl-next-page" class="action-button" style="border: 1px solid var(--primary-purple);">next →</button>
-                                        <button type="button" id="diffusion-jsonl-save-edits" class="action-button primary-button" style="margin-left: 8px;">💾 Save Edits</button>
+                                        <button type="button" id="diffusion-jsonl-save-edits" class="action-button primary-button" style="margin-left: 8px;">Save Edits</button>
                                     </div>
                                 </div>
                                 <div id="diffusion-jsonl-thumbnails" style="
@@ -641,14 +632,14 @@
                         <div class="form-group">
                             <label style="display: flex; align-items: center; gap: 8px;">
                                 <input type="checkbox" id="diffusion-lora-use-dora" style="width: auto;">
-                                <span>✨ Use DoRA (Weight-Decomposed LoRA)</span>
+                                <span>Use DoRA (Weight-Decomposed LoRA)</span>
                             </label>
                             <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Decomposes the LoRA update into magnitude + direction. ~5-10% slower step, meaningfully better quality on small aesthetic datasets where vanilla LoRA underfits the target style.</small>
                         </div>
                         <div class="form-group">
                             <label style="display: flex; align-items: center; gap: 8px;">
                                 <input type="checkbox" id="diffusion-mid-training-samples" style="width: auto;" checked>
-                                <span>🖼️ Mid-Training Sample Previews</span>
+                                <span>Mid-Training Sample Previews</span>
                             </label>
                             <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Generate preview images on every checkpoint, not just at the end. Watch the LoRA converge in near-real-time. Pauses training briefly while sampling (~30-60s per checkpoint). Untick for fastest wall-clock.</small>
                         </div>
@@ -657,10 +648,10 @@
                     <!-- Output Name -->
                     <div class="spell-section output-identity">
                         <div class="output-name-heading">
-                            <label for="output-name">Name your creation</label>
+                            <label for="output-name">Output name</label>
                             <button type="button" id="generate-name-btn" style="background: none; border: 1px solid var(--light-purple); border-radius: 6px; padding: 2px 10px; cursor: pointer; font-size: var(--font-size-sm); color: var(--primary-purple);">Generate a name</button>
                         </div>
-                        <input type="text" id="output-name" placeholder="My-Magical-Model" class="magic-input" required>
+                        <input type="text" id="output-name" placeholder="my-model" class="magic-input" required>
                         <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Name for your fine-tuned model</small>
                     </div>
 
@@ -700,7 +691,6 @@
                                 <label style="display: flex; align-items: center; justify-content: space-between;">
                                     <span>Target Modules</span>
                                     <button type="button" id="detect-layers-btn" class="detect-layers-btn">
-                                        <span class="detect-layers-icon">🔍</span>
                                         <span class="detect-layers-text">Detect Layers</span>
                                     </button>
                                 </label>
@@ -721,7 +711,6 @@
                                     <div class="layer-category" id="category-attention">
                                         <div class="category-header" data-category="attention">
                                             <span class="category-toggle">▼</span>
-                                            <span class="category-icon">🎯</span>
                                             <span class="category-name">Attention Layers</span>
                                             <span class="category-count"></span>
                                         </div>
@@ -730,7 +719,6 @@
                                     <div class="layer-category" id="category-mlp">
                                         <div class="category-header" data-category="mlp">
                                             <span class="category-toggle">▼</span>
-                                            <span class="category-icon">⚡</span>
                                             <span class="category-name">MLP Layers</span>
                                             <span class="category-count"></span>
                                         </div>
@@ -739,7 +727,6 @@
                                     <div class="layer-category" id="category-embedding">
                                         <div class="category-header" data-category="embedding">
                                             <span class="category-toggle">▼</span>
-                                            <span class="category-icon">📚</span>
                                             <span class="category-name">Embedding Layers</span>
                                             <span class="category-count"></span>
                                         </div>
@@ -748,7 +735,6 @@
                                     <div class="layer-category" id="category-other" style="display: none;">
                                         <div class="category-header" data-category="other">
                                             <span class="category-toggle">▼</span>
-                                            <span class="category-icon">📦</span>
                                             <span class="category-name">Other Layers</span>
                                             <span class="category-count"></span>
                                         </div>
@@ -833,12 +819,12 @@
                         </div>
                         <div class="form-row">
                             <div class="form-group">
-                                <label for="seed">Random Seed 🎲</label>
+                                <label for="seed">Random Seed</label>
                                 <input type="number" id="seed" value="42" min="0" max="99999" class="magic-input">
                                 <small style="color: var(--text-muted); font-size: var(--font-size-sm);">For reproducibility</small>
                             </div>
                             <div class="form-group">
-                                <label for="max-grad-norm">Max Gradient Norm ✂️</label>
+                                <label for="max-grad-norm">Max Gradient Norm</label>
                                 <input type="number" id="max-grad-norm" value="0.3" min="0.01" max="10.0" step="0.01" class="magic-input">
                                 <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Gradient clipping threshold</small>
                             </div>
@@ -901,14 +887,14 @@
                                 <div class="form-group" style="flex: 1;">
                                     <label class="magic-checkbox">
                                         <input type="checkbox" id="shuffle-dataset" checked>
-                                        <span>Shuffle Dataset 🔀</span>
+                                        <span>Shuffle Dataset</span>
                                     </label>
                                     <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-top: 5px;">Randomize training data order</small>
                                 </div>
                                 <div class="form-group" style="flex: 1;">
                                     <label class="magic-checkbox">
                                         <input type="checkbox" id="gradient-checkpointing">
-                                        <span>Gradient Checkpointing 💾</span>
+                                        <span>Gradient Checkpointing</span>
                                     </label>
                                     <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-top: 5px;">Save VRAM (slower training)</small>
                                 </div>
@@ -1006,7 +992,7 @@
                             <div class="form-group" style="flex: 1;">
                                 <label class="magic-checkbox">
                                     <input type="checkbox" id="use-liger">
-                                    <span>Liger Kernel 🦁</span>
+                                    <span>Liger Kernel</span>
                                 </label>
                                 <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-top: 5px;">
                                     Patch model with fused Triton kernels (RMSNorm, RoPE, SwiGLU). Faster training, lower VRAM.
@@ -1015,7 +1001,7 @@
                             <div class="form-group" style="flex: 1;">
                                 <label class="magic-checkbox">
                                     <input type="checkbox" id="torch-compile">
-                                    <span>torch.compile ⚙️</span>
+                                    <span>torch.compile</span>
                                 </label>
                                 <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-top: 5px;">
                                     Wrap model with torch.compile for fused kernels (PyTorch 2.x). May add startup overhead.
@@ -1031,7 +1017,7 @@
                             <div class="form-group" style="flex: 1;">
                                 <label class="magic-checkbox">
                                     <input type="checkbox" id="eval-on-start">
-                                    <span>Evaluate on Start 📏</span>
+                                    <span>Evaluate on Start</span>
                                 </label>
                                 <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-top: 5px;">
                                     Run a baseline eval before training begins.
@@ -1040,7 +1026,7 @@
                         </div>
                         <div style="margin-top: 10px; padding: 10px; background: var(--warning-light); border-radius: 5px; border-left: 3px solid var(--warning);">
                             <div style="font-size: var(--font-size-sm); color: var(--warning-dark);">
-                                <strong>💡 Liger Kernel:</strong> Best on Llama, Mistral, Qwen, Gemma, and Phi family models. Requires <code>pip install liger-kernel</code>.
+                                <strong>Liger Kernel:</strong> Best on Llama, Mistral, Qwen, Gemma, and Phi family models. Requires <code>pip install liger-kernel</code>.
                             </div>
                         </div>
                     </details>
@@ -1062,7 +1048,7 @@
                         </div>
                         <div style="margin-top: 10px; padding: 10px; background: var(--info-light); border-radius: 5px; border-left: 3px solid #2196f3;">
                             <div style="font-size: var(--font-size-sm); color: var(--info-dark);">
-                                <strong>💡 Performance Guide:</strong><br>
+                                <strong>Performance Guide:</strong><br>
                                 • <strong>Flash Attention 2:</strong> Up to 2-3x faster, lowest memory usage<br>
                                 • <strong>SDPA:</strong> Good balance, works on most modern GPUs<br>
                                 • <strong>Eager:</strong> Slower but most compatible, use for debugging
@@ -1076,14 +1062,14 @@
                         <div class="checkbox-group">
                             <label class="magic-checkbox">
                                 <input type="checkbox" id="use-4bit" checked>
-                                <span>Use 4-bit Quantization 🗜️</span>
+                                <span>Use 4-bit Quantization</span>
                             </label>
                         </div>
 
                         <div class="checkbox-group">
                             <label class="magic-checkbox">
                                 <input type="checkbox" id="push-hub">
-                                <span>Push to HuggingFace Hub 🤗</span>
+                                <span>Push to HuggingFace Hub</span>
                             </label>
                         </div>
 
@@ -1106,7 +1092,7 @@
                                         <select id="hf-namespace" class="magic-input" style="flex: 1;">
                                             <option value="">Personal account (default)</option>
                                         </select>
-                                        <button type="button" id="refresh-hf-namespaces" class="action-button" style="white-space: nowrap;">🔄 Check Orgs</button>
+                                        <button type="button" id="refresh-hf-namespaces" class="action-button" style="white-space: nowrap;">Check Orgs</button>
                                     </div>
                                     <small id="hf-namespace-hint" style="color: var(--text-muted); font-size: var(--font-size-sm);">Click "Check Orgs" to list the organizations your token can publish to.</small>
                                 </div>
@@ -1124,7 +1110,7 @@
                                 <div id="merge-lora-config" style="margin-top: 15px;">
                                     <label class="magic-checkbox">
                                         <input type="checkbox" id="merge-lora-before-upload" checked>
-                                        <span>🔀 Merge LoRA with Base Model</span>
+                                        <span>Merge LoRA with Base Model</span>
                                     </label>
                                     <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-left: 30px; margin-top: 5px;">
                                         When checked, uploads full merged model (larger). When unchecked, uploads only LoRA adapter (much smaller, requires base model to use).
@@ -1134,7 +1120,7 @@
                                 <!-- Share Config Toggle -->
                                 <label class="magic-checkbox" style="margin-top: 15px;">
                                     <input type="checkbox" id="share-config" checked>
-                                    <span>📜 Share Training Config in README</span>
+                                    <span>Share Training Config in README</span>
                                 </label>
                                 <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-left: 30px; margin-top: 5px;">
                                     Embeds the (secret-stripped) training config in the model's README so others can reproduce your run with one click. Uncheck to keep your hyperparameters private.
@@ -1143,7 +1129,7 @@
                                 <!-- Share Config Image (QR) Toggle -->
                                 <label class="magic-checkbox" style="margin-top: 15px;">
                                     <input type="checkbox" id="share-config-image">
-                                    <span>🔳 Share Config as QR Image</span>
+                                    <span>Share Config as QR Image</span>
                                 </label>
                                 <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block; margin-left: 30px; margin-top: 5px;">
                                     Uploads a <code>merlina_config.png</code> — a scannable QR code that also carries the full (secret-stripped) config in its metadata. Others can reproduce your run by scanning it or loading it via <em>Load Config → From Image</em>, without the giant JSON block. Works with or without the README option above.
@@ -1156,7 +1142,7 @@
                         <div class="checkbox-group">
                             <label class="magic-checkbox">
                                 <input type="checkbox" id="use-wandb" checked>
-                                <span>Report to Weights & Biases 📊</span>
+                                <span>Report to Weights & Biases</span>
                             </label>
                         </div>
 
@@ -1195,7 +1181,7 @@
                                     <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Describe the purpose of this run</small>
                                 </div>
                                 <div style="margin-top: 10px; padding: 10px; background: white; border-radius: 5px; font-size: var(--font-size-sm); color: var(--text-secondary);">
-                                    <strong>💡 Auto-naming format:</strong> <code>[model]-[lr]-[batch]-[epochs]ep-[optimizer]-[attention]</code><br>
+                                    <strong>Auto-naming format:</strong> <code>[model]-[lr]-[batch]-[epochs]ep-[optimizer]-[attention]</code><br>
                                     <strong>Example:</strong> <code>llama3-8b-5e-6LR-256B-2ep-adamw8bit-flash2-4bit</code>
                                 </div>
                             </div>
@@ -1203,12 +1189,11 @@
 
                         <!-- Advanced Toggle Button -->
                         <button type="button" id="toggle-advanced" class="toggle-advanced-btn">
-                            <span>⚙️ Show Advanced Settings</span>
+                            <span>Show Advanced Settings</span>
                         </button>
                     </div>
 
                     <button type="submit" class="cast-button">
-                        <span class="button-icon">🪄</span>
                         Start training
                     </button>
                 </form>
@@ -1217,9 +1202,9 @@
             <!-- Active Jobs -->
             <section id="jobs-section" class="card nav-section" style="display: none;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                    <div class="page-heading"><p class="eyebrow">EXPLORE / JOBS</p><h2 tabindex="-1">Magic in the making</h2><p class="page-description">Your training runs, from first step to finished model.</p></div>
+                    <div class="page-heading"><h2 tabindex="-1">Jobs</h2><p class="page-description">Queued, running and finished training runs.</p></div>
                     <button id="clear-all-jobs-btn" class="action-button danger" style="max-width: 150px;">
-                        🗑️ Clear All Jobs
+                        Clear All Jobs
                     </button>
                 </div>
                 <div id="jobs-container"></div>
@@ -1227,7 +1212,7 @@
 
             <!-- Inference (STEP 5) — unified for text LLM + diffusion -->
             <section id="inference-section" class="card nav-section" style="display: none;">
-                <div class="page-heading"><p class="eyebrow">EXPLORE / PLAYGROUND</p><h2 tabindex="-1">Meet your creation</h2><p class="page-description">Start a conversation or conjure an image. See what your model has learned.</p></div>
+                <div class="page-heading"><h2 tabindex="-1">Playground</h2><p class="page-description">Load a model on this machine and chat with it, or render images from an image LoRA.</p></div>
 
                 <!-- Mode selector — toggles between the chat UI (LLM) and the
                      conjure UI (diffusion). Both use the same nav entry; they're
@@ -1288,10 +1273,10 @@
 
                     <div style="display: flex; gap: 10px;">
                         <button type="button" id="inference-load-btn" class="action-button primary-button" style="flex: 1;">
-                            🧙 Load Model
+                            Load Model
                         </button>
                         <button type="button" id="inference-unload-btn" class="action-button danger" style="flex: 0 0 auto;    display: none;">
-                            🗑️ Unload
+                            Unload
                         </button>
                     </div>
 
@@ -1365,11 +1350,11 @@
                 <!-- ═══ Diffusion mode (moved from old standalone Playground section) ═══ -->
                 <div id="inference-diffusion-mode" style="display: none;">
                     <p style="color: var(--text-muted); margin-top: 0;">
-                        Pick a base diffusion model + one of your trained LoRAs, type a prompt, hit conjure. Runs in a fresh subprocess so it won't fight live training jobs for VRAM.
+                        Pick a base diffusion model + one of your trained LoRAs, type a prompt, and generate. Runs in a fresh subprocess so it won't fight live training jobs for VRAM.
                     </p>
 
                     <div class="spell-section">
-                        <h3>Conjure</h3>
+                        <h3>Generate</h3>
 
                         <div class="form-group">
                             <label for="dplay-base-model">Base Diffusion Model</label>
@@ -1394,7 +1379,7 @@
                             </select>
                             <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Picked from <code>./models/</code>. Refresh after training new ones.</small>
                             <button type="button" id="dplay-refresh-loras" style="margin-top: 6px; background: transparent; color: var(--primary-purple); border: 1px solid var(--primary-purple); border-radius: 6px; padding: 4px 12px; cursor: pointer; font-size: var(--font-size-sm);">
-                                🔄 Refresh list
+                                Refresh list
                             </button>
                         </div>
 
@@ -1420,7 +1405,7 @@
 
                         <button type="button" id="dplay-conjure" class="action-button primary-button" style="width: 100%;
                                margin-top: 8px;">
-                            ✨ Conjure Image
+                            Generate image
                         </button>
 
                         <div id="dplay-status" style="margin-top: 12px; font-size: 0.9em;"></div>
@@ -1442,8 +1427,8 @@
             <!-- ═══════════════════════════════════════════════════════════ -->
             <section id="remote-section" class="card nav-section" style="display: none;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                    <div class="page-heading"><p class="eyebrow">EXPLORE / REMOTE GPUS</p><h2 tabindex="-1">Borrow a bigger cauldron</h2><p class="page-description">Serve a model on a rented GPU behind an OpenAI-compatible endpoint, try it, and send it home.</p></div>
-                    <button type="button" class="action-button" data-act="refresh" style="max-width: 160px;">🔄 Refresh</button>
+                    <div class="page-heading"><h2 tabindex="-1">Remote GPUs</h2><p class="page-description">Serve a model with vLLM on a rented GPU behind an OpenAI-compatible endpoint. Every session has a runtime cap and is always torn down.</p></div>
+                    <button type="button" class="action-button" data-act="refresh" style="max-width: 160px;">Refresh</button>
                 </div>
 
                 <div class="spell-section" id="remote-form">
@@ -1566,7 +1551,7 @@
             </section>
 
             <section id="export-section" class="card nav-section" style="display: none;">
-                <div class="page-heading"><p class="eyebrow">EXPLORE / EXPORT</p><h2 tabindex="-1">Ready for the world</h2><p class="page-description">Package your model, publish to the Hub, and keep your artifacts together.</p></div>
+                <div class="page-heading"><h2 tabindex="-1">Export &amp; publish</h2></div>
                 <p style="color: var(--text-muted); margin-top: -10px;">
                     Quantize trained models to GGUF, publish to HuggingFace Hub, and manage artifacts — all against any model under <code>./models/</code>.
                 </p>
@@ -1582,13 +1567,13 @@
                 <!-- Tab switcher -->
                 <div id="export-tabs" class="export-tabs" role="tablist" style="display: flex; gap: 8px; margin: 20px 0 15px 0; border-bottom: 2px solid var(--border-color);">
                     <button type="button" class="export-tab-btn active" data-tab="gguf" role="tab" aria-selected="true">
-                        🪄 GGUF Export
+                        GGUF Export
                     </button>
                     <button type="button" class="export-tab-btn" data-tab="hub" role="tab" aria-selected="false">
-                        🤗 HuggingFace Upload
+                        HuggingFace Upload
                     </button>
                     <button type="button" class="export-tab-btn" data-tab="artifacts" role="tab" aria-selected="false">
-                        🗂️ Artifacts
+                        Artifacts
                     </button>
                 </div>
 
@@ -1610,7 +1595,7 @@
                                 <label class="magic-checkbox"><input type="checkbox" class="export-gguf-quant" value="Q6_K"><span>Q6_K</span></label>
                                 <label class="magic-checkbox"><input type="checkbox" class="export-gguf-quant" value="Q5_K_M"><span>Q5_K_M</span></label>
                                 <label class="magic-checkbox"><input type="checkbox" class="export-gguf-quant" value="Q5_K_S"><span>Q5_K_S</span></label>
-                                <label class="magic-checkbox"><input type="checkbox" class="export-gguf-quant" value="Q4_K_M" checked><span>Q4_K_M ⭐</span></label>
+                                <label class="magic-checkbox"><input type="checkbox" class="export-gguf-quant" value="Q4_K_M" checked><span>Q4_K_M (recommended)</span></label>
                                 <label class="magic-checkbox"><input type="checkbox" class="export-gguf-quant" value="Q4_K_S"><span>Q4_K_S</span></label>
                                 <label class="magic-checkbox"><input type="checkbox" class="export-gguf-quant" value="Q3_K_M"><span>Q3_K_M</span></label>
                                 <label class="magic-checkbox"><input type="checkbox" class="export-gguf-quant" value="Q2_K"><span>Q2_K</span></label>
@@ -1624,7 +1609,7 @@
 
                         <div style="margin-top: 15px;">
                             <button type="button" id="export-gguf-start" class="action-button primary-button">
-                                ✨ Start GGUF Export
+                                Start GGUF Export
                             </button>
                             <span id="export-gguf-status" style="margin-left: 12px; font-size: 0.9em;"></span>
                         </div>
@@ -1648,7 +1633,7 @@
                                 <select id="export-hub-namespace" class="magic-input" style="flex: 1;">
                                     <option value="">Personal account (default)</option>
                                 </select>
-                                <button type="button" id="export-hub-refresh-namespaces" class="action-button" style="white-space: nowrap;">🔄 Check Orgs</button>
+                                <button type="button" id="export-hub-refresh-namespaces" class="action-button" style="white-space: nowrap;">Check Orgs</button>
                             </div>
                             <small id="export-hub-namespace-hint" style="color: var(--text-muted); font-size: var(--font-size-sm);">Click "Check Orgs" to list the organizations your token can publish to.</small>
                         </div>
@@ -1701,7 +1686,7 @@
 
                         <div style="margin-top: 15px;">
                             <button type="button" id="export-hub-start" class="action-button primary-button">
-                                📤 Upload to Hub
+                                Upload to Hub
                             </button>
                             <span id="export-hub-status" style="margin-left: 12px; font-size: 0.9em;"></span>
                         </div>
@@ -1727,9 +1712,9 @@
             <!-- Cleanup & Analysis (STEP 7) — reclaim disk from old checkpoints -->
             <section id="cleanup-section" class="card nav-section" style="display: none;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                    <div class="page-heading"><p class="eyebrow">WORKSPACE / STORAGE</p><h2 tabindex="-1">Room for your next idea</h2><p class="page-description">A clear view of your checkpoints, models, and cached files.</p></div>
+                    <div class="page-heading"><h2 tabindex="-1">Disk</h2></div>
                     <button id="cleanup-refresh-btn" type="button" class="action-button" style="max-width: 160px;">
-                        🔄 Refresh
+                        Refresh
                     </button>
                 </div>
                 <p style="color: var(--text-muted); margin-top: 0;">
@@ -1764,19 +1749,19 @@
                 <div id="cleanup-tabs" role="tablist" style="display: flex; gap: 8px; margin: 20px 0 4px 0; border-bottom: 2px solid var(--border-color);">
                     <button type="button" class="cleanup-tab-btn active" data-ctab="checkpoints" role="tab" aria-selected="true"
                             style="background: none; border: none; padding: 10px 16px; cursor: pointer; font-weight: 600; border-bottom: 3px solid transparent;">
-                        ✂️ Checkpoints
+                        Checkpoints
                     </button>
                     <button type="button" class="cleanup-tab-btn" data-ctab="hfcache" role="tab" aria-selected="false"
                             style="background: none; border: none; padding: 10px 16px; cursor: pointer; font-weight: 600; border-bottom: 3px solid transparent;">
-                        🤗 HuggingFace Cache
+                        HuggingFace Cache
                     </button>
                     <button type="button" class="cleanup-tab-btn" data-ctab="models" role="tab" aria-selected="false"
                             style="background: none; border: none; padding: 10px 16px; cursor: pointer; font-weight: 600; border-bottom: 3px solid transparent;">
-                        📦 Saved Models
+                        Saved Models
                     </button>
                     <button type="button" class="cleanup-tab-btn" data-ctab="artifacts" role="tab" aria-selected="false"
                             style="background: none; border: none; padding: 10px 16px; cursor: pointer; font-weight: 600; border-bottom: 3px solid transparent;">
-                        🧩 Other Artifacts
+                        Other Artifacts
                     </button>
                 </div>
 
@@ -1799,10 +1784,10 @@
                     </div>
                     <div style="display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap;">
                         <button id="cleanup-preview-btn" type="button" class="action-button" style="max-width: 220px;">
-                            🔍 Preview (dry run)
+                            Preview (dry run)
                         </button>
                         <button id="cleanup-apply-btn" type="button" class="action-button danger" style="max-width: 220px;" disabled>
-                            🗑️ Delete previewed items
+                            Delete previewed items
                         </button>
                     </div>
                     <div id="cleanup-result" style="margin-top: 16px;"></div>
@@ -1833,7 +1818,7 @@
                                 <label for="hf-stale-days">Stale after (days)</label>
                                 <input type="number" id="hf-stale-days" min="1" value="90" style="max-width: 100px;">
                             </div>
-                            <button id="hf-refresh-btn" type="button" class="action-button" style="max-width: 140px;">🔄 Scan</button>
+                            <button id="hf-refresh-btn" type="button" class="action-button" style="max-width: 140px;">Scan</button>
                             <button id="hf-preselect-btn" type="button" class="action-button" style="max-width: 200px;">✓ Select stale</button>
                         </div>
                         <div id="hf-cache-stats" class="metrics-grid" style="margin-bottom: 12px;">
@@ -1852,7 +1837,7 @@
                         </div>
                         <div style="display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;">
                             <button id="hf-delete-btn" type="button" class="action-button danger" style="max-width: 240px;" disabled>
-                                🗑️ Delete selected repos
+                                Delete selected repos
                             </button>
                         </div>
                         <div id="hf-result" style="margin-bottom: 12px;"></div>
@@ -1885,7 +1870,7 @@
                         </div>
                         <div style="display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;">
                             <button id="models-delete-btn" type="button" class="action-button danger" style="max-width: 240px;" disabled>
-                                🗑️ Delete selected models
+                                Delete selected models
                             </button>
                         </div>
                         <div id="models-result" style="margin-bottom: 12px;"></div>
@@ -1916,7 +1901,7 @@
                         </div>
                         <div style="display: flex; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;">
                             <button id="gguf-delete-btn" type="button" class="action-button danger" style="max-width: 240px;" disabled>
-                                🗑️ Delete selected GGUF
+                                Delete selected GGUF
                             </button>
                         </div>
                         <div id="gguf-result" style="margin-bottom: 12px;"></div>
@@ -1944,7 +1929,7 @@
                             </div>
                         </div>
                         <button id="wandb-clear-btn" type="button" class="action-button danger" style="max-width: 240px;" disabled>
-                            🗑️ Clear W&amp;B logs
+                            Clear W&amp;B logs
                         </button>
                         <div id="wandb-result" style="margin-top: 12px;"></div>
                     </div>
@@ -1954,9 +1939,9 @@
             <!-- Object storage — browse / sync / prune S3-compatible tiers (storage.js) -->
             <section id="storage-section" class="card nav-section" style="display: none;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                    <div class="page-heading"><p class="eyebrow">WORKSPACE / OBJECT STORAGE</p><h2 tabindex="-1">Everything in its place</h2><p class="page-description">Browse your storage tiers and move things between them.</p></div>
+                    <div class="page-heading"><h2 tabindex="-1">Object storage</h2></div>
                     <button id="storage-refresh-btn" type="button" class="action-button" style="max-width: 160px;">
-                        🔄 Refresh
+                        Refresh
                     </button>
                 </div>
                 <p style="color: var(--text-muted); margin-top: 0;">
@@ -1983,11 +1968,10 @@
 
             </div>
             <aside class="setup-summary" id="setup-summary" aria-label="Current training setup">
-                <div class="summary-card"><div class="summary-title"><span class="panel-icon" aria-hidden="true">✧</span><h3>Your recipe</h3></div><p class="summary-description">A little of this. A little of you.</p>
-                    <dl><div><dt>BASE MODEL</dt><dd id="summary-model">Choose your model</dd></div><div><dt>DATASETS ADDED</dt><dd id="summary-datasets">1 dataset</dd></div><div><dt>TRAINING METHOD</dt><dd id="summary-method">ORPO</dd></div><div><dt>ADAPTATION</dt><dd id="summary-adaptation">LoRA fine-tuning</dd></div></dl>
-                    <div class="summary-tip"><span aria-hidden="true">✦</span><p id="summary-tip">Start with a model you love. Merlina will check that it’s ready before training.</p></div>
+                <div class="summary-card"><div class="summary-title"><h3>Run summary</h3></div>
+                    <dl><div><dt>BASE MODEL</dt><dd id="summary-model">Not set</dd></div><div><dt>DATASETS</dt><dd id="summary-datasets">1 dataset</dd></div><div><dt>TRAINING METHOD</dt><dd id="summary-method">ORPO</dd></div><div><dt>ADAPTATION</dt><dd id="summary-adaptation">LoRA fine-tuning</dd></div></dl>
                 </div>
-                <div class="journey-card"><p class="eyebrow">FROM IDEA TO CREATION</p><ol><li data-journey="model-section" class="current"><span>01</span>Choose a model</li><li data-journey="dataset-section"><span>02</span>Add your dataset</li><li data-journey="config-section"><span>03</span>Make some magic</li></ol><p>Then explore, export, and share.</p></div>
+                
             </aside>
         </main>
 
@@ -2052,7 +2036,7 @@
                         <h3 style="color: var(--primary-purple); margin-bottom: 10px;">GPU Monitoring</h3>
                         <div id="gpu-monitor-cards"></div>
                         <button type="button" onclick="refreshJobGPUs()" class="action-button" style="width: 100%; margin-top: 10px;">
-                            🔄 Refresh GPU Stats
+                            Refresh GPU Stats
                         </button>
                     </div>
 
@@ -2074,16 +2058,16 @@
 
                     <div class="action-buttons">
                         <a id="wandb-link" href="#" target="_blank" class="action-button" style="display: none;">
-                            📊 View in W&B
+                            View in W&B
                         </a>
                         <button id="stop-button" class="action-button danger">
-                            🛑 Stop Training
+                            Stop Training
                         </button>
                         <button id="retry-button" class="action-button primary-button" style="display: none;">
-                            🔄 Retry with Same Config
+                            Retry with Same Config
                         </button>
                         <button id="upload-hub-button" class="action-button" style="display: none;">
-                            📤 Upload to Hub
+                            Upload to Hub
                         </button>
                     </div>
                     <div id="upload-error-message" style="display: none; margin-top: 10px; padding: 10px 14px; background: var(--warning-light); color: var(--warning-dark); border: 1px solid #ffc107; border-radius: 8px; font-size: 0.9em;"></div>
@@ -2099,7 +2083,7 @@
         <div id="upload-hub-modal" class="modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="upload-hub-modal-title">
             <div class="modal-content">
                 <button class="close" onclick="document.getElementById('upload-hub-modal').style.display='none'" aria-label="Close modal" type="button">&times;</button>
-                <h2 id="upload-hub-modal-title">📤 Upload Model to HuggingFace Hub</h2>
+                <h2 id="upload-hub-modal-title">Upload Model to HuggingFace Hub</h2>
                 <p style="color: var(--text-secondary); margin-bottom: 15px;">Push this job's trained model to HuggingFace Hub.</p>
                 <div class="form-group">
                     <label for="upload-hf-token">HuggingFace Token</label>
@@ -2112,7 +2096,7 @@
                         <select id="upload-hf-namespace" class="magic-input" style="flex: 1;">
                             <option value="">Personal account (default)</option>
                         </select>
-                        <button type="button" id="upload-refresh-namespaces" class="action-button" style="white-space: nowrap;">🔄 Check Orgs</button>
+                        <button type="button" id="upload-refresh-namespaces" class="action-button" style="white-space: nowrap;">Check Orgs</button>
                     </div>
                     <small id="upload-hf-namespace-hint" style="color: var(--text-muted); font-size: var(--font-size-sm);">Click "Check Orgs" to list the organizations your token can publish to.</small>
                 </div>
@@ -2131,7 +2115,7 @@
                     </label>
                 </div>
                 <button id="upload-hub-confirm" class="action-button" style="width: 100%;    margin-top: 10px;">
-                    🚀 Start Upload
+                    Start Upload
                 </button>
             </div>
         </div>
@@ -2194,7 +2178,7 @@
                               style="width: 100%; font-family: monospace; font-size: var(--font-size-sm);"></textarea>
                 </div>
                 <button type="button" id="load-config-code-submit" class="action-button" style="width: 100%;">
-                    ✨ Load Configuration
+                    Load Configuration
                 </button>
             </div>
         </div>
@@ -2227,7 +2211,7 @@
             <p>
                 <span id="version-info" style="opacity: 0.7; font-size: 0.9em;">Loading version...</span>
                 <br>
-                Made with ❤️ by <a href="https://schneewolflabs.com/" target="_blank" rel="noopener noreferrer">Schneewolf Labs</a>
+                <a href="https://schneewolflabs.com/" target="_blank" rel="noopener noreferrer">Schneewolf Labs</a>
             </p>
         </footer>
         </div>

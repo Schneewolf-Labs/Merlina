@@ -218,7 +218,7 @@ export class StorageManager {
         el.innerHTML = this.tiers.map(t => {
             const badge = t.private
                 ? '<span class="storage-badge private" title="Private data never leaves this tier">🔒 private</span>'
-                : '<span class="storage-badge shared">🌐 shared</span>';
+                : '<span class="storage-badge shared">shared</span>';
             if (!t.configured) {
                 return `<div class="metric-card storage-tier-card" style="opacity: 0.6;">
                     <span class="metric-label">${esc(t.name)}</span>
@@ -226,19 +226,19 @@ export class StorageManager {
                 </div>`;
             }
             const admin = t.admin_configured
-                ? '<span class="storage-badge shared" title="An admin key is configured for bucket operations">🔑 admin key</span>'
+                ? '<span class="storage-badge shared" title="An admin key is configured for bucket operations">admin key</span>'
                 : '';
             const info = this.buckets[t.name] || { buckets: [] };
             const rows = (info.buckets || []).map(b => {
                 const active = t.name === this.tier && b.name === this.bucket;
                 return `<li class="storage-bucket-row${active ? ' active' : ''}">
                     <button type="button" class="link-button" data-action="open-bucket" data-tier="${esc(t.name)}"
-                        data-bucket="${esc(b.name)}" title="Browse this bucket">🪣 ${esc(b.name)}</button>
+                        data-bucket="${esc(b.name)}" title="Browse this bucket">${esc(b.name)}</button>
                     ${b.default ? '<span class="storage-badge default" title="Configured in Merlina; cannot be deleted here">★ default</span>' : ''}
                     <span class="storage-bucket-size">${this._sizeCell(t.name, b.name)}</span>
                     <span class="storage-bucket-tools">
                         <button type="button" class="link-button" data-action="bucket-info" data-tier="${esc(t.name)}" data-bucket="${esc(b.name)}" title="Bucket info" aria-label="Info for ${esc(b.name)}">ℹ️</button>
-                        ${b.default ? '' : `<button type="button" class="link-button" data-action="bucket-delete" data-tier="${esc(t.name)}" data-bucket="${esc(b.name)}" title="Delete bucket" aria-label="Delete ${esc(b.name)}">🗑️</button>`}
+                        ${b.default ? '' : `<button type="button" class="link-button" data-action="bucket-delete" data-tier="${esc(t.name)}" data-bucket="${esc(b.name)}" title="Delete bucket" aria-label="Delete ${esc(b.name)}"></button>`}
                     </span>
                 </li>`;
             }).join('');
@@ -296,9 +296,9 @@ export class StorageManager {
             const i = await MerlinaAPI.storageBucketInfo(tier, bucket);
             const notes = (i.notes || []).map(n => `<li>${esc(n)}</li>`).join('');
             this._setBucketPanel(`<div class="spell-section" style="margin: 0;">
-                <h4 style="margin-top: 0;">🪣 ${esc(i.bucket)} <span style="font-weight: normal; color: var(--text-muted);">on ${esc(i.tier)}</span></h4>
+                <h4 style="margin-top: 0;">${esc(i.bucket)} <span style="font-weight: normal; color: var(--text-muted);">on ${esc(i.tier)}</span></h4>
                 <dl class="storage-kv">
-                    <dt>Privacy</dt><dd>${i.private ? '🔒 private tier' : '🌐 shared tier'}</dd>
+                    <dt>Privacy</dt><dd>${i.private ? '🔒 private tier' : 'shared tier'}</dd>
                     <dt>Default</dt><dd>${i.default ? '★ configured in Merlina (protected)' : 'no'}</dd>
                     <dt>Region</dt><dd>${esc(i.region || '—')}</dd>
                     <dt>Created</dt><dd>${esc(i.creation_date || '—')}</dd>
@@ -332,7 +332,7 @@ export class StorageManager {
                 <label for="storage-bucket-confirm" style="font-size: 0.9em;">Type <code>${esc(bucket)}</code> to confirm</label>
                 <input type="text" id="storage-bucket-confirm" autocomplete="off" spellcheck="false" style="max-width: 420px;">
                 <div style="display: flex; gap: 8px; margin-top: 8px;">
-                    <button type="button" id="storage-bucket-delete-go" class="action-button danger" style="max-width: 220px;" data-action="bucket-delete-go" disabled>🗑️ Delete bucket</button>
+                    <button type="button" id="storage-bucket-delete-go" class="action-button danger" style="max-width: 220px;" data-action="bucket-delete-go" disabled>Delete bucket</button>
                     <button type="button" class="action-button" style="max-width: 140px;" data-action="panel-close">Cancel</button>
                 </div>
             </div>`);
@@ -481,12 +481,12 @@ export class StorageManager {
         }
         const upRow = this.prefix && !data.offset ? `<tr>
             <td style="padding: 6px 10px;" colspan="4">
-                <button type="button" class="link-button" data-action="up" title="Up one folder">📁 ..</button>
+                <button type="button" class="link-button" data-action="up" title="Up one folder">..</button>
             </td>
         </tr>` : '';
         const dirRows = dirs.map(d => `<tr${d.prefix === this.selected ? ' class="selected"' : ''}>
             <td style="padding: 6px 10px;">
-                <button type="button" class="link-button" data-action="open" data-prefix="${esc(d.prefix)}">📁 ${esc(d.name)}</button>
+                <button type="button" class="link-button" data-action="open" data-prefix="${esc(d.prefix)}">${esc(d.name)}</button>
             </td>
             <td style="padding: 6px 10px; text-align: right;">—</td>
             <td style="padding: 6px 10px;"></td>
@@ -496,7 +496,7 @@ export class StorageManager {
         </tr>`).join('');
         const objRows = objects.map(o => `<tr${o.key === this.selected ? ' class="selected"' : ''}>
             <td style="padding: 6px 10px;">
-                <button type="button" class="link-button" data-action="object" data-key="${esc(o.key)}" title="Details & preview">📄 ${esc(o.name)}</button>
+                <button type="button" class="link-button" data-action="object" data-key="${esc(o.key)}" title="Details & preview">${esc(o.name)}</button>
             </td>
             <td style="padding: 6px 10px; text-align: right;">${esc(humanBytes(o.size))}</td>
             <td style="padding: 6px 10px; color: var(--text-muted);">${esc((o.mtime || '').slice(0, 19).replace('T', ' '))}</td>
@@ -538,7 +538,7 @@ export class StorageManager {
         const href = MerlinaAPI.storageDownloadUrl(this.tier, key, this.bucket);
         this._setObject(`<div class="spell-section" style="margin: 0;">
             <div style="display: flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap;">
-                <h4 style="margin: 0; overflow-wrap: anywhere;">📄 ${esc(info.name)}</h4>
+                <h4 style="margin: 0; overflow-wrap: anywhere;">${esc(info.name)}</h4>
                 <span style="display: flex; gap: 8px;">
                     <a class="action-button" style="max-width: 160px; text-decoration: none; text-align: center;" href="${esc(href)}" download="${esc(info.name)}">⬇️ Download</a>
                     <button type="button" class="action-button" style="max-width: 100px;" data-action="object-close">Close</button>
@@ -597,11 +597,11 @@ export class StorageManager {
         const target = this.selected || '';
         const dests = this._destinations();
         const options = dests.map(d => {
-            const guard = isGuarded(src, d.tier) ? ' 🛡️' : '';
+            const guard = isGuarded(src, d.tier) ? ' (guarded)' : '';
             return `<option value="${esc(d.tier.name)}|${esc(d.bucket)}">${esc(d.tier.name)}:${esc(d.bucket)}${guard}</option>`;
         }).join('');
         const del = target
-            ? '<button type="button" class="action-button danger" style="max-width: 200px;" data-action="delete-open">🗑️ Delete…</button>'
+            ? '<button type="button" class="action-button danger" style="max-width: 200px;" data-action="delete-open">Delete…</button>'
             : '';
         const useFolder = target !== this.prefix
             ? `<button type="button" class="link-button" data-action="select" data-prefix="${esc(this.prefix)}">(use current folder)</button>`
@@ -611,8 +611,8 @@ export class StorageManager {
             <div style="display: flex; gap: 8px; flex-wrap: wrap; align-items: center;">
                 ${dests.length ? `<label style="display: inline-flex; gap: 6px; align-items: center;">To
                     <select id="storage-dest" style="width: auto; max-width: 320px;">${options}</select></label>
-                    <button type="button" class="action-button" style="max-width: 200px;" data-action="preview" data-move="0">🔍 Preview sync</button>
-                    <button type="button" class="action-button" style="max-width: 200px;" data-action="preview" data-move="1">🚚 Preview move</button>`
+                    <button type="button" class="action-button" style="max-width: 200px;" data-action="preview" data-move="0">Preview sync</button>
+                    <button type="button" class="action-button" style="max-width: 200px;" data-action="preview" data-move="1">Preview move</button>`
                   : '<span style="color: var(--text-muted);">No other bucket to sync to.</span>'}
                 ${del}
             </div>
@@ -631,7 +631,7 @@ export class StorageManager {
         if (!note) return;
         const d = this._destination();
         note.textContent = d && isGuarded(this._tier(this.tier), d.tier)
-            ? '🛡️ Private → shared: the preview lists anything the privacy guard refuses; refused objects are never copied.'
+            ? 'Private → shared: the preview lists anything the privacy guard refuses; refused objects are never copied.'
             : '';
     }
 
@@ -754,11 +754,11 @@ export class StorageManager {
         const verb = request.move ? 'Move' : 'Copy';
         const refused = plan.refused.length
             ? `<div class="storage-warn-box">
-                    <strong>🛡️ ${c.refused} private object(s) refused</strong> — they stay in ${esc(request.src)} and are never copied:
+                    <strong>${c.refused} private object(s) refused</strong> — they stay in ${esc(request.src)} and are never copied:
                     <ul style="max-height: 160px; overflow: auto; font-size: 0.85em;">${plan.refused.map(r =>
                         `<li><code>${esc(r.key)}</code> — ${esc(r.reason)}</li>`).join('')}</ul>
                </div>`
-            : (plan.guarded ? '<p style="font-size: 0.9em; color: var(--success);">🛡️ Privacy guard checked: nothing refused.</p>' : '');
+            : (plan.guarded ? '<p style="font-size: 0.9em; color: var(--success);">Privacy guard checked: nothing refused.</p>' : '');
         const list = plan.to_copy.slice(0, 50).map(i =>
             `<li><code>${esc(i.key)}</code> — ${esc(humanBytes(i.size))} (${esc(i.reason)})</li>`).join('');
         const nothing = c.to_copy === 0 && !(request.move && c.skipped);
@@ -776,8 +776,8 @@ export class StorageManager {
                 ${c.to_copy > 50 ? `<p style="font-size: 0.85em; color: var(--text-muted);">…and ${c.to_copy - 50} more.</p>` : ''}
                 ${request.move ? '<p style="font-size: 0.9em;">Source objects are deleted only after every copy is hash-verified.</p>' : ''}
                 ${nothing
-                    ? '<p style="color: var(--success);">Nothing to do — already in sync. ✨</p>'
-                    : `<button type="button" class="action-button${request.move ? ' danger' : ''}" style="max-width: 240px;" data-action="apply">✨ Apply ${verb.toLowerCase()}</button>`}
+                    ? '<p style="color: var(--success);">Nothing to do — already in sync. </p>'
+                    : `<button type="button" class="action-button${request.move ? ' danger' : ''}" style="max-width: 240px;" data-action="apply">Apply ${verb.toLowerCase()}</button>`}
             </div>`;
     }
 
@@ -809,7 +809,7 @@ export class StorageManager {
                     clearInterval(this.pollTimer);
                     this.pollTimer = null;
                     const ok = job.state === 'completed';
-                    this.toast.show(ok ? 'Sync complete ✨' : `Sync ${job.state}`, ok ? 'success' : 'error');
+                    this.toast.show(ok ? 'Sync complete ' : `Sync ${job.state}`, ok ? 'success' : 'error');
                     this.load(true);
                 }
             } catch (err) {
@@ -871,7 +871,7 @@ export class StorageManager {
                     <label for="storage-delete-input" style="font-size: 0.9em;">Type <code>${esc(this.selected)}</code> to confirm</label>
                     <input type="text" id="storage-delete-input" autocomplete="off" spellcheck="false" style="max-width: 420px;">
                     <div style="display: flex; gap: 8px; margin-top: 8px;">
-                        <button type="button" id="storage-delete-go" class="action-button danger" style="max-width: 200px;" data-action="delete-go" disabled>🗑️ Delete</button>
+                        <button type="button" id="storage-delete-go" class="action-button danger" style="max-width: 200px;" data-action="delete-go" disabled>Delete</button>
                         <button type="button" class="action-button" style="max-width: 140px;" data-action="delete-cancel">Cancel</button>
                     </div>
                 </div>`;

@@ -34,7 +34,7 @@ class GPUManager {
 
         if (!container) return;
 
-        LoadingManager.show(refreshButton, '🔄 Loading...');
+        LoadingManager.show(refreshButton, 'Loading...');
         LoadingManager.showSkeleton(container, 2);
 
         try {
@@ -78,7 +78,7 @@ class GPUManager {
             console.error('Failed to load GPUs:', error);
             container.innerHTML = `
                 <div class="error-message">
-                    <div class="error-header">❌ Error Loading GPUs</div>
+                    <div class="error-header">Error Loading GPUs</div>
                     <div class="error-body">${sanitizeHTML(error.message)}</div>
                 </div>
             `;

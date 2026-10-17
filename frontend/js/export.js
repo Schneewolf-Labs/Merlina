@@ -276,17 +276,17 @@ export class ExportManager {
         const { stage, quant_type, current, total, error, message } = data;
         if (stage === 'merging') {
             pill.className = 'status-badge status-training';
-            pill.textContent = '🔀 merging for GGUF';
+            pill.textContent = 'merging for GGUF';
         } else if (stage === 'converting') {
             pill.className = 'status-badge status-training';
-            pill.textContent = '🔮 converting → fp16 GGUF';
+            pill.textContent = 'converting → fp16 GGUF';
         } else if (stage === 'quantizing') {
             pill.className = 'status-badge status-training';
             const progress = (current && total) ? ` (${current}/${total})` : '';
             pill.textContent = `⚗️ quantizing ${quant_type || ''}${progress}`;
         } else if (stage === 'complete') {
             pill.className = 'status-badge status-completed';
-            pill.textContent = '✨ GGUF export complete';
+            pill.textContent = 'GGUF export complete';
             setTimeout(() => { pill.style.display = 'none'; }, 6000);
         } else if (stage === 'error') {
             pill.className = 'status-badge status-failed';
@@ -399,8 +399,8 @@ export class ExportManager {
 
             if (state.history && state.history.length > 0) {
                 const rows = state.history.slice().reverse().map(evt => {
-                    const icon = evt.status === 'success' ? '✅' : '❌';
-                    const privacy = evt.private ? '🔒' : '🌍';
+                    const icon = evt.status === 'success' ? '✓' : '✗';
+                    const privacy = evt.private ? '🔒' : '';
                     const art = (evt.artifacts || []).join(', ') || '—';
                     return `<tr>
                         <td>${icon}</td>
@@ -449,14 +449,14 @@ export class ExportManager {
 
             const order = ['adapter', 'merged', 'gguf', 'tokenizer', 'processor', 'config', 'readme', 'other'];
             const labels = {
-                adapter: '🧩 Adapter',
-                merged: '🧱 Merged weights',
-                gguf: '🪄 GGUF',
-                tokenizer: '🔤 Tokenizer',
-                processor: '🖼 Processor',
-                config: '⚙️ Config',
-                readme: '📝 Readme / metadata',
-                other: '📦 Other',
+                adapter: 'Adapter',
+                merged: 'Merged weights',
+                gguf: 'GGUF',
+                tokenizer: 'Tokenizer',
+                processor: 'Processor',
+                config: 'Config',
+                readme: 'Readme / metadata',
+                other: 'Other',
             };
 
             const pieces = [];

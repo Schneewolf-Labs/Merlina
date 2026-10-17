@@ -30,15 +30,15 @@ test.describe('Page load', () => {
         await page.goto('/');
         // Section headers (step-based navigation - only one visible at a time)
         // Step 1: Model (visible by default)
-        await expect(page.getByRole('heading', { name: 'Model studio', exact: true })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Model', exact: true })).toBeVisible();
 
         // Step 2: Dataset (navigate to it)
         await page.locator('.section-nav-btn[data-section="dataset-section"]').click();
-        await expect(page.getByRole('heading', { name: 'Shape your dataset', exact: true })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Dataset', exact: true })).toBeVisible();
 
         // Step 3: Training (navigate to it)
         await page.locator('.section-nav-btn[data-section="config-section"]').click();
-        await expect(page.getByRole('heading', { name: 'Make it your own', exact: true })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Training', exact: true })).toBeVisible();
     });
 
     test('has skip-to-content link for accessibility', async ({ page }) => {
@@ -481,7 +481,7 @@ test.describe('Cleanup section', () => {
         await page.goto('/');
         await page.locator('.section-nav-btn[data-section="cleanup-section"]').click();
         await expect(page.locator('#cleanup-section')).toBeVisible();
-        await expect(page.getByRole('heading', { name: 'Room for your next idea' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Disk', exact: true })).toBeVisible();
     });
 
     test('controls are present and Apply starts disabled', async ({ page }) => {

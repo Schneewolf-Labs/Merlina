@@ -417,7 +417,7 @@ class JobCardRenderer {
                     <span class="job-status-badge ${statusClass}">${sanitizeHTML(job.status)}</span>
                 </div>
                 <button class="delete-job-btn" data-action="delete-job" title="Delete job" aria-label="Delete job ${jobId}">
-                    🗑️
+                    
                 </button>
             </div>
             <div class="progress-bar" style="cursor: pointer;" data-action="view-job">

@@ -127,7 +127,7 @@ class DatasetManager {
     cardTemplate() {
         return `
             <div class="dataset-card-header">
-                <span class="dataset-card-title">📦 Dataset</span>
+                <span class="dataset-card-title">Dataset</span>
                 <button type="button" class="remove-dataset-btn" title="Remove dataset">&times;</button>
             </div>
             <div class="dataset-card-body">
@@ -181,7 +181,7 @@ class DatasetManager {
                     </div>
                     <div class="ds-upload-status"></div>
                     <button type="button" class="action-button ds-upload-btn" style="margin-top: 10px;">
-                        📤 Upload Dataset
+                        Upload Dataset
                     </button>
                 </div>
 
@@ -204,7 +204,7 @@ class DatasetManager {
                 </div>
 
                 <button type="button" class="action-button ds-inspect-btn" style="width: 100%; margin-top: 8px;">
-                    🔍 Inspect Columns
+                    Inspect Columns
                 </button>
 
                 <div class="ds-colmap-config" style="display: none; margin-top: 12px;">
@@ -298,7 +298,7 @@ class DatasetManager {
         const cards = this.getCards();
         cards.forEach((card, idx) => {
             const title = card.querySelector('.dataset-card-title');
-            if (title) title.textContent = `📦 Dataset ${idx + 1}`;
+            if (title) title.textContent = `Dataset ${idx + 1}`;
         });
     }
 
@@ -361,7 +361,7 @@ class DatasetManager {
         }
 
         try {
-            LoadingManager.show(btn, '⏳ Uploading...');
+            LoadingManager.show(btn, 'Uploading...');
             const data = await MerlinaAPI.uploadDataset(file);
             card.dataset.uploadId = data.dataset_id;
             // First card's upload id is exposed globally for ConfigManager compatibility.
@@ -370,7 +370,7 @@ class DatasetManager {
             }
             statusEl.innerHTML = `
                 <div class="success-message">
-                    ✅ Uploaded: ${sanitizeHTML(data.filename)} (ID: ${sanitizeHTML(data.dataset_id)})
+                    Uploaded: ${sanitizeHTML(data.filename)} (ID: ${sanitizeHTML(data.dataset_id)})
                 </div>
             `;
             this.toast.success('Dataset uploaded successfully!');
@@ -379,7 +379,7 @@ class DatasetManager {
             this.toast.error(`Upload failed: ${error.message}`);
             statusEl.innerHTML = `
                 <div class="error-message">
-                    ❌ Upload failed: ${sanitizeHTML(error.message)}
+                    Upload failed: ${sanitizeHTML(error.message)}
                 </div>
             `;
         } finally {
@@ -439,7 +439,7 @@ class DatasetManager {
     async inspectCard(card) {
         const btn = card.querySelector('.ds-inspect-btn');
         try {
-            LoadingManager.show(btn, '⏳ Loading columns...');
+            LoadingManager.show(btn, 'Loading columns...');
             const cfg = this.buildCardSourceConfig(card);
             const data = await MerlinaAPI.getDatasetColumns(cfg);
 
@@ -544,7 +544,7 @@ class DatasetManager {
     async loadRawPreview() {
         const previewBtn = document.getElementById('preview-dataset-button');
         try {
-            LoadingManager.show(previewBtn, '⏳ Loading...');
+            LoadingManager.show(previewBtn, 'Loading...');
             const datasetConfig = this.getDatasetConfig(true);
             const data = await MerlinaAPI.previewDataset(datasetConfig, this.previewOffset, this.previewLimit);
 
@@ -578,7 +578,7 @@ class DatasetManager {
     async loadFormattedPreview() {
         const previewBtn = document.getElementById('preview-formatted-button');
         try {
-            LoadingManager.show(previewBtn, '⏳ Loading...');
+            LoadingManager.show(previewBtn, 'Loading...');
             const datasetConfig = this.getDatasetConfig(true);
             const data = await MerlinaAPI.previewFormattedDataset(datasetConfig, this.previewOffset, this.previewLimit);
 
@@ -628,7 +628,7 @@ class DatasetManager {
     async handleDatasetStats() {
         const statsBtn = document.getElementById('dataset-stats-button');
         try {
-            LoadingManager.show(statsBtn, '⏳ Analyzing...');
+            LoadingManager.show(statsBtn, 'Analyzing...');
             const datasetConfig = this.getDatasetConfig(true);
             const data = await MerlinaAPI.getDatasetStats(datasetConfig);
             this.renderDatasetStats(data);

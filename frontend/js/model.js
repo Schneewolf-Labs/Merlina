@@ -70,8 +70,8 @@ class ModelManager {
                 localSelect.appendChild(placeholder);
 
                 const groups = [
-                    { source: 'hf_cache', label: '🤗 HuggingFace Cache' },
-                    { source: 'models_dir', label: '📦 Merlina Models Folder' },
+                    { source: 'hf_cache', label: 'HuggingFace Cache' },
+                    { source: 'models_dir', label: 'Merlina Models Folder' },
                 ];
                 for (const { source, label } of groups) {
                     const entries = models.filter(m => m.source === source);
@@ -127,7 +127,7 @@ class ModelManager {
         }
 
         try {
-            LoadingManager.show(preloadButton, '⏳ Loading model tokenizer...');
+            LoadingManager.show(preloadButton, 'Loading model tokenizer...');
 
             if (modelStatus) {
                 modelStatus.style.display = 'none';
@@ -142,7 +142,7 @@ class ModelManager {
                     Vocab Size: ${data.vocab_size.toLocaleString()}<br/>
                     Max Length: ${data.model_max_length.toLocaleString()}<br/>
                     Chat Template: ${data.has_chat_template ? '✓ Detected' : '✗ Not found'}<br/>
-                    ${data.has_chat_template ? '<span style="color: var(--primary-purple);">💡 You can now use "Tokenizer" format for accurate preview!</span>' : ''}
+                    ${data.has_chat_template ? '<span style="color: var(--primary-purple);">You can now use "Tokenizer" format for accurate preview!</span>' : ''}
                 `;
             }
 

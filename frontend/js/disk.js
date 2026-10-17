@@ -179,7 +179,7 @@ export class DiskManager {
     async preview() {
         const btn = document.getElementById('cleanup-preview-btn');
         const result = document.getElementById('cleanup-result');
-        if (btn) { btn.disabled = true; btn.textContent = '⏳ Previewing…'; }
+        if (btn) { btn.disabled = true; btn.textContent = 'Previewing…'; }
         try {
             const summary = await MerlinaAPI.runDiskCleanup({
                 keep: this._keep(), purge_failed: this._purgeFailed(), apply: false,
@@ -192,7 +192,7 @@ export class DiskManager {
             if (result) result.innerHTML = `<p style="color: var(--danger-dark);">Preview failed: ${esc(err.message)}</p>`;
             this.toast.show(`Preview failed: ${err.message}`, 'error');
         } finally {
-            if (btn) { btn.disabled = false; btn.textContent = '🔍 Preview (dry run)'; }
+            if (btn) { btn.disabled = false; btn.textContent = 'Preview (dry run)'; }
         }
     }
 
@@ -207,19 +207,19 @@ export class DiskManager {
             return;
         }
         const btn = document.getElementById('cleanup-apply-btn');
-        if (btn) { btn.disabled = true; btn.textContent = '⏳ Deleting…'; }
+        if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
         try {
             const summary = await MerlinaAPI.runDiskCleanup({
                 keep: this._keep(), purge_failed: this._purgeFailed(), apply: true,
             });
             this._renderResult(summary, true);
-            this.toast.show(`Freed ${summary.freed_human} across ${summary.count} item(s) ✨`, 'success');
+            this.toast.show(`Freed ${summary.freed_human} across ${summary.count} item(s)`, 'success');
             this.lastPreview = null;
             await this.loadAnalysis();  // refresh sizes
         } catch (err) {
             this.toast.show(`Cleanup failed: ${err.message}`, 'error');
         } finally {
-            if (btn) { btn.textContent = '🗑️ Delete previewed items'; btn.disabled = true; }
+            if (btn) { btn.textContent = 'Delete previewed items'; btn.disabled = true; }
         }
     }
 
@@ -227,7 +227,7 @@ export class DiskManager {
         const el = document.getElementById('cleanup-result');
         if (!el) return;
         if (summary.count === 0) {
-            el.innerHTML = '<p style="color: var(--success);">Nothing to prune — everything\'s already tidy. ✨</p>';
+            el.innerHTML = '<p style="color: var(--success);">Nothing to prune.</p>';
             return;
         }
         const verb = applied ? 'Deleted' : 'Would delete';
@@ -352,19 +352,19 @@ export class DiskManager {
             return;
         }
         const btn = document.getElementById('hf-delete-btn');
-        if (btn) { btn.disabled = true; btn.textContent = '⏳ Deleting…'; }
+        if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
         try {
             const res = await MerlinaAPI.deleteHfCache({ repos, apply: true });
             const result = document.getElementById('hf-result');
             if (result) {
                 result.innerHTML = `<p style="color: var(--success); font-weight: 600;">Freed ${esc(res.freed_human)} across ${res.count} repo(s).</p>`;
             }
-            this.toast.show(`Freed ${res.freed_human} from HF cache ✨`, 'success');
+            this.toast.show(`Freed ${res.freed_human} from HF cache`, 'success');
             await this.loadHfCache();  // rescan
         } catch (err) {
             this.toast.show(`HF cache deletion failed: ${err.message}`, 'error');
         } finally {
-            if (btn) { btn.textContent = '🗑️ Delete selected repos'; }
+            if (btn) { btn.textContent = 'Delete selected repos'; }
             this._updateHfSelection();
         }
     }
@@ -433,7 +433,7 @@ export class DiskManager {
             return;
         }
         const btn = document.getElementById('models-delete-btn');
-        if (btn) { btn.disabled = true; btn.textContent = '⏳ Deleting…'; }
+        if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
         try {
             const res = await MerlinaAPI.deleteModels({ names, apply: true });
             const result = document.getElementById('models-result');
@@ -445,12 +445,12 @@ export class DiskManager {
                 }
                 result.innerHTML = html;
             }
-            this.toast.show(`Freed ${res.freed_human} from saved models ✨`, 'success');
+            this.toast.show(`Freed ${res.freed_human} from saved models`, 'success');
             await this.loadAnalysis();  // refresh
         } catch (err) {
             this.toast.show(`Model deletion failed: ${err.message}`, 'error');
         } finally {
-            if (btn) { btn.textContent = '🗑️ Delete selected models'; }
+            if (btn) { btn.textContent = 'Delete selected models'; }
             this._updateModelsSelection();
         }
     }
@@ -532,17 +532,17 @@ export class DiskManager {
             return;
         }
         const btn = document.getElementById('gguf-delete-btn');
-        if (btn) { btn.disabled = true; btn.textContent = '⏳ Deleting…'; }
+        if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
         try {
             const res = await MerlinaAPI.deleteGguf({ files, apply: true });
             const result = document.getElementById('gguf-result');
             if (result) result.innerHTML = `<p style="color: var(--success); font-weight: 600;">Freed ${esc(res.freed_human)} across ${res.count} file(s).</p>`;
-            this.toast.show(`Freed ${res.freed_human} of GGUF ✨`, 'success');
+            this.toast.show(`Freed ${res.freed_human} of GGUF`, 'success');
             await this.loadArtifacts();
         } catch (err) {
             this.toast.show(`GGUF deletion failed: ${err.message}`, 'error');
         } finally {
-            if (btn) { btn.textContent = '🗑️ Delete selected GGUF'; }
+            if (btn) { btn.textContent = 'Delete selected GGUF'; }
             this._updateGgufSelection();
         }
     }
@@ -561,17 +561,17 @@ export class DiskManager {
         if (!window.confirm('Delete all local W&B run logs except the active run?\n\nMetrics remain on the W&B server.')) {
             return;
         }
-        if (btn) { btn.disabled = true; btn.textContent = '⏳ Clearing…'; }
+        if (btn) { btn.disabled = true; btn.textContent = 'Clearing…'; }
         try {
             const res = await MerlinaAPI.clearWandb({ apply: true });
             const result = document.getElementById('wandb-result');
             if (result) result.innerHTML = `<p style="color: var(--success); font-weight: 600;">Cleared ${res.count} run(s), freed ${esc(res.freed_human)}.</p>`;
-            this.toast.show(`Freed ${res.freed_human} of W&B logs ✨`, 'success');
+            this.toast.show(`Freed ${res.freed_human} of W&B logs`, 'success');
             await this.loadArtifacts();
         } catch (err) {
             this.toast.show(`W&B clear failed: ${err.message}`, 'error');
         } finally {
-            if (btn) { btn.textContent = '🗑️ Clear W&B logs'; }
+            if (btn) { btn.textContent = 'Clear W&B logs'; }
         }
     }
 }

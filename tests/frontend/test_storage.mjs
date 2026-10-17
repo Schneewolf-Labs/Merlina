@@ -215,7 +215,7 @@ describe('StorageManager', () => {
         m._renderActions();
         const html = el('storage-actions').innerHTML;
         assert.match(html, /value="internal\|scratch">internal:scratch</);
-        assert.match(html, /value="external\|shared">external:shared 🛡️/);
+        assert.match(html, /value="external\|shared">external:shared \(guarded\)/);
         assert.doesNotMatch(html, /value="internal\|datasets"/);
         assert.doesNotMatch(html, /data-action="apply"/);
     });

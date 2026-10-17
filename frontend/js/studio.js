@@ -1,11 +1,6 @@
 // Shared navigation context and live recipe summary. Feature managers retain
 // ownership of their forms; this module only presents their current values.
 const setupSections = ['model-section', 'dataset-section', 'config-section'];
-const tips = {
-    'model-section': 'Start with a model you love. Merlina will check that it’s ready before training.',
-    'dataset-section': 'Good ingredients make great models. Preview your data before moving on.',
-    'config-section': 'Start with suggested settings, then adjust to suit your idea. Training runs are checked before they begin.',
-};
 
 export class Studio {
     constructor(navigate) {
@@ -40,7 +35,7 @@ export class Studio {
             const element = document.getElementById(id);
             if (element && element.textContent !== value) element.textContent = value;
         };
-        setText('summary-model', document.getElementById('base-model')?.value.trim() || 'Choose your model');
+        setText('summary-model', document.getElementById('base-model')?.value.trim() || 'Not set');
         const count = document.querySelectorAll('#datasets-list .dataset-card').length;
         setText('summary-datasets', `${count} ${count === 1 ? 'dataset' : 'datasets'}`);
         const mode = document.getElementById('training-mode');
@@ -61,6 +56,14 @@ export class Studio {
         const target = document.getElementById(sectionId);
         const button = document.querySelector(`.section-nav-btn[data-section="${sectionId}"]`);
         document.getElementById('current-page-label').textContent = button?.querySelector('.nav-label')?.textContent || 'Model';
+        // The group is the nearest nav heading above the button (Create / Explore / Workspace).
+        let group = button?.previousElementSibling;
+        while (group && !group.classList.contains('nav-group-label')) group = group.previousElementSibling;
+        const groupLabel = document.getElementById('current-group-label');
+        if (groupLabel && group) {
+            const text = group.textContent.trim().toLowerCase();
+            groupLabel.textContent = text.charAt(0).toUpperCase() + text.slice(1);
+        }
         const isSetup = setupSections.includes(sectionId);
         document.getElementById('setup-summary').hidden = !isSetup;
         document.getElementById('main-content').classList.toggle('workspace-wide', !isSetup);
@@ -68,10 +71,6 @@ export class Studio {
             if (item === button) item.setAttribute('aria-current', 'page');
             else item.removeAttribute('aria-current');
         });
-        document.querySelectorAll('[data-journey]').forEach(item => {
-            item.classList.toggle('current', item.dataset.journey === sectionId);
-        });
-        if (tips[sectionId]) document.getElementById('summary-tip').textContent = tips[sectionId];
         this.updateSummary();
         if (focus) target?.querySelector('h2')?.focus({ preventScroll: true });
         // Keep the selected destination in view in the horizontal mobile nav.

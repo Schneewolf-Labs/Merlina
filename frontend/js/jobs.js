@@ -108,9 +108,9 @@ class JobManager {
             } else {
                 jobsContainer.innerHTML = `<div class="empty-state" id="jobs-empty-state">
                     <img src="merlina.png" alt="" width="81" height="90">
-                    <h3>Your next creation starts here</h3>
-                    <p>When you start a training run, its progress and results will appear here. Let’s put your first recipe together.</p>
-                    <button type="button" class="action-button primary-button" data-go-section="model-section">Create a training run <span aria-hidden="true">→</span></button>
+                    <h3>No training runs yet</h3>
+                    <p>Runs you start appear here with live progress, loss curves and logs.</p>
+                    <button type="button" class="action-button primary-button" data-go-section="model-section">Set up a run <span aria-hidden="true">→</span></button>
                 </div>`;
             }
         } catch (error) {
@@ -445,7 +445,7 @@ class JobManager {
                 stopButton.textContent = '⏸️ Stopping...';
             } else if (['training', 'initializing', 'loading_model', 'loading_dataset'].includes(status.status)) {
                 stopButton.disabled = false;
-                stopButton.textContent = '🛑 Stop Training';
+                stopButton.textContent = 'Stop Training';
             }
         }
 
@@ -502,17 +502,17 @@ class JobManager {
 
         if (stage === 'merging') {
             pill.className = 'status-badge status-training';
-            label.textContent = '🔀 merging for GGUF';
+            label.textContent = 'merging for GGUF';
         } else if (stage === 'converting') {
             pill.className = 'status-badge status-training';
-            label.textContent = '🔮 converting → fp16 GGUF';
+            label.textContent = 'converting → fp16 GGUF';
         } else if (stage === 'quantizing') {
             pill.className = 'status-badge status-training';
             const progress = (current && total) ? ` (${current}/${total})` : '';
             label.textContent = `⚗️ quantizing ${quant_type || ''}${progress}`.trim();
         } else if (stage === 'complete') {
             pill.className = 'status-badge status-completed';
-            label.textContent = '✨ GGUF export complete';
+            label.textContent = 'GGUF export complete';
             // Fade out after a few seconds
             setTimeout(() => { pill.style.display = 'none'; }, 6000);
         } else if (stage === 'error') {
@@ -579,7 +579,7 @@ class JobManager {
         const stopButton = document.getElementById('stop-button');
         if (stopButton) {
             stopButton.disabled = false;
-            stopButton.textContent = '🛑 Stop Training';
+            stopButton.textContent = 'Stop Training';
         }
 
         // Hide retry button

@@ -158,8 +158,8 @@ class InferenceManager {
         const loadBtn = document.getElementById('inference-load-btn');
         loadBtn.disabled = true;
         loadBtn.textContent = payload.backend === 'llama_cpp'
-            ? '🔮 Spinning up llama-server...'
-            : '⏳ Loading model...';
+            ? 'Spinning up llama-server...'
+            : 'Loading model...';
 
         try {
             const result = await MerlinaAPI.loadInferenceModel(payload);
@@ -170,7 +170,7 @@ class InferenceManager {
             console.error('Model load error:', error);
         } finally {
             loadBtn.disabled = false;
-            loadBtn.textContent = '🧙 Load Model';
+            loadBtn.textContent = 'Load Model';
         }
     }
 
@@ -239,7 +239,7 @@ class InferenceManager {
         statusDiv.innerHTML = `
             <div style="padding: 15px; background: var(--success-light); border-radius: 10px; border: 1px solid var(--success);">
                 <div style="font-weight: bold; color: var(--success-dark); margin-bottom: 5px;">
-                    ✓ Model Loaded ${backend === 'llama_cpp' ? '🔮' : ''}
+                    ✓ Model Loaded ${backend === 'llama_cpp' ? '' : ''}
                 </div>
                 <div style="font-size: 0.9em; color: var(--text-secondary);">
                     <strong>${info.model_name}</strong><br>
@@ -414,7 +414,7 @@ class InferenceManager {
         msgEl.className = `inference-msg inference-msg-${role}`;
 
         const roleLabel = role === 'user' ? 'You' : role === 'assistant' ? 'Model' : 'System';
-        const roleIcon = role === 'user' ? '👤' : role === 'assistant' ? '🤖' : '⚠️';
+        const roleIcon = role === 'user' ? '' : role === 'assistant' ? '' : '⚠️';
 
         msgEl.innerHTML = `
             <div class="inference-msg-header">

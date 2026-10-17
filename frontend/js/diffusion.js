@@ -148,7 +148,7 @@ async function uploadStagedDataset() {
         if (status) {
             status.innerHTML = `
                 <div style="padding: 10px; background: #e6f4e6; border-left: 3px solid var(--success); border-radius: 6px;">
-                    ✨ <strong>${data.image_count} images saved</strong> as
+                    <strong>${data.image_count} images saved</strong> as
                     <code style="font-size: 0.85em;">${data.jsonl_path}</code>.
                     Ready to train — scroll down and hit Start.
                 </div>
@@ -160,7 +160,7 @@ async function uploadStagedDataset() {
         if (status) {
             status.innerHTML = `
                 <div style="padding: 10px; background: var(--danger-light); border-left: 3px solid #d32f2f; border-radius: 6px;">
-                    ❌ Upload failed: ${e.message}
+                    Upload failed: ${e.message}
                 </div>
             `;
         }
@@ -335,7 +335,7 @@ async function saveJsonlEdits() {
         const data = await r.json();
         status.innerHTML = `
             <span style="color: var(--success-dark);">
-                ✨ saved — edited ${data.edited}, deleted ${data.deleted},
+                saved — edited ${data.edited}, deleted ${data.deleted},
                 ${data.total_after} rows remain.
                 backup at <code>${data.backup}</code>.
             </span>
@@ -456,7 +456,7 @@ export async function renderJobSamples(jobId) {
     if (steps.length > 0) {
         grid.innerHTML = steps.map(bucket => {
             const label = bucket.step === 'final'
-                ? '🏁 Final'
+                ? 'Final'
                 : `Step ${bucket.step}`;
             const items = bucket.samples.map(renderSample).join('');
             return `
@@ -530,12 +530,12 @@ async function conjureImage() {
 
     if (conjure) {
         conjure.disabled = true;
-        conjure.textContent = '✨ Conjuring…';
+        conjure.textContent = 'Generating…';
     }
     if (status) {
         status.innerHTML = `
             <div style="padding: 10px; background: var(--hover-bg); border-left: 3px solid var(--primary-purple); border-radius: 6px;">
-                🧙 Loading pipeline + LoRA, denoising ${numSteps} steps at ${width}×${height}… this can take ~30–60 seconds.
+                Loading pipeline + LoRA, denoising ${numSteps} steps at ${width}×${height}… this can take ~30–60 seconds.
             </div>
         `;
     }
@@ -568,7 +568,7 @@ async function conjureImage() {
         if (status) {
             status.innerHTML = `
                 <div style="padding: 10px; background: #e6f4e6; border-left: 3px solid var(--success); border-radius: 6px;">
-                    ✨ Done!
+                    Done!
                 </div>
             `;
         }
@@ -578,7 +578,7 @@ async function conjureImage() {
         if (status) {
             status.innerHTML = `
                 <div style="padding: 10px; background: var(--danger-light); border-left: 3px solid #d32f2f; border-radius: 6px;">
-                    ❌ ${e.message}
+                    ${e.message}
                 </div>
             `;
         }
@@ -586,7 +586,7 @@ async function conjureImage() {
     } finally {
         if (conjure) {
             conjure.disabled = false;
-            conjure.textContent = '✨ Conjure Image';
+            conjure.textContent = 'Generate image';
         }
     }
 }

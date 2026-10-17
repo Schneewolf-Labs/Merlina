@@ -248,7 +248,7 @@ class MerlinaApp {
         }
 
         const proceed = confirm(
-            `🔮 Ready to cast training spell?\n\n` +
+            `Start training?\n\n` +
             `${vramMessage}\n\n` +
             `Proceed with training?`
         );
@@ -580,7 +580,7 @@ class MerlinaApp {
                 if (detail) {
                     const info = document.createElement('span');
                     info.className = 'layer-info';
-                    const layerClass = detail.layer_class === 'embedding' ? '📦' : '';
+                    const layerClass = detail.layer_class === 'embedding' ? '' : '';
                     info.textContent = `${layerClass}${detail.in_features}→${detail.out_features}`;
                     info.title = detail.layer_class === 'embedding'
                         ? 'Embedding layer (vocab_size→hidden_dim)'
@@ -811,7 +811,7 @@ class MerlinaApp {
             if (!mode) return;
 
             btn.disabled = true;
-            btn.textContent = '⏳ Loading...';
+            btn.textContent = 'Loading...';
 
             try {
                 const response = await fetch(`${window.location.origin}/presets/${mode}`);
@@ -860,7 +860,7 @@ class MerlinaApp {
                 this.toast.error(`Failed to load preset: ${error.message}`);
             } finally {
                 btn.disabled = false;
-                btn.textContent = '📋 Apply Suggested Settings';
+                btn.textContent = 'Apply Suggested Settings';
             }
         });
     }
@@ -914,8 +914,8 @@ class MerlinaApp {
             const span = toggleBtn.querySelector('span');
             if (span) {
                 span.textContent = advancedVisible ?
-                    '⚙️ Hide Advanced Settings' :
-                    '⚙️ Show Advanced Settings';
+                    'Hide Advanced Settings' :
+                    'Show Advanced Settings';
             }
         });
     }

@@ -78,7 +78,7 @@ test.describe('Studio workflow', () => {
     test('jobs empty state leads back into setup', async ({ page }) => {
         await page.route('**/jobs', route => route.fulfill({ json: {} }));
         await page.goto('/#jobs-section');
-        await expect(page.getByRole('heading', { name: 'Your next creation starts here' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'No training runs yet' })).toBeVisible();
         await page.getByRole('button', { name: 'Create a training run' }).click();
         await expect(page.locator('#model-section')).toBeVisible();
     });
