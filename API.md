@@ -1402,6 +1402,37 @@ Stopping an ended session is a no-op.
 
 ---
 
+#### Servable Sources
+
+```http
+GET /remote/inference/sources
+```
+
+What a session can serve besides an HF repo: `store_models` (pushed with
+`merlina models push`; name, files, size, created_at), `store_tier`,
+`store_error` (why the model store is unavailable, e.g. `ARTIFACT_STORE` is
+`hf_hub`), and `jobs`: completed remote training jobs with the artifacts
+they left (`adapter`, `merged`).
+
+---
+
+#### Chat With a Session
+
+```http
+POST /remote/inference/{session_id}/chat
+```
+
+```json
+{"messages": [{"role": "user", "content": "Hello"}], "max_tokens": 512, "temperature": 0.7}
+```
+
+Sends one non-streaming chat completion to a `ready` session through the
+control plane, using the session's key, and returns the endpoint's
+response unchanged. `409` if the session isn't ready; `502` if the endpoint
+errors or can't be reached. The web UI's **Try it** box uses this.
+
+---
+
 ## WebSocket API
 
 ### Connect to Job Updates

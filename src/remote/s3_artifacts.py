@@ -260,6 +260,25 @@ class S3ArtifactStore(ArtifactStore):
         except Exception:
             raise ArtifactStoreError("Artifact upload failed; previous committed generation is preserved") from None
 
+    def list_artifacts(self) -> list:
+        """Committed artifacts under this prefix: ``[{name, size, files, created_at}]``."""
+        root = "/".join(part for part in (self.bucket, self.prefix) if part)
+        try:
+            entries = self.fs.ls(root, detail=False)
+        except FileNotFoundError:
+            return []
+        out = []
+        for entry in sorted(entries):
+            name = entry.rstrip("/").rsplit("/", 1)[-1]
+            try:
+                manifest = self._manifest(safe_path(name))
+            except (FileNotFoundError, ArtifactStoreError):
+                continue        # a folder without a committed manifest
+            out.append({"name": name, "files": len(manifest["files"]),
+                        "size": sum(f["size"] for f in manifest["files"]),
+                        "created_at": manifest.get("created_at")})
+        return out
+
     def files(self, name: str) -> list:
         """The committed generation's file list: ``[{path, size, sha256}]``."""
         try:

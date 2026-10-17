@@ -1655,6 +1655,86 @@ def _session_view(session, *, include_key: bool) -> dict:
     return data
 
 
+@app.get("/remote/inference/sources", tags=["Remote Inference"],
+         summary="What a remote inference session can serve, besides HF repos")
+async def remote_inference_sources():
+    """Models pushed with ``merlina models push`` (``store_model``), and
+    completed remote training jobs (``job_id``) with the artifacts they left
+    in their store. ``store_error`` explains an unavailable model store."""
+    from src.remote.artifacts import ArtifactStoreError, model_store
+    from src.remote.inference import _job_artifacts
+    from src.remote.lifecycle import RemoteLifecycle
+
+    def _sources():
+        store_models, store_error, store_tier = [], None, None
+        try:
+            store = model_store()
+            store_tier = getattr(store, "tier", None)
+            store_models = store.list_artifacts()
+        except ArtifactStoreError as e:
+            store_error = str(e)
+        except Exception as e:
+            store_error = f"Could not list models/ in the artifact store: {e}"
+        lifecycle = RemoteLifecycle(job_manager.db_path)
+        jobs = []
+        for job in job_manager.list_jobs(status="completed", limit=200):
+            cfg = job.config or {}
+            if not (cfg.get("remote") or {}).get("enabled"):
+                continue
+            artifacts = [a for a in _job_artifacts(lifecycle, job.job_id)
+                         if a in ("adapter", "merged")]
+            if artifacts:
+                jobs.append({"job_id": job.job_id, "output_name": cfg.get("output_name"),
+                             "base_model": cfg.get("base_model"), "artifacts": artifacts,
+                             "created_at": job.created_at})
+        return {"store_models": store_models, "store_tier": store_tier,
+                "store_error": store_error, "jobs": jobs}
+
+    return await asyncio.to_thread(_sources)
+
+
+class RemoteChatRequest(BaseModel):
+    messages: List[Dict[str, Any]] = Field(..., min_length=1)
+    max_tokens: int = Field(512, ge=1, le=8192)
+    temperature: float = Field(0.7, ge=0, le=2)
+    model: Optional[str] = Field(None, description="Served model name (default: the session's)")
+
+
+@app.post("/remote/inference/{session_id}/chat", tags=["Remote Inference"],
+          summary="Send one chat completion to a ready session")
+async def chat_remote_inference(session_id: str, body: RemoteChatRequest):
+    """A server-side hop to the session's OpenAI endpoint, so the web UI can
+    try a model without the browser calling the rented instance (or holding
+    its key). Non-streaming."""
+    import urllib.error
+    import urllib.request
+    from src.remote.sessions import api_key_for
+
+    session = await asyncio.to_thread(_inference_sessions.get, session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail=f"Inference session {session_id} not found")
+    key = api_key_for(session_id)
+    if session.status != "ready" or not session.base_url or not key:
+        raise HTTPException(status_code=409, detail=f"Session is {session.status}, not ready")
+    payload = {"model": body.model or session.served_model_name, "messages": body.messages,
+               "max_tokens": body.max_tokens, "temperature": body.temperature}
+
+    def _call():
+        req = urllib.request.Request(
+            f"{session.base_url}/chat/completions", data=json.dumps(payload).encode(),
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=600) as resp:
+                return json.loads(resp.read())
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode(errors="replace")[:500]
+            raise HTTPException(status_code=502, detail=f"Endpoint returned {e.code}: {detail}")
+        except (urllib.error.URLError, TimeoutError) as e:
+            raise HTTPException(status_code=502, detail=f"Endpoint unreachable: {e}")
+
+    return await asyncio.to_thread(_call)
+
+
 @app.post("/remote/inference/plan", tags=["Remote Inference"],
           summary="Dry-run a remote inference session (no provisioning)")
 async def plan_remote_inference(request: RemoteInferenceRequest):

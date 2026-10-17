@@ -873,6 +873,7 @@ def _drive_serve_session(*, session_id, sessions, client, instance, provider, pl
     poller = _TolerantStatusPoller(client, tolerance_s, f"inference session {session_id}")
 
     # ---- Phase 1: model download + vLLM startup ----
+    last_phase = None
     while True:
         tick()
         if stop_requested():
@@ -881,6 +882,10 @@ def _drive_serve_session(*, session_id, sessions, client, instance, provider, pl
         if status is not None:
             if status.state == STATE_FAILED:
                 raise failure(status)
+            phase = status.serve.get("phase")
+            if phase and phase != last_phase:
+                record(phase=phase)     # preparing_model -> starting_vllm, for the UI
+                last_phase = phase
             if status.state == STATE_SERVING:
                 break
             if status.is_terminal:
@@ -892,6 +897,7 @@ def _drive_serve_session(*, session_id, sessions, client, instance, provider, pl
         raise RemoteStageError(f"Provider {provider.name} returned no serve proxy URL")
     base_url += status.serve.get("openai_base_path") or "/v1"
     served = status.serve.get("served_model_name") or plan.served_model_name
+    record(phase="serving")
     sessions.update(session_id, status="ready", base_url=base_url, served_model_name=served,
                     ready_at=time.time())
     logger.info("Inference session %s ready at %s (model %r)", session_id, base_url, served)
