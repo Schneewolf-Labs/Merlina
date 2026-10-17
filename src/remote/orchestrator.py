@@ -180,7 +180,10 @@ def run_training_remote(
             if merge_stage.target == "local":
                 # The merged model is already on local disk; re-uploading it
                 # to the run store would only add cost and failure modes.
-                _run_local_merge(config, output_dir)
+                merged_dir = _run_local_merge(config, output_dir)
+                if getattr(config, "publish_to_store", False):
+                    _publish_local_to_store(job_manager, event_loop, job_id, config,
+                                            output_dir, merged_dir)
             elif merge_stage.target == "remote":
                 _run_remote_stage(
                     stage=merge_stage,
@@ -197,7 +200,9 @@ def run_training_remote(
                     mirror_job_fields=False,
                     lifecycle=lifecycle, owner=owner, execution_guard=execution_guard,
                 )
-        elif config.push_to_hub:
+        elif getattr(config, "publish_to_store", False):
+            _publish_local_to_store(job_manager, event_loop, job_id, config, output_dir, None)
+        if merge_stage is None and config.push_to_hub:
             # Adapter-only publish: the artifact we pulled is small.
             _update(job_manager, event_loop, job_id, status="uploading", progress=0.97,
                     message="Publishing adapter to the HuggingFace Hub")
@@ -547,6 +552,7 @@ def _stage_payload(job_id: str, stage: StagePlan, config: Any, store: ArtifactSt
     if stage.name == "train":
         config_dict["push_to_hub"] = False
         config_dict["export_gguf"] = False
+        config_dict["publish_to_store"] = False
         if multi_gpu_strategy:
             config_dict["multi_gpu_strategy"] = multi_gpu_strategy
     payload = {
@@ -563,6 +569,15 @@ def _stage_payload(job_id: str, stage: StagePlan, config: Any, store: ArtifactSt
     model_store_desc = remote_store_description(config_dict.get("base_model"))
     if model_store_desc:
         payload["model_store"] = model_store_desc
+    if stage.name == "merge" and config_dict.get("publish_to_store"):
+        # The merge worker publishes the merged model straight to models/,
+        # so it never travels back through the control plane.
+        from src.remote.artifacts import model_store
+        from src.model_refs import ModelRefError
+        store_desc = model_store()
+        if getattr(store_desc, "tier", None) == "internal":
+            raise ModelRefError("publish_to_store on a remote merge needs the external (R2) tier")
+        payload["publish_store"] = store_desc.describe()
     return payload
 
 
@@ -955,6 +970,23 @@ def _estimate_spend(resources: List[dict], now: Optional[float] = None) -> Optio
 # ---------------------------------------------------------------------------
 # Local merge / publish / store helpers
 # ---------------------------------------------------------------------------
+
+def _publish_local_to_store(job_manager, event_loop, job_id: str, config: Any,
+                            output_dir: Path, merged_dir: Optional[Path]) -> None:
+    """publish_to_store for a remote run whose result is on the control plane."""
+    from src.store_publish import publish_to_store
+    from src.training_runner import _record_store_publish, _store_publish_name
+    _update(job_manager, event_loop, job_id, status="uploading", progress=0.97,
+            message="Publishing to the model store")
+    try:
+        result = {"status": "success", **publish_to_store(
+            output_dir, _store_publish_name(config), merged_dir=merged_dir, config=config,
+            training_mode=getattr(config, "training_mode", "sft"))}
+    except Exception as e:
+        logger.error("Store publish failed for %s: %s", job_id, e, exc_info=True)
+        result = {"status": "failed", "error": str(e)}
+    _record_store_publish(job_manager, job_id, result)
+
 
 def _run_local_merge(config: Any, adapter_dir: Path) -> Path:
     """Merge the pulled adapter into the base on the control plane."""

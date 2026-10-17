@@ -238,7 +238,21 @@ class S3ArtifactStore(ArtifactStore):
             if source.is_symlink() or (not source.is_file() and not source.is_dir()):
                 raise ArtifactStoreError("Artifact sources cannot contain links or special files")
             if source.is_file():
-                sources.append((safe_path(source.relative_to(local_dir).as_posix()), source))
+                sources.append((source.relative_to(local_dir).as_posix(), source))
+        self.push_files(name, sources, workers=workers)
+
+    def push_files(self, name: str, sources, *, workers: int = 1) -> None:
+        """Publish an explicit ``[(relative_path, local_file)]`` list as a new
+        generation of ``name`` (in-place mode: hashed where they are, uploaded
+        in parallel, size-checked and re-hashed; one manifest PUT commits)."""
+        safe_path(name)
+        checked = []
+        for relative, source in sources:
+            source = Path(source)
+            if source.is_symlink() or not source.is_file():
+                raise ArtifactStoreError("Artifact sources must be regular files")
+            checked.append((safe_path(relative), source))
+        sources = checked
         generation = uuid.uuid4().hex
 
         def upload(item):

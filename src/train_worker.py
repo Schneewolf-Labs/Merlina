@@ -222,6 +222,39 @@ def _do_hub_upload(config, final_output_dir: str, training_mode: str, job_id: st
         job_manager.update_job(job_id, status=final_status, progress=1.0, output_dir=final_output_dir)
 
 
+def _do_store_publish(config, final_output_dir: str, training_mode: str, job_id: str, job_manager):
+    """publish_to_store for DDP runs (rank 0, inline): merge on CPU first when
+    merge_lora_before_upload, then push to models/<name>."""
+    import shutil as _shutil
+    import tempfile
+    from src.store_publish import publish_to_store
+
+    name = getattr(config, "store_model_name", None) or str(config.output_name).rsplit("/", 1)[-1]
+    merge_dir = None
+    try:
+        if config.use_lora and config.merge_lora_before_upload:
+            from src.gguf_exporter import merge_lora_to_directory
+            merge_dir = tempfile.mkdtemp(prefix="merlina_store_merge_")
+            merge_lora_to_directory(config.base_model, Path(final_output_dir), Path(merge_dir),
+                                    model_type=getattr(config, "model_type", "auto"))
+        result = {"status": "success", **publish_to_store(
+            final_output_dir, name, merged_dir=merge_dir, config=config, training_mode=training_mode)}
+    except Exception as e:
+        logger.error(f"Store publish failed: {e}", exc_info=True)
+        result = {"status": "failed", "error": str(e)}
+    finally:
+        if merge_dir:
+            _shutil.rmtree(merge_dir, ignore_errors=True)
+    if job_manager:
+        try:
+            job = job_manager.get_job(job_id)
+            metrics = dict(job.metrics or {}) if job else {}
+            metrics["store_publish"] = result
+            job_manager.update_job(job_id, metrics=metrics)
+        except Exception:
+            logger.exception("Could not record the store publish result")
+
+
 def _sigterm_handler(signum, frame):
     """Handle SIGTERM for graceful shutdown."""
     global _stop_requested
@@ -876,6 +909,9 @@ def run_worker(args):
                         progress=final_progress,
                         output_dir=final_output_dir,
                     )
+
+            if is_main and getattr(config, "publish_to_store", False) and not was_stopped:
+                _do_store_publish(config, final_output_dir, training_mode, args.job_id, job_manager)
 
             # Finish wandb
             if config.use_wandb and wandb is not None and wandb.run is not None:

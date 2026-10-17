@@ -579,6 +579,9 @@ def _build_dataset_section(config: Any) -> str:
             return f"local file: `{src.file_path}`"
         if t == "upload":
             return "uploaded file"
+        if t == "internal":
+            uri = getattr(src, 'uri', None) or (f"swl://{src.repo_id}" if getattr(src, 'repo_id', None) else None)
+            return f"internal dataset: `{uri}`" if uri else "internal dataset"
         return f"source: `{t or 'unknown'}`"
 
     lines = ["## Datasets", "", f"Trained on {len(sources)} concatenated datasets:", ""]

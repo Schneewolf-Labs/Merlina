@@ -1087,6 +1087,17 @@
                             </label>
                         </div>
 
+                        <div class="checkbox-group">
+                            <label class="magic-checkbox">
+                                <input type="checkbox" id="publish-store">
+                                <span>Publish to the model store</span>
+                            </label>
+                            <small style="color: var(--text-muted); font-size: var(--font-size-sm); display: block;">
+                                Pushes the model to <code>models/&lt;output name&gt;</code> in your object storage
+                                (merged first, like a Hub upload), loadable as <code>store:&lt;name&gt;</code>.
+                            </small>
+                        </div>
+
                         <!-- HuggingFace Hub Configuration (shown when Push to Hub is enabled) -->
                         <div id="hf-hub-config" style="margin-top: 15px; display: none;">
                             <div style="padding: 15px; background: var(--warning-light); border-radius: 10px; border-left: 3px solid var(--warning);">
