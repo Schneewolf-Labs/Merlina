@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and an optional idle timeout, and the instance is always terminated. They
   reuse the remote lifecycle, so the reconciler cleans up orphaned serve
   pods. New `Dockerfile.serve` image (`REMOTE_SERVE_IMAGE`).
+- **Serve models from object storage, no Hub repo needed.**
+  `merlina models push <dir> <name>` uploads a model directory to the
+  artifact bucket under `models/<name>`. Files are hashed in place and
+  uploaded in parallel, and the new generation is published atomically.
+  `{"model": {"store_model": "<name>"}}` then serves it. The plan sizes the
+  model from the stored `config.json` and index, and the instance pulls the
+  files in parallel with per-file sha256 checks. Job-artifact pulls on serve
+  instances are parallel too.
 - **Persist every metric the trainer logs**, not just the total loss.
   ORPO's NLL and odds-ratio loss, preference rewards, reward margin and
   accuracy (and whatever any other loss function logs) are stored per step

@@ -200,6 +200,32 @@ def store_for_job(config, job_id: str, token: Optional[str] = None) -> ArtifactS
     return HFHubArtifactStore(repo_id, token=token, private=True)
 
 
+MODELS_PREFIX = "models"
+
+
+def model_store(settings=None):
+    """The object-storage home for whole models served without the Hub.
+
+    Models live next to run artifacts, in the configured artifact bucket
+    under ``models/<name>``, so the credentials a serve worker already gets
+    for job artifacts reach them too. Push with ``merlina models push``.
+    """
+    if settings is None:
+        from config import settings
+    from .s3_artifacts import S3ArtifactStore
+    loc = settings.artifact_location()
+    if loc.error:
+        raise ArtifactStoreError(loc.error)
+    if loc.kind != "s3":
+        raise ArtifactStoreError(
+            "Serving from object storage needs ARTIFACT_STORE=external (or internal) — "
+            "the current artifact store is the HF Hub")
+    store = S3ArtifactStore(loc.bucket, MODELS_PREFIX, endpoint_url=loc.endpoint_url,
+                            region_name=loc.region)
+    store.tier = loc.tier
+    return store
+
+
 def artifact_worker_env(description: dict) -> dict:
     """Send only dedicated artifact credentials, outside persisted descriptions.
 

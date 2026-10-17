@@ -13,6 +13,7 @@ import argparse
 import importlib.util
 import os
 import sys
+from pathlib import Path
 
 TORCH_INSTALL_HINT = """\
 Merlina needs PyTorch, which is intentionally not installed automatically
@@ -126,6 +127,74 @@ def _datasets_info(args: argparse.Namespace) -> int:
             print(f"  source:   {src}")
     if m.created_at:
         print(f"  created:  {m.created_at}")
+    return 0
+
+
+# ── models: whole models in object storage, served without the Hub ──────────
+def _model_store():
+    from src.remote.artifacts import ArtifactStoreError, model_store
+    try:
+        return model_store()
+    except ArtifactStoreError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return None
+
+
+def _models_push(args: argparse.Namespace) -> int:
+    from src.remote.artifacts import ArtifactStoreError
+    from src.remote.inference import _STORE_MODEL_RE
+
+    src = Path(args.dir)
+    if not _STORE_MODEL_RE.match(args.name):
+        print("error: name must be letters, digits, '.', '_' or '-'", file=sys.stderr)
+        return 2
+    if not src.is_dir() or src.is_symlink():
+        print(f"error: {src} is not a directory", file=sys.stderr)
+        return 2
+    files = sorted(f for f in src.rglob("*") if f.is_file())
+    links = [f for f in src.rglob("*") if f.is_symlink()]
+    if links:
+        print(f"error: {src} contains symlinks ({links[0].name}, ...); push a real copy "
+              "(e.g. `kessel flatten` an overlay first)", file=sys.stderr)
+        return 2
+    if not (src / "config.json").is_file():
+        print(f"error: {src} has no config.json", file=sys.stderr)
+        return 2
+    store = _model_store()
+    if store is None:
+        return 1
+    total = sum(f.stat().st_size for f in files)
+    dest = f"s3://{store.bucket}/{store.prefix}/{args.name}"
+    print(f"{src} -> {dest} ({store.tier} tier)")
+    print(f"  files: {len(files)}  size: {total / 1024 ** 3:.1f} GiB")
+    if args.dry_run:
+        print("  dry run: nothing uploaded")
+        return 0
+    try:
+        store.push_dir(src, args.name, snapshot=False, workers=args.workers)
+    except ArtifactStoreError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    print(f"  pushed; serve with {{\"model\": {{\"store_model\": \"{args.name}\"}}}}")
+    return 0
+
+
+def _models_info(args: argparse.Namespace) -> int:
+    from src.remote.artifacts import ArtifactStoreError
+
+    store = _model_store()
+    if store is None:
+        return 1
+    try:
+        manifest = store._manifest(args.name)
+    except (FileNotFoundError, ArtifactStoreError) as e:
+        print(f"Not found: {args.name} ({e or 'no manifest'})", file=sys.stderr)
+        return 1
+    files = manifest["files"]
+    print(f"s3://{store.bucket}/{store.prefix}/{args.name}")
+    print(f"  generation: {manifest['generation']}")
+    print(f"  created:    {manifest.get('created_at')}")
+    print(f"  files:      {len(files)}  size: {sum(f['size'] for f in files) / 1024 ** 3:.1f} GiB")
     return 0
 
 
@@ -424,6 +493,21 @@ def main(argv=None) -> int:
         help="Which tier to look in (default: internal)",
     )
 
+    # ── models: whole models in object storage ──────────────────────────────
+    md_parser = subparsers.add_parser(
+        "models", help="Push whole models to object storage for remote serving (no Hub repo)"
+    )
+    md_sub = md_parser.add_subparsers(dest="md_command")
+    push_p = md_sub.add_parser(
+        "push", help="Upload a model directory to the artifact store as models/<name>")
+    push_p.add_argument("dir", help="Model directory (config.json + safetensors)")
+    push_p.add_argument("name", help="Store name, e.g. C0; serve with model.store_model")
+    push_p.add_argument("--workers", type=int, default=8, help="Parallel uploads (default: 8)")
+    push_p.add_argument("--dry-run", action="store_true",
+                        help="Show what would be uploaded without uploading")
+    minfo_p = md_sub.add_parser("info", help="Show a stored model's manifest summary")
+    minfo_p.add_argument("name")
+
     # ── storage: browse / sync / prune object-storage tiers ─────────────────
     st_parser = subparsers.add_parser(
         "storage", help="Browse, sync and prune object-storage tiers (internal/external/artifacts)"
@@ -496,6 +580,14 @@ def main(argv=None) -> int:
         if args.ds_command == "info":
             return _datasets_info(args)
         ds_parser.print_help()
+        return 2
+
+    if args.command == "models":
+        if args.md_command == "push":
+            return _models_push(args)
+        if args.md_command == "info":
+            return _models_info(args)
+        md_parser.print_help()
         return 2
 
     if args.command == "config":

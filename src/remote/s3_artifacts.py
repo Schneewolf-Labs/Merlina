@@ -9,6 +9,7 @@ import re
 import shutil
 import tempfile
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -167,11 +168,24 @@ class S3ArtifactStore(ArtifactStore):
         except FileNotFoundError:
             return False
 
-    def push_dir(self, local_dir: Path, name: str) -> None:
+    def push_dir(self, local_dir: Path, name: str, *, snapshot: bool = True,
+                 workers: int = 1) -> None:
+        """Publish ``local_dir`` as a new generation of ``name``.
+
+        The default snapshots every file to a temp dir and re-downloads each
+        upload to verify it — right for small, possibly-still-changing
+        training outputs. ``snapshot=False`` is for large, finished models
+        (hundreds of GB): files are hashed in place, uploaded ``workers`` at a
+        time, size-checked remotely, and re-hashed locally afterwards so a
+        file modified mid-upload fails the push. Every consumer verifies the
+        sha256 on pull, so a bad upload can never be served silently.
+        """
         safe_path(name)
         local_dir = Path(local_dir)
         if not local_dir.is_dir() or local_dir.is_symlink():
             raise ArtifactStoreError("Artifact source must be a real directory")
+        if not snapshot:
+            return self._push_in_place(local_dir, name, workers)
         generation = uuid.uuid4().hex
         files = []
         try:
@@ -198,24 +212,79 @@ class S3ArtifactStore(ArtifactStore):
                         raise ArtifactStoreError("Artifact upload integrity check failed")
                     verify.unlink()
                     files.append({"path": relative, "size": size, "sha256": sha})
-            if not files:
-                raise ArtifactStoreError("Cannot publish an empty artifact")
-            manifest = {"version": MANIFEST_VERSION, "name": name, "generation": generation,
-                        "created_at": datetime.now(timezone.utc).isoformat(), "files": files,
-                        "metadata": safe_metadata(self.metadata),
-                        "checkpoints": sorted({f["path"].split("/")[0] for f in files if f["path"].startswith("checkpoint-")})}
-            data = json.dumps(manifest, sort_keys=True).encode()
-            if len(data) > MAX_MANIFEST_BYTES:
-                raise ArtifactStoreError("Artifact manifest exceeds size limit")
-            # Only this PUT makes the new generation visible; interrupted retries
-            # leave old committed data untouched, even while readers download it.
-            self.fs.pipe_file(self._key(name, "manifest.json"), data)
+            self._commit(name, generation, files)
         except ArtifactStoreError:
             raise
         except Exception:
             raise ArtifactStoreError("Artifact upload failed; previous committed generation is preserved") from None
 
-    def pull_dir(self, name: str, local_dir: Path) -> Path:
+    def _commit(self, name, generation, files):
+        if not files:
+            raise ArtifactStoreError("Cannot publish an empty artifact")
+        manifest = {"version": MANIFEST_VERSION, "name": name, "generation": generation,
+                    "created_at": datetime.now(timezone.utc).isoformat(), "files": files,
+                    "metadata": safe_metadata(self.metadata),
+                    "checkpoints": sorted({f["path"].split("/")[0] for f in files if f["path"].startswith("checkpoint-")})}
+        data = json.dumps(manifest, sort_keys=True).encode()
+        if len(data) > MAX_MANIFEST_BYTES:
+            raise ArtifactStoreError("Artifact manifest exceeds size limit")
+        # Only this PUT makes the new generation visible; interrupted retries
+        # leave old committed data untouched, even while readers download it.
+        self.fs.pipe_file(self._key(name, "manifest.json"), data)
+
+    def _push_in_place(self, local_dir: Path, name: str, workers: int) -> None:
+        sources = []
+        for source in sorted(local_dir.rglob("*")):
+            if source.is_symlink() or (not source.is_file() and not source.is_dir()):
+                raise ArtifactStoreError("Artifact sources cannot contain links or special files")
+            if source.is_file():
+                sources.append((safe_path(source.relative_to(local_dir).as_posix()), source))
+        generation = uuid.uuid4().hex
+
+        def upload(item):
+            relative, source = item
+            size, sha = _digest(source)
+            key = self._key(name, f"generations/{generation}/{relative}")
+            self.fs.put_file(str(source), key)
+            remote = self.fs.info(key).get("size")
+            if remote != size or _digest(source) != (size, sha):
+                raise ArtifactStoreError(f"Artifact upload integrity check failed for {relative}")
+            return {"path": relative, "size": size, "sha256": sha}
+
+        try:
+            with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+                files = list(pool.map(upload, sources))
+            self._commit(name, generation, files)
+        except ArtifactStoreError:
+            raise
+        except Exception:
+            raise ArtifactStoreError("Artifact upload failed; previous committed generation is preserved") from None
+
+    def files(self, name: str) -> list:
+        """The committed generation's file list: ``[{path, size, sha256}]``."""
+        try:
+            return list(self._manifest(name)["files"])
+        except FileNotFoundError:
+            raise ArtifactStoreError(f"Artifact {name!r} not found") from None
+
+    def read_file(self, name: str, path: str, max_bytes: int = MAX_MANIFEST_BYTES) -> bytes:
+        """One small committed file (e.g. ``config.json``), sha256-verified."""
+        safe_path(path)
+        try:
+            manifest = self._manifest(name)
+        except FileNotFoundError:
+            raise ArtifactStoreError(f"Artifact {name!r} not found") from None
+        entry = next((f for f in manifest["files"] if f["path"] == path), None)
+        if entry is None:
+            raise FileNotFoundError(path)
+        if entry["size"] > max_bytes:
+            raise ArtifactStoreError(f"{path} exceeds {max_bytes} bytes")
+        data = self.fs.cat_file(self._key(name, f"generations/{manifest['generation']}/{path}"))
+        if len(data) != entry["size"] or hashlib.sha256(data).hexdigest() != entry["sha256"]:
+            raise ArtifactStoreError("Artifact download integrity check failed")
+        return data
+
+    def pull_dir(self, name: str, local_dir: Path, *, workers: int = 1) -> Path:
         safe_path(name)
         local_dir = Path(local_dir)
         if local_dir.is_symlink():
@@ -226,13 +295,16 @@ class S3ArtifactStore(ArtifactStore):
             with tempfile.TemporaryDirectory(prefix=".merlina-artifact-", dir=local_dir.parent) as temp:
                 staged = Path(temp) / "download"
                 staged.mkdir()
-                for entry in manifest["files"]:
+                def fetch(entry):
                     target = staged / entry["path"]
                     target.parent.mkdir(parents=True, exist_ok=True)
                     key = self._key(name, f"generations/{manifest['generation']}/{entry['path']}")
                     self.fs.get_file(key, str(target))
                     if _digest(target) != (entry["size"], entry["sha256"]):
                         raise ArtifactStoreError("Artifact download integrity check failed")
+
+                with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
+                    list(pool.map(fetch, manifest["files"]))
                 # Keep the previous destination until every file is verified.
                 backup = Path(temp) / "previous"
                 had_previous = local_dir.exists()

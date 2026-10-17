@@ -36,6 +36,29 @@ cap is reached.
 {"model": {"hf_repo": "Qwen/Qwen3-8B", "revision": "main"}}
 ```
 
+**A model in object storage**, for weights you don't want on (or can't fit
+into) the Hub: merges, quantized builds, private experiments. Push the
+directory once from the control plane, then serve it by name:
+
+```bash
+merlina models push /mnt/models/C0 C0 --dry-run   # files + size, uploads nothing
+merlina models push /mnt/models/C0 C0             # -> <artifact bucket>/models/C0
+```
+
+```json
+{"model": {"store_model": "C0"}}
+```
+
+This needs `ARTIFACT_STORE=external` (the R2 tier rented instances can
+reach); the planner refuses the LAN-only internal tier. The push hashes files
+in place and uploads 8 at a time (`--workers`), so a 150 GB model needs no
+scratch copy. Each push publishes a new generation atomically, and the
+instance pulls the current one in parallel and checks every file's sha256
+before vLLM starts. The directory must be a real checkpoint, with no
+symlinks: run `kessel flatten` on a Kessel overlay before pushing it.
+Sizing reads the stored `config.json` and safetensors index, as it does for
+a Hub repo.
+
 **A finished remote training job.** The instance pulls the job's artifact
 straight from that job's artifact store (S3/R2 or the private HF run repo):
 
@@ -54,7 +77,8 @@ straight from that job's artifact store (S3/R2 or the private HF run repo):
 
 Only **remote** jobs work as a source: a locally trained model is on your
 disk, where a rented instance cannot reach it. Push it to the Hub and serve
-it by `hf_repo`.
+it by `hf_repo`, or push it with `merlina models push` and serve it by
+`store_model`.
 
 > Adapters that fully retrain modules (`modules_to_save`, e.g.
 > `embed_tokens`/`lm_head`) can't be applied by vLLM's LoRA path. The plan

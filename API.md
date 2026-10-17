@@ -1289,7 +1289,9 @@ Sizes, prices and time-boxes a session **without provisioning anything**.
 }
 ```
 
-`model` is either `{"hf_repo": "org/name", "revision": "..."}` or
+`model` is one of `{"hf_repo": "org/name", "revision": "..."}`,
+`{"store_model": "name"}` (pushed with `merlina models push` to
+`models/<name>` in the S3 artifact store), or
 `{"job_id": "...", "artifact": "adapter" | "merged"}` (remote training jobs
 only). Other fields: `served_model_name`, `hf_token` (never stored),
 `gpu_type_id`, `gpu_count`, `cloud_type`, `container_disk_gb`,
