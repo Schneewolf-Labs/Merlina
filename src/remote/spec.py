@@ -169,14 +169,14 @@ class ServePlan:
     :func:`src.remote.inference.build_serve_plan`; the same object drives
     the real session, so what the owner approves is what runs.
     """
-    model_source: Dict[str, Any]           # {"hf_repo", "revision"} | {"job_id", "artifact"}
-    model_id: str                          # what vLLM loads (HF id, or the base for an adapter)
+    model_source: Dict[str, Any]           # {"hf_repo", "revision"} | {"store_model"} | {"job_id", "artifact"}
+    model_id: str                          # what vLLM loads (HF id, "store:models/<name>", or an adapter's base)
     revision: Optional[str]
     served_model_name: str                 # name clients pass as "model"
     base_served_model_name: Optional[str]  # adapter sessions also serve the bare base
     lora: bool                             # serve base + LoRA adapter (vLLM --enable-lora)
     max_lora_rank: Optional[int]
-    artifact: Optional[str]                # "merged" | "adapter" when pulled from a store
+    artifact: Optional[str]                # "merged" | "adapter" | a store_model name when pulled from a store
     artifact_store: Optional[Dict[str, Any]]
     model_specs: Optional[ModelSpecs]
     sizing: SizingDecision

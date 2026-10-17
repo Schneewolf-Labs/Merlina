@@ -7,11 +7,12 @@ endpoint (``POST /remote/inference/plan``) and the real session
 (``run_inference_remote``), so the GPU, price, and deadline the owner
 approves are exactly what runs.
 
-A session serves either a HuggingFace repo, or the output of a finished
-*remote* training job pulled from that job's artifact store: the "merged"
-weights, or the "adapter" on top of its base model (vLLM LoRA). The
-latter closes the train → serve → eval loop without anything touching the
-control plane's disk.
+A session serves a HuggingFace repo, a model pushed to object storage
+(``merlina models push``, served with ``model.store_model``), or the output
+of a finished *remote* training job pulled from that job's artifact store:
+the "merged" weights, or the "adapter" on top of its base model (vLLM
+LoRA). The latter closes the train → serve → eval loop without anything
+touching the control plane's disk.
 
 No torch/transformers/vLLM imports here.
 """
@@ -36,6 +37,7 @@ from .sizing import (
     FALLBACK_GPU_CATALOG,
     estimate_disk_gb,
     fetch_model_specs,
+    parse_model_specs,
     pick_instance,
     serve_vram_breakdown,
     tensor_parallel_counts,
@@ -54,6 +56,7 @@ MAX_SERVE_RUNTIME_HOURS = 24.0
 MIN_USEFUL_SESSION_HOURS = 0.25
 SERVE_DISK_FLOOR_GB = 50
 
+_STORE_MODEL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _HF_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?$")
 
 
@@ -62,10 +65,14 @@ _HF_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-
 # ---------------------------------------------------------------------------
 
 class InferenceModelSource(BaseModel):
-    """What to serve: a HuggingFace repo, or a Merlina training job's output."""
+    """What to serve: a HuggingFace repo, a model in object storage, or a
+    Merlina training job's output."""
     hf_repo: Optional[str] = Field(
         None, description="HuggingFace model id to serve, e.g. 'Qwen/Qwen3-8B'")
     revision: Optional[str] = Field(None, description="Branch, tag or commit of hf_repo")
+    store_model: Optional[str] = Field(
+        None, description="A model pushed with `merlina models push` to the artifact "
+                          "store (models/<name>), e.g. 'C0' — no Hub repo needed")
     job_id: Optional[str] = Field(
         None, description="A completed *remote* Merlina training job whose artifact to serve")
     artifact: Literal["adapter", "merged"] = Field(
@@ -75,8 +82,11 @@ class InferenceModelSource(BaseModel):
 
     @model_validator(mode="after")
     def _exactly_one_source(self):
-        if bool(self.hf_repo) == bool(self.job_id):
-            raise ValueError("Set exactly one of model.hf_repo or model.job_id")
+        if sum(map(bool, (self.hf_repo, self.store_model, self.job_id))) != 1:
+            raise ValueError("Set exactly one of model.hf_repo, model.store_model or model.job_id")
+        if self.store_model and not _STORE_MODEL_RE.match(self.store_model):
+            raise ValueError("model.store_model must be a plain name like 'C0' "
+                             "(letters, digits, '.', '_', '-')")
         if self.hf_repo and not _HF_REPO_RE.match(self.hf_repo):
             raise ValueError("model.hf_repo must be a HuggingFace repo id like 'org/name' "
                              "(local paths don't travel to rented instances)")
@@ -172,10 +182,53 @@ def _job_artifacts(lifecycle, job_id: str) -> List[str]:
     return pushed
 
 
+def _store_source(name: str, request: RemoteInferenceRequest, store) -> Dict[str, Any]:
+    from .artifacts import ArtifactStoreError, model_store
+    try:
+        store = store if store is not None else model_store()
+    except ArtifactStoreError as e:
+        raise RemotePlanError(str(e)) from e
+    if getattr(store, "tier", None) == "internal":
+        raise RemotePlanError(
+            "The artifact store is the internal (LAN) tier, which a rented instance can't "
+            "reach. Push the model to the external tier and serve it from there.")
+    try:
+        exists = store.exists(name)
+    except Exception as e:
+        raise RemotePlanError(f"Could not read models/{name} from the artifact store: {e}") from e
+    if not exists:
+        raise RemotePlanError(
+            f"No model {name!r} in the store (models/{name}); push it with "
+            f"`merlina models push <dir> {name}`")
+    return {
+        "source_kind": "artifact", "model_id": f"store:models/{name}", "revision": None,
+        "artifact": name, "artifact_store": store.describe(), "lora": False,
+        "max_lora_rank": None, "served_model_name": request.served_model_name or name,
+        "base_served_model_name": None, "job_config": None, "warnings": [], "store": store,
+    }
+
+
+def store_model_specs(store, name: str) -> ModelSpecs:
+    """``ModelSpecs`` from a stored model's ``config.json`` and safetensors index."""
+    config = json.loads(store.read_file(name, "config.json"))
+    weight_bytes = None
+    try:
+        index = json.loads(store.read_file(name, "model.safetensors.index.json"))
+        weight_bytes = (index.get("metadata") or {}).get("total_size")
+    except FileNotFoundError:
+        pass
+    if not weight_bytes:
+        weight_bytes = sum(f["size"] for f in store.files(name)
+                           if f["path"].endswith(".safetensors")) or None
+    return parse_model_specs(f"store:models/{name}", config, weight_bytes)
+
+
 def resolve_model_source(request: RemoteInferenceRequest, *, job_manager=None,
-                         lifecycle=None) -> Dict[str, Any]:
+                         lifecycle=None, model_store=None) -> Dict[str, Any]:
     """Turn the request's model source into what the worker should load."""
     src = request.model
+    if src.store_model:
+        return _store_source(src.store_model, request, model_store)
     if src.hf_repo:
         return {
             "source_kind": "hf", "model_id": src.hf_repo, "revision": src.revision,
@@ -240,15 +293,24 @@ def build_serve_plan(
     job_manager=None,
     lifecycle=None,
     settings=None,
+    model_store=None,
 ) -> ServePlan:
     """Size, price, and time-box a serve session without provisioning anything."""
     if settings is None:
         from config import settings as _settings
         settings = _settings
-    source = resolve_model_source(request, job_manager=job_manager, lifecycle=lifecycle)
+    source = resolve_model_source(request, job_manager=job_manager, lifecycle=lifecycle,
+                                  model_store=model_store)
     warnings: List[str] = list(source["warnings"])
 
-    if model_specs is None:
+    if model_specs is None and source.get("store") is not None:
+        try:
+            model_specs = store_model_specs(source["store"], source["artifact"])
+        except Exception as e:
+            raise RemotePlanError(
+                f"Could not read config.json for {source['model_id']} (needed for sizing): "
+                f"{e}") from e
+    elif model_specs is None:
         try:
             model_specs = fetch_model_specs(
                 source["model_id"], hf_token=resolve_hf_token(request, source["job_config"]),
@@ -320,6 +382,7 @@ def build_serve_plan(
         "vllm_args": list(request.vllm_args),
     }
     model_ref = (source["model_id"] if source["source_kind"] == "hf" or source["lora"]
+                 else f"<{source['model_id']}>" if source.get("store") is not None
                  else f"<artifact:{source['artifact']}>")
     command = build_vllm_command(serve, model_ref=model_ref,
                                  lora_path=f"<artifact:{source['artifact']}>")

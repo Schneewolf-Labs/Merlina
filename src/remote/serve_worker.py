@@ -338,6 +338,9 @@ def stop_process(proc: subprocess.Popen, grace_s: float = STOP_GRACE_SECONDS) ->
         proc.wait(timeout=10)
 
 
+PULL_WORKERS = 8
+
+
 def _resolve_model(payload: Dict[str, Any], serve: Dict[str, Any], work_dir: Path):
     """Return ``(model_ref, lora_path)``, pulling artifacts when needed."""
     if serve.get("source_kind") != "artifact":
@@ -345,7 +348,14 @@ def _resolve_model(payload: Dict[str, Any], serve: Dict[str, Any], work_dir: Pat
     from src.remote.worker_entry import _resolve_store
     store = _resolve_store(payload)
     artifact = serve["artifact"]
-    local = store.pull_dir(artifact, work_dir / artifact)
+    # Direct S3/R2 pulls run in parallel: a 150 GB model is dozens of shards,
+    # and the GPUs bill while they download. Brokered pulls stay sequential.
+    parallel = (store.kind == "s3"
+                and (payload.get("artifact_store") or {}).get("credential_transport") != "broker")
+    if parallel:
+        local = store.pull_dir(artifact, work_dir / artifact, workers=PULL_WORKERS)
+    else:
+        local = store.pull_dir(artifact, work_dir / artifact)
     if serve.get("lora"):
         return serve["model_id"], str(local)
     return str(local), None

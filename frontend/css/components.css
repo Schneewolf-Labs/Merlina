@@ -1499,3 +1499,182 @@ textarea.magic-input {
     padding: 6px 10px;
     margin: 8px 0;
 }
+
+
+/* ── Remote GPUs ─────────────────────────────────────────────────────── */
+.remote-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 0 16px;
+}
+
+.remote-source-picker {
+    border: none;
+    padding: 0;
+    margin: 0 0 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 20px;
+}
+
+.remote-source-picker legend {
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+
+.remote-source-picker label,
+.remote-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+
+.remote-muted {
+    color: var(--text-muted);
+    font-size: var(--font-size-sm);
+}
+
+.remote-error {
+    color: var(--danger-dark);
+}
+
+.remote-actions,
+.remote-start,
+.remote-chat-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.remote-actions .action-button,
+.remote-start .action-button,
+.remote-chat-actions .action-button,
+.remote-confirm .action-button {
+    width: auto;
+    flex: 0 0 auto;
+    padding-left: 22px;
+    padding-right: 22px;
+}
+
+#remote-section h4 {
+    margin: 16px 0 8px;
+}
+
+.remote-plan {
+    margin-top: 14px;
+    padding: 12px 14px;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+}
+
+.remote-plan-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 8px 16px;
+}
+
+.remote-label {
+    display: block;
+    font-size: 0.75em;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.remote-warnings {
+    margin: 10px 0 0;
+    padding-left: 18px;
+    color: var(--warning-dark);
+}
+
+.remote-confirm p {
+    margin: 0 0 8px;
+}
+
+.remote-pre {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    font-size: 0.8em;
+    max-height: 320px;
+    overflow: auto;
+    background: var(--bg-secondary);
+    padding: 8px 10px;
+    border-radius: 6px;
+}
+
+.remote-table-wrap {
+    overflow-x: auto;
+}
+
+.remote-row-selected td {
+    background: var(--bg-secondary);
+}
+
+.remote-small {
+    width: auto;
+    padding: 2px 10px;
+    font-size: 0.85em;
+}
+
+.remote-status {
+    display: inline-block;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: 0.85em;
+    background: var(--bg-secondary);
+}
+
+.remote-status-ready {
+    background: var(--success-light, var(--info-light));
+    color: var(--success-dark, var(--info-dark));
+}
+
+.remote-status-failed {
+    background: var(--warning-light);
+    color: var(--danger-dark);
+}
+
+.remote-status-provisioning,
+.remote-status-starting,
+.remote-status-queued {
+    background: var(--info-light);
+    color: var(--info-dark);
+}
+
+.remote-dl {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 6px 14px;
+    margin: 0 0 10px;
+}
+
+.remote-dl dt {
+    font-weight: 600;
+    color: var(--text-muted);
+}
+
+.remote-dl dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+}
+
+.remote-chat {
+    max-height: 360px;
+    overflow-y: auto;
+    margin-bottom: 8px;
+}
+
+.remote-chat-turn {
+    padding: 6px 10px;
+    margin-bottom: 6px;
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    white-space: pre-wrap;
+}
+
+.remote-chat-user {
+    border-left: 3px solid var(--primary-purple);
+}

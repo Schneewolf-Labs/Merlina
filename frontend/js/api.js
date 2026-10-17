@@ -543,6 +543,36 @@ class MerlinaAPI {
     }
 
     // Inference endpoints
+    // Remote inference (rented GPUs)
+    static async getRemoteInferenceSources() {
+        return this.fetch('/remote/inference/sources', {}, LONG_TIMEOUT);
+    }
+
+    static async planRemoteInference(body) {
+        return this.fetch('/remote/inference/plan', { method: 'POST', body: JSON.stringify(body) }, LONG_TIMEOUT);
+    }
+
+    static async startRemoteInference(body) {
+        return this.fetch('/remote/inference', { method: 'POST', body: JSON.stringify(body) }, LONG_TIMEOUT);
+    }
+
+    static async listRemoteInferenceSessions(limit = 50) {
+        return this.fetch(`/remote/inference?limit=${limit}`);
+    }
+
+    static async getRemoteInferenceSession(id) {
+        return this.fetch(`/remote/inference/${encodeURIComponent(id)}`);
+    }
+
+    static async stopRemoteInference(id) {
+        return this.fetch(`/remote/inference/${encodeURIComponent(id)}/stop`, { method: 'POST' });
+    }
+
+    static async chatRemoteInference(id, body) {
+        return this.fetch(`/remote/inference/${encodeURIComponent(id)}/chat`,
+            { method: 'POST', body: JSON.stringify(body) }, 600000);
+    }
+
     static async listInferenceModels() {
         return this.fetch('/inference/models');
     }
