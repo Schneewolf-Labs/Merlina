@@ -37,6 +37,62 @@ merlina models push /mnt/models/C0 C0             # -> <artifact bucket>/models/
 - **Names:** letters, digits, `.`, `_` and `-`, with up to three `/`
   separators (`hf/meta-llama/Llama-3.1-8B`).
 
+## Publishing trained models to the store
+
+- **During training:** set `publish_to_store: true` (or tick **Publish to the
+  model store** in the form). When training finishes, the model goes to
+  `models/<output_name>` (or `store_model_name`). A LoRA run is merged
+  first when `merge_lora_before_upload` is on (the default), reusing the
+  same merge as a Hub upload or GGUF export. Otherwise the adapter is
+  published as is.
+- **After training:** `POST /models/{name}/publish`
+  (`{"store_name": ..., "merged": false, "include_gguf": true}`) publishes
+  an existing model directory as a background job.
+- **From the CLI:** `merlina models push ./models/<name> <name>` pushes any
+  directory: a full model, an adapter or GGUF files.
+
+**What gets uploaded**
+- The model files, plus `README.md`. The model card is also written into
+  the local output directory.
+- `gguf/` exports if they exist.
+- Never `checkpoint-*` folders or the upload sidecar.
+
+**Where the result is recorded**
+- The job's `store_publish` metric.
+- The model's upload history (`upload_state.json`), with
+  `destination: "store"`.
+
+**Remote runs**
+- With a remote merge, the merge worker publishes straight to R2, so the
+  merged model never travels through your machine.
+- With a local merge, or for an adapter-only run, the control plane
+  publishes.
+- Remote publishing needs `ARTIFACT_STORE=external`.
+
+## Mirroring Hub models
+
+```bash
+merlina models mirror Qwen/Qwen3-8B            # -> store:hf/Qwen/Qwen3-8B
+merlina models mirror Qwen/Qwen3-8B --revision v1.0
+```
+
+This downloads the model once at the Hub's current commit (or
+`--revision`) and publishes it as `hf/<org>/<repo>`. The manifest records
+the repo and commit sha. Running it again re-publishes only if the Hub
+moved (`--force` re-publishes anyway). Formats Merlina never loads are
+skipped (`.pth`, `.pt`, `.gguf`, `.onnx`, `original/`), and so is `.bin`
+when the repo also has safetensors.
+
+Set `MODEL_MIRROR=true` to do this automatically. Every Hub id used as a
+base model is then mirrored on first use and loaded from the store after
+that, while configs and cards keep the plain Hub id. When neither the Hub
+nor the store can be reached, a cached mirror still loads. If mirroring
+fails for any other reason, Merlina logs a warning and loads from the Hub
+as before. The setting only applies on the control plane; remote workers
+download Hub ids directly unless you pass `store:hf/...`.
+
+Model cards credit a `store:hf/<org>/<repo>` base to its Hub id.
+
 ## Remote runs
 
 Remote training, remote merges and remote LoRA serving all accept a

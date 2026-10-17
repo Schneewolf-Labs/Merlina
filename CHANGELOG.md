@@ -38,6 +38,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checks that the model exists, and VRAM estimates and remote sizing read
   `config.json` from the store. VLM key grafting now also works for local
   base models. ([docs](docs/user/store-models.md))
+- **Fewer Hub-only dataset paths.**
+  - `merlina datasets put <file> <name>` and
+    `POST /dataset/uploads/{id}/store` save our own JSON, JSONL, CSV or
+    Parquet files as `swl://name@rev`. The revision is the content hash.
+    Private datasets can't be written to the external tier.
+  - Remote runs honor `DATASET_MIRROR`: HF sources are mirrored on the
+    control plane and shipped to the worker, which never calls the Hub.
+  - Streaming works from the internal store, and from an existing mirror.
+  - VLM and diffusion runs accept `swl://` datasets.
+  - `dataset_name="swl://..."` now maps to an internal source instead of
+    the HF loader.
+- **Publish to the model store.** `publish_to_store` (with a checkbox in the
+  training form) publishes the finished model to `models/<name>`, merged
+  first when `merge_lora_before_upload` is set. This covers text, DDP, VLM
+  and diffusion runs. `POST /models/{name}/publish` publishes an existing
+  model, optionally merging it. Remote merge workers publish straight to
+  R2. Uploads include `README.md` (also written locally) and `gguf/`, never
+  checkpoints, and are recorded with `destination: "store"` in the upload
+  history. `merlina models push` now accepts adapter and GGUF directories.
+  Model cards name `swl://` datasets.
+- **Hub model mirroring.** `merlina models mirror <org/repo>` copies a Hub
+  model into the store as `store:hf/<org>/<repo>`, pinned to the commit
+  sha and re-published only when the Hub moves. With `MODEL_MIRROR=true`,
+  every Hub base model is mirrored on first use and loaded from the store
+  after that, which keeps jobs working through Hub outages and deleted
+  repos. If mirroring fails, Merlina falls back to the Hub. In offline
+  mode, pre-flight accepts a cached mirror.
 - **Remote runs with `store:` base models.** Remote training, the remote
   merge stage and remote LoRA serving pull a `store:` base from R2. The
   worker payload names the model store, and workers register it because

@@ -95,6 +95,10 @@ def resolve_model_ref(ref: str, *, store=None, cache_root: Optional[Path] = None
     """A local directory for ``ref`` (pulling it if needed), or ``ref`` itself
     when it isn't a ``store:`` reference."""
     if not is_store_ref(ref):
+        if store is None and cache_root is None and _mirror_wanted(ref):
+            mirrored = _mirror_ref(ref)
+            if mirrored:
+                return resolve_model_ref(mirrored, workers=workers)
         return ref
     if store is None and cache_root is None:
         with _MEMO_LOCK:
@@ -106,6 +110,48 @@ def resolve_model_ref(ref: str, *, store=None, cache_root: Optional[Path] = None
             _MEMO[ref] = (path, time.monotonic())
         return path
     return _resolve(ref, store, cache_root, workers)
+
+
+_HUB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _mirror_wanted(ref: Any) -> bool:
+    """MODEL_MIRROR is on and ``ref`` is a Hub id (not a local directory)."""
+    if not isinstance(ref, str) or not _HUB_ID_RE.match(ref):
+        return False
+    try:
+        from src.model_mirror import mirror_enabled
+        if not mirror_enabled():
+            return False
+    except Exception:
+        return False
+    from src.preflight_checks import is_local_model_path
+    return not is_local_model_path(ref)
+
+
+def _mirror_ref(ref: str) -> Optional[str]:
+    """The ``store:hf/...`` ref for a Hub id, mirroring it on first use; None
+    (load from the Hub as before) if mirroring isn't possible."""
+    key = f"mirror:{ref}"
+    with _MEMO_LOCK:
+        hit = _MEMO.get(key)
+    if hit and time.monotonic() - hit[1] < MEMO_TTL_S:
+        return hit[0]
+    try:
+        from src.model_mirror import ensure_model_mirror
+        import os
+        mirrored = ensure_model_mirror(ref, token=os.environ.get("HF_TOKEN"))
+    except Exception as e:
+        fallback = f"store:hf/{ref}"
+        if cached_ref_path(fallback):
+            logger.warning("MODEL_MIRROR: Hub and store unavailable for %s (%s); using the "
+                           "cached mirror", ref, e)
+            return fallback
+        logger.warning("MODEL_MIRROR: could not mirror %s (%s); loading it from the Hub", ref, e)
+        return None
+    with _MEMO_LOCK:
+        _MEMO[key] = (mirrored, time.monotonic())
+    return mirrored
 
 
 def _resolve(ref: str, store, cache_root, workers: int) -> str:

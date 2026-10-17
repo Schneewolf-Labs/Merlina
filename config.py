@@ -93,6 +93,10 @@ class Settings(BaseSettings):
     # Mirror "huggingface" sources into the internal tier on first use and
     # serve them from there afterwards.
     dataset_mirror: Optional[bool] = None
+    # Mirror Hub base models into the model store (models/hf/<org>/<repo>) on
+    # first use and load them from there afterwards; also serves the stored
+    # copy when the Hub is unreachable. See src/model_mirror.py.
+    model_mirror: bool = False
 
     # Where remote/hosted runs keep artifacts: "hf_hub" (default; private HF
     # repos), or a tier name ("external" / "internal"), which reuses that

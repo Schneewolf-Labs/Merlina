@@ -232,6 +232,14 @@ class PreflightValidator:
                 "can't reach. Push it with `merlina models push <dir> <name>` and use "
                 "store:<name>, or use a HuggingFace Hub id."
             )
+        if getattr(config, "publish_to_store", False):
+            try:
+                from src.remote.artifacts import model_store
+                if getattr(model_store(), "tier", None) == "internal":
+                    self.errors.append("publish_to_store on a remote run needs ARTIFACT_STORE=external "
+                                       "(the merge worker publishes straight to R2).")
+            except Exception as e:
+                self.errors.append(f"publish_to_store: {e}")
         if str(config.base_model).startswith("store:"):
             from src.model_refs import remote_store_description
             try:
@@ -592,6 +600,13 @@ class PreflightValidator:
             if offline_mode_active():
                 cached = is_model_cached(model_path)
                 if not cached:
+                    # A MODEL_MIRROR copy (pulled before, or still reachable in
+                    # the store) loads without the Hub.
+                    from src.model_mirror import mirror_enabled, mirror_name
+                    from src.model_refs import cached_ref_path
+                    cached = mirror_enabled() and bool(
+                        cached_ref_path(f"store:{mirror_name(model_path)}"))
+                if not cached:
                     self.errors.append(
                         f"Offline mode is enabled but model '{model_path}' was not found "
                         "in the local HuggingFace cache. Download it first (disable offline "
@@ -660,8 +675,6 @@ class PreflightValidator:
             from dataset_handlers.mirror import mirror_name
             if not (getattr(source, "prefer_internal", False) or default_prefer_internal()):
                 return False
-            if getattr(source, "streaming", False):
-                return False        # streaming bypasses the mirror
             store = default_internal_store()
             if store is None:
                 return False

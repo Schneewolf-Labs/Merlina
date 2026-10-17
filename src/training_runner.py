@@ -508,6 +508,55 @@ def _perform_sync_merge(
         )
 
 
+def _store_publish_name(config: Any) -> str:
+    return getattr(config, "store_model_name", None) or str(config.output_name).rsplit("/", 1)[-1]
+
+
+def _run_background_store_publish(
+    config: Any,
+    final_output_dir: str,
+    training_mode: str,
+    job_id: str,
+    job_manager: JobManager,
+    is_vlm: bool = False,
+    *,
+    merge_artifact: Optional["_MergeArtifact"] = None,
+    is_diffusion: bool = False,
+) -> None:
+    """Publish the output to the model store (``publish_to_store``). Runs in a
+    background thread next to the Hub upload / GGUF export; the result goes
+    into the job's ``store_publish`` metric and the model's upload history."""
+    from src.store_publish import publish_to_store
+    try:
+        merged_dir = None
+        if config.use_lora and config.merge_lora_before_upload and not is_diffusion:
+            if merge_artifact is None or merge_artifact.path is None:
+                raise RuntimeError("merge failed: " + str(
+                    merge_artifact.error if merge_artifact and merge_artifact.error else "no merged model"))
+            merged_dir = merge_artifact.path
+        result = publish_to_store(final_output_dir, _store_publish_name(config), merged_dir=merged_dir,
+                                  config=config, training_mode=training_mode, is_vlm=is_vlm,
+                                  is_diffusion=is_diffusion)
+        logger.info(f"📦 Published to the model store as {result['ref']}")
+        _record_store_publish(job_manager, job_id, {"status": "success", **result})
+    except Exception as e:
+        logger.error(f"❌ Store publish failed for job {job_id}: {e}", exc_info=True)
+        _record_store_publish(job_manager, job_id, {"status": "failed", "error": str(e)})
+    finally:
+        if merge_artifact is not None:
+            merge_artifact.release()
+
+
+def _record_store_publish(job_manager: JobManager, job_id: str, result: dict) -> None:
+    try:
+        job = job_manager.get_job(job_id)
+        metrics = dict(job.metrics or {}) if job else {}
+        metrics["store_publish"] = result
+        job_manager.update_job(job_id, metrics=metrics)
+    except Exception:
+        logger.exception("Could not record the store publish result")
+
+
 def _run_background_gguf_export(
     config: Any,
     final_output_dir: str,
@@ -996,10 +1045,10 @@ def run_training_distributed(
             event_loop,
         )
 
-        # Pull a store: base model once, here, so the DDP ranks all find it
-        # in the cache instead of queueing on the pull lock past NCCL timeouts.
-        if is_store_ref(config.base_model):
-            resolve_model_ref(config.base_model)
+        # Pull a store: (or MODEL_MIRROR'd) base model once, here, so the DDP
+        # ranks all find it in the cache instead of queueing on the pull lock
+        # past NCCL timeouts.
+        resolve_model_ref(config.base_model)   # no-op unless store: or MODEL_MIRROR
 
         # Serialize config
         with open(config_path, "w") as f:
@@ -1826,9 +1875,11 @@ def run_training_sync(
         # Compute who actually needs the merged checkpoint. Upload only
         # needs it when merge_lora_before_upload=True; GGUF needs it
         # whenever LoRA was used.
+        wants_store = bool(getattr(config, "publish_to_store", False)) and is_main_process
         upload_needs_merge = wants_upload and config.use_lora and config.merge_lora_before_upload
         gguf_needs_merge = wants_gguf and config.use_lora
-        consumers = (1 if upload_needs_merge else 0) + (1 if gguf_needs_merge else 0)
+        store_needs_merge = wants_store and config.use_lora and config.merge_lora_before_upload
+        consumers = sum((upload_needs_merge, gguf_needs_merge, store_needs_merge))
 
         # ---- Sync merge step (queue blocks here on purpose) ----
         # The merge can hold ~14GB of system RAM for a 7B model in bf16
@@ -1870,6 +1921,22 @@ def run_training_sync(
             job_manager.update_job(job_id, upload_error=str(upload_setup_err))
             # The upload thread won't run — release its hold on the merge artifact.
             if upload_needs_merge and merge_artifact is not None:
+                merge_artifact.release()
+
+        # ---- Background publish to the model store ----
+        try:
+            if wants_store:
+                threading.Thread(
+                    target=_run_background_store_publish,
+                    args=(config, final_output_dir, training_mode, job_id, job_manager, is_vlm),
+                    kwargs={"merge_artifact": merge_artifact if store_needs_merge else None},
+                    name=f"StorePublishThread-{job_id}",
+                    daemon=False,
+                ).start()
+        except Exception as store_setup_err:
+            logger.error(f"❌ Failed to start store publish for job {job_id}: {store_setup_err}")
+            _record_store_publish(job_manager, job_id, {"status": "failed", "error": str(store_setup_err)})
+            if store_needs_merge and merge_artifact is not None:
                 merge_artifact.release()
 
         # ---- Background GGUF export ----
