@@ -33,10 +33,7 @@ small { line-height: 1.65; }
 .nav-description { display: block; font-size: 10px; font-weight: 400; color: var(--text-muted); line-height: 1.5; margin-top: 3px; }
 .nav-step, .section-nav-btn.active .nav-step { width: auto; height: auto; background: none; font-size: 10px; color: var(--text-muted); font-weight: 600; }
 .section-nav-btn.active .nav-step { color: var(--primary-purple); }
-.sidebar-note { margin: auto 14px 18px; padding-top: 34px; display: flex; gap: 12px; color: var(--text-muted); font-size: 11px; line-height: 1.8; }
-.sidebar-note > span { color: var(--primary-purple); font-size: 29px; }
-.sidebar-note p { margin: 0; }
-.sidebar-link { padding: 15px 13px 0; border-top: 1px solid var(--border-color); font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between; }
+.sidebar-link { margin-top: auto; padding: 15px 13px 0; border-top: 1px solid var(--border-color); font-size: 11px; color: var(--text-muted); display: flex; justify-content: space-between; }
 .external-icon { width: 15px; height: 15px; }
 .studio-workspace { margin-left: 236px; min-width: 0; }
 .studio-topbar { height: 76px; padding: 0 42px; border-bottom: 1px solid var(--border-color); display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0; text-align: left; animation: none; background: var(--sidebar-bg); }
@@ -221,7 +218,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--primary-purple
     .brand { padding: 0 2px 10px; }
     .brand h1 { font-size: 22px; }
     .brand .wizard-hat { width: 25px; height: 30px; }
-    .brand-caption, .brand-star, .nav-group-label, .nav-description, .nav-step, .sidebar-note, .sidebar-link { display: none; }
+    .brand-caption, .brand-star, .nav-group-label, .nav-description, .nav-step, .sidebar-link { display: none; }
     .section-nav { flex-direction: row; margin: 0; gap: 3px; padding: 0 0 8px; overflow-x: auto; scrollbar-width: none; }
     .section-nav-btn { padding: 9px 11px; gap: 6px; min-height: 38px; border-radius: 8px; }
     .nav-label { display: inline; white-space: nowrap; font-size: 11px; }
