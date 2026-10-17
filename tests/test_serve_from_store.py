@@ -149,3 +149,33 @@ def test_list_artifacts_skips_uncommitted(store, model_dir):
     listed = store.list_artifacts()
     assert [m["name"] for m in listed] == ["C0"]
     assert listed[0]["files"] == 5 and listed[0]["size"] > 0
+
+
+def test_pull_refuses_when_disk_is_too_small(store, model_dir, tmp_path, monkeypatch):
+    import shutil as _shutil
+    from collections import namedtuple
+    store.push_dir(model_dir, "C0", snapshot=False)
+    usage = namedtuple("usage", "total used free")
+    monkeypatch.setattr("src.remote.s3_artifacts.shutil.disk_usage", lambda p: usage(10, 9, 1))
+    with pytest.raises(ArtifactStoreError, match="Not enough disk"):
+        store.pull_dir("C0", tmp_path / "pulled")
+
+
+def test_download_errors_say_what_happened(store, model_dir, tmp_path, monkeypatch):
+    import errno
+    store.push_dir(model_dir, "C0", snapshot=False)
+
+    def full(key, local):
+        raise OSError(errno.ENOSPC, "No space left on device", "/secret/path")
+    monkeypatch.setattr(store.fs, "get_file", full)
+    with pytest.raises(ArtifactStoreError) as e:
+        store.pull_dir("C0", tmp_path / "pulled")
+    assert "OSError: No space left on device" in str(e.value) and "/secret" not in str(e.value)
+
+
+def test_serve_disk_includes_image_allowance(store, model_dir):
+    from src.remote.inference import SERVE_IMAGE_ALLOWANCE_GB
+    store.push_dir(model_dir, "C0", snapshot=False)
+    plan = build_serve_plan(req(), settings=SETTINGS, model_store=store)
+    weights_gb = FP8_TOTAL_SIZE / 1024 ** 3
+    assert plan.sizing.disk_required_gb >= weights_gb + SERVE_IMAGE_ALLOWANCE_GB

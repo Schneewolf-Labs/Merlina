@@ -55,6 +55,9 @@ MAX_SERVE_RUNTIME_HOURS = 24.0
 # its whole budget downloading and loading weights.
 MIN_USEFUL_SESSION_HOURS = 0.25
 SERVE_DISK_FLOOR_GB = 50
+# RunPod's container disk also holds the serve image (vLLM + CUDA, ~25-40 GB
+# unpacked), on top of the weights the worker downloads.
+SERVE_IMAGE_ALLOWANCE_GB = 60
 
 from src.model_refs import _NAME_RE as _STORE_MODEL_RE  # noqa: E402  (names may nest: hf/<org>/<repo>)
 from src.model_refs import ModelRefError, is_store_ref, remote_store_description  # noqa: E402
@@ -327,7 +330,7 @@ def build_serve_plan(
 
     breakdown = serve_vram_breakdown(model_specs, max_model_len, request.max_num_seqs,
                                      lora=source["lora"])
-    disk_gb = max(estimate_disk_gb(model_specs), SERVE_DISK_FLOOR_GB)
+    disk_gb = max(estimate_disk_gb(model_specs) + SERVE_IMAGE_ALLOWANCE_GB, SERVE_DISK_FLOOR_GB)
 
     counts = tensor_parallel_counts(model_specs)
     if request.tensor_parallel_size:
