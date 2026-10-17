@@ -202,6 +202,7 @@ class TestChatEndpoint:
 
         def fake_urlopen(req, timeout=None):
             seen["url"], seen["auth"] = req.full_url, req.headers.get("Authorization")
+            seen["ua"] = req.get_header("User-agent")
             seen["body"] = _json.loads(req.data)
             return Resp(_json.dumps({"choices": [{"message": {"role": "assistant", "content": "hi"}}]}).encode())
 
@@ -213,6 +214,7 @@ class TestChatEndpoint:
             assert resp.json()["choices"][0]["message"]["content"] == "hi"
             assert seen["url"] == "https://pod-8001.example/v1/chat/completions"
             assert seen["auth"] == "Bearer sk-live-key"
+            assert seen["ua"].startswith("merlina/"), "Cloudflare blocks the urllib default"
             assert seen["body"]["model"] == "model"
         finally:
             forget_api_key(sid)

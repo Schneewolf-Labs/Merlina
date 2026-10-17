@@ -1737,7 +1737,10 @@ async def chat_remote_inference(session_id: str, body: RemoteChatRequest):
     def _call():
         req = urllib.request.Request(
             f"{session.base_url}/chat/completions", data=json.dumps(payload).encode(),
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+            # RunPod's proxy (Cloudflare) rejects urllib's default User-Agent
+            # with error 1010, so name ourselves.
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json",
+                     "User-Agent": f"merlina/{__version__}"})
         try:
             with urllib.request.urlopen(req, timeout=600) as resp:
                 return json.loads(resp.read())
