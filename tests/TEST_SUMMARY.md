@@ -1,14 +1,15 @@
-# Merlina API Test Suite - Summary
+# Merlina REST API Test Suite - Summary
 
 ## Overview
 
-A comprehensive unit test suite covering **100% of Merlina API endpoints** with proper mocking and isolation.
+A comprehensive unit test suite covering **100% of Merlina REST endpoints** with proper mocking and isolation.
 
 ## Test Statistics
 
 - **Total Test Classes**: 9
 - **Total Test Functions**: 60+
-- **API Endpoints Covered**: 29/29 (100%)
+- **REST Endpoints Covered**: 28/28 (100%)
+- **WebSocket Endpoints**: 1 (`/ws/{job_id}` — skipped in unit mode, see limitation below)
 - **Test File Size**: ~1000 lines
 - **Mock Dependencies**: 6 major components
 
@@ -80,8 +81,8 @@ A single, well-organized test file containing:
    - ✅ GET /model/cached - List cached models
    - ✅ GET /stats - Get statistics
 
-8. **TestWebSocket** (1 test)
-   - ✅ WebSocket /ws/{job_id} - Connection test
+8. **TestWebSocket** (1 test, skipped in unit mode)
+   - ⏭️ WebSocket /ws/{job_id} - Connection test (skipped: TestClient hangs; validate via integration tests)
 
 9. **TestErrorCases** (3 tests)
    - ✅ Invalid source type handling
@@ -198,8 +199,18 @@ make test-api
 | Config Management | 6 | 6 | 100% |
 | Model Preload | 2 | 2 | 100% |
 | Stats & Misc | 1 | 1 | 100% |
-| WebSocket | 1 | 1 | 100% |
-| **Total** | **29** | **29** | **100%** |
+| WebSocket | 1 | 0 (skipped) | — (see limitation below) |
+| **Total** | **29** | **28** | **100% of REST endpoints** |
+
+### WebSocket Unit Test Limitation
+
+The WebSocket endpoint test (`TestWebSocket::test_websocket_connection`) is
+**skipped in unit mode** via
+`@pytest.mark.skip(reason="WebSocket testing with TestClient hangs - requires integration test setup")`.
+Starlette's `TestClient` cannot drive the `/ws/{job_id}` connection reliably,
+so the unit suite covers all 28 REST endpoints (100%) but does not exercise
+the WebSocket. Validate `/ws/{job_id}` with an integration test against a
+running server instead (see "Future Enhancements" below).
 
 ### Test Scenarios Covered
 
@@ -304,14 +315,14 @@ Potential improvements:
 This test suite provides comprehensive coverage of the Merlina API with:
 
 - ✅ 60+ individual test cases
-- ✅ 100% endpoint coverage
+- ✅ 100% REST endpoint coverage (WebSocket covered by integration tests, not unit tests)
 - ✅ Proper isolation with mocking
 - ✅ Fast execution (seconds)
 - ✅ CI/CD ready
 - ✅ Well documented
 - ✅ Easy to extend
 
-The test suite ensures that all API endpoints function correctly and handle errors gracefully, providing confidence for development and deployment.
+The test suite ensures that all REST API endpoints function correctly and handle errors gracefully, providing confidence for development and deployment.
 
 ---
 
