@@ -67,6 +67,19 @@ def artifact_metadata(config: dict) -> dict:
     })
 
 
+def _describe_error(e: BaseException) -> str:
+    """A credential-free one-liner: the exception type plus an OS errno or an
+    S3 error code, never the provider's message (it can echo keys or URLs)."""
+    parts = [type(e).__name__]
+    if isinstance(e, OSError) and e.errno:
+        import os as _os
+        parts.append(_os.strerror(e.errno))
+    code = getattr(getattr(e, "response", None), "get", lambda *_: None)("Error")
+    if isinstance(code, dict) and code.get("Code"):
+        parts.append(str(code["Code"]))
+    return ": ".join(parts)
+
+
 def _digest(path: Path) -> tuple[int, str]:
     digest = hashlib.sha256()
     size = 0
@@ -357,6 +370,12 @@ class S3ArtifactStore(ArtifactStore):
         try:
             manifest = self._manifest(name)
             local_dir.parent.mkdir(parents=True, exist_ok=True)
+            need = sum(f["size"] for f in manifest["files"])
+            free = shutil.disk_usage(local_dir.parent).free
+            if need > free:
+                raise ArtifactStoreError(
+                    f"Not enough disk for {name!r}: needs {need / 1e9:.1f} GB, "
+                    f"{free / 1e9:.1f} GB free at {local_dir.parent}")
             with tempfile.TemporaryDirectory(prefix=".merlina-artifact-", dir=local_dir.parent) as temp:
                 staged = Path(temp) / "download"
                 staged.mkdir()
@@ -386,8 +405,8 @@ class S3ArtifactStore(ArtifactStore):
             raise
         except FileNotFoundError:
             raise ArtifactStoreError("Artifact or committed file not found") from None
-        except Exception:
-            raise ArtifactStoreError("Artifact download failed") from None
+        except Exception as e:
+            raise ArtifactStoreError(f"Artifact download failed ({_describe_error(e)})") from None
 
     def describe(self):
         return {"kind": self.kind, "bucket": self.bucket, "prefix": self.prefix,
