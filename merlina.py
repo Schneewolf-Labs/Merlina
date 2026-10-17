@@ -793,6 +793,12 @@ class TrainingConfig(BaseModel):
     use_4bit: bool = Field(True, description="Use 4-bit quantization")
     use_wandb: bool = Field(True, description="Log to Weights & Biases")
     push_to_hub: bool = Field(False, description="Push to HuggingFace Hub")
+    publish_to_store: bool = Field(
+        False,
+        description="After training, publish the model to the model store (models/<name>, "
+                    "loadable as store:<name>); merged first when merge_lora_before_upload")
+    store_model_name: Optional[str] = Field(
+        None, description="Name under models/ for publish_to_store (default: output_name)")
     merge_lora_before_upload: bool = Field(True, description="Merge LoRA with base model before uploading (if False, uploads LoRA adapter only)")
     hf_hub_private: bool = Field(True, description="Make HuggingFace Hub repository private")
     hf_namespace: Optional[str] = Field(
@@ -974,18 +980,26 @@ class TrainingConfig(BaseModel):
 
         src = self.dataset.source
         src_specified = bool(src.repo_id or src.file_path or src.dataset_id or src.uri)
+        is_internal = self.dataset_name.startswith("swl://")
         if not src_specified:
-            self.dataset.source = DatasetSource(
-                source_type="huggingface",
-                repo_id=self.dataset_name,
-                split=self.dataset_split or "train",
-            )
+            if is_internal:
+                self.dataset.source = DatasetSource(
+                    source_type="internal",
+                    uri=self.dataset_name,
+                    split=self.dataset_split or "train",
+                )
+            else:
+                self.dataset.source = DatasetSource(
+                    source_type="huggingface",
+                    repo_id=self.dataset_name,
+                    split=self.dataset_split or "train",
+                )
         else:
             matches = (
-                src.source_type == "huggingface"
-                and src.repo_id == self.dataset_name
-                and (not self.dataset_split or self.dataset_split == src.split)
-            )
+                (src.source_type == "internal" and src.uri == self.dataset_name)
+                if is_internal else
+                (src.source_type == "huggingface" and src.repo_id == self.dataset_name)
+            ) and (not self.dataset_split or self.dataset_split == src.split)
             if not matches:
                 described = src.repo_id or src.file_path or src.dataset_id or src.uri
                 raise ValueError(
@@ -3660,6 +3674,47 @@ async def upload_dataset_file(file: FastAPIUploadFile = File(...)):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+class PromoteUploadRequest(BaseModel):
+    name: str = Field(..., description="Dataset name in the internal store (swl://<name>)")
+    private: bool = Field(False, description="Keep this dataset out of `datasets promote` to the external tier")
+
+
+@app.post("/dataset/uploads/{dataset_id}/store", tags=["Datasets"],
+          summary="Save an uploaded dataset into the internal store")
+async def store_uploaded_dataset(dataset_id: str, request: PromoteUploadRequest):
+    """Uploads live in server memory and expire; this writes one into the
+    internal dataset store as ``swl://<name>@<rev>`` (rev = content hash), so
+    it survives restarts and can be trained on by ``swl://`` address,
+    including from remote runs."""
+    from dataset_handlers.factory import get_store
+    from dataset_handlers.internal_store import InternalStoreError
+    from dataset_handlers.put import put_dataset
+
+    with _uploaded_datasets_lock:
+        entry = uploaded_datasets.get(dataset_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Upload {dataset_id} not found (it may have expired)")
+    content = entry["content"] if isinstance(entry, dict) else entry[0]
+    filename = entry["filename"] if isinstance(entry, dict) else entry[1]
+    store = get_store("internal")
+    if store is None:
+        raise HTTPException(status_code=400, detail="The internal dataset store is not configured")
+
+    def _put():
+        import tempfile
+        suffix = Path(filename or "data.jsonl").suffix or ".jsonl"
+        with tempfile.NamedTemporaryFile(suffix=suffix) as tmp:
+            tmp.write(content)
+            tmp.flush()
+            return put_dataset(store, tmp.name, request.name, private=request.private,
+                               source={"uploaded_filename": Path(filename or "").name})
+    try:
+        name, rev, created = await asyncio.to_thread(_put)
+    except InternalStoreError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"uri": f"swl://{name}@{rev}", "name": name, "rev": rev, "created": created}
+
+
 @app.get("/dataset/uploads", tags=["Datasets"], summary="List uploaded datasets")
 async def list_uploaded_datasets():
     """List all uploaded datasets with TTL information"""
@@ -5642,6 +5697,87 @@ async def upload_existing_model(name: str, request: ModelUploadRequest):
         "started": True,
         "queue_position": position,
     }
+
+
+class ModelStorePublishRequest(BaseModel):
+    """Publish an existing model directory to the model store (models/<name>)."""
+    store_name: Optional[str] = Field(None, description="Name under models/ (default: the model dir name)")
+    merged: bool = Field(False, description="For a LoRA adapter: merge into the base first and publish "
+                                            "the full model (otherwise the adapter is published as is)")
+    include_gguf: bool = Field(True, description="Include gguf/ exports if present")
+    base_model: Optional[str] = Field(None, description="Base model override for the merge")
+    model_type: str = Field("auto", description="'auto' | 'causal_lm' | 'vlm'")
+
+
+@app.post("/models/{name}/publish", tags=["Models"], summary="Publish a model to the model store")
+async def publish_model_to_store(name: str, request: ModelStorePublishRequest):
+    """Push ``models/<name>`` (optionally merged) to the artifact bucket as
+    ``models/<store_name>``, loadable as ``store:<store_name>`` and servable as
+    ``model.store_model``. Runs in the background; returns ``{job_id}``; the
+    result lands in the job's ``store_publish`` metric and the model's upload
+    history."""
+    from types import SimpleNamespace
+    import uuid as _uuid
+    from src.model_refs import ModelRefError, store_name as _check_store_name
+    from src.remote.artifacts import ArtifactStoreError, model_store
+
+    model_dir = _resolve_model_dir(name)
+    target = request.store_name or name
+    try:
+        _check_store_name(f"store:{target}")
+        await asyncio.to_thread(model_store)
+    except (ModelRefError, ArtifactStoreError) as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    has_adapter = (model_dir / "adapter_config.json").is_file()
+    needs_merge = bool(request.merged and has_adapter)
+    base_model = _infer_base_model(model_dir, request.base_model) if needs_merge else (request.base_model or "")
+    is_vlm = (await asyncio.to_thread(_resolve_is_vlm, request.model_type, base_model)
+              if needs_merge else False)
+    cfg = SimpleNamespace(output_name=name, base_model=base_model, use_lora=has_adapter,
+                          merge_lora_before_upload=needs_merge, model_type=request.model_type)
+
+    job_id = f"publish-{_uuid.uuid4().hex[:8]}"
+    await asyncio.to_thread(job_manager.create_job, job_id, {
+        "type": "store_publish", "model_name": name, "store_name": target, "merged": needs_merge,
+    })
+    try:
+        event_loop = asyncio.get_running_loop()
+    except RuntimeError:
+        event_loop = None
+
+    def _merge():
+        from src.training_runner import _perform_sync_merge
+        return _perform_sync_merge(cfg, str(model_dir), job_id, job_manager,
+                                   event_loop=event_loop, is_vlm=is_vlm, num_consumers=1)
+
+    def _publish(merge_artifact):
+        from src.store_publish import publish_to_store
+        from src.training_runner import _record_store_publish
+        job_manager.update_job(job_id, status="uploading", progress=0.5)
+        try:
+            if needs_merge and (merge_artifact is None or merge_artifact.path is None):
+                raise RuntimeError(f"merge failed: {getattr(merge_artifact, 'error', None)}")
+            result = publish_to_store(model_dir, target,
+                                      merged_dir=merge_artifact.path if merge_artifact else None,
+                                      include_gguf=request.include_gguf)
+            _record_store_publish(job_manager, job_id, {"status": "success", **result})
+            job_manager.update_job(job_id, status="completed", progress=1.0, output_dir=str(model_dir))
+        except Exception as e:
+            _record_store_publish(job_manager, job_id, {"status": "failed", "error": str(e)})
+            job_manager.update_job(job_id, status="failed", error=str(e))
+        finally:
+            if merge_artifact is not None:
+                merge_artifact.release()
+
+    def _on_error(exc):
+        logger.error(f"Store publish failed for {name}: {exc}", exc_info=True)
+        job_manager.update_job(job_id, status="failed", error=str(exc))
+
+    position = _dispatch_merge_gated(job_id, cfg, needs_merge=needs_merge, merge=_merge,
+                                     work=_publish, on_error=_on_error,
+                                     thread_name=f"StorePublish-{job_id}")
+    return {"job_id": job_id, "model_name": name, "store_name": target,
+            "ref": f"store:{target}", "started": True, "queue_position": position}
 
 
 @app.post("/models/{name}/export-gguf", tags=["Models"], summary="Export a model to GGUF")

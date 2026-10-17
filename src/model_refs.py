@@ -48,6 +48,17 @@ _MEMO_LOCK = threading.Lock()
 MEMO_TTL_S = 300.0
 
 
+# A store registered by a remote worker from its payload (it has no
+# ARTIFACT_STORE settings of its own); used instead of model_store().
+_DEFAULT_STORE = None
+
+
+def register_store(store) -> None:
+    """Use ``store`` for ``store:`` refs in this process (remote workers)."""
+    global _DEFAULT_STORE
+    _DEFAULT_STORE = store
+
+
 class ModelRefError(RuntimeError):
     """A ``store:`` reference could not be resolved."""
 
@@ -84,6 +95,10 @@ def resolve_model_ref(ref: str, *, store=None, cache_root: Optional[Path] = None
     """A local directory for ``ref`` (pulling it if needed), or ``ref`` itself
     when it isn't a ``store:`` reference."""
     if not is_store_ref(ref):
+        if store is None and cache_root is None and _mirror_wanted(ref):
+            mirrored = _mirror_ref(ref)
+            if mirrored:
+                return resolve_model_ref(mirrored, workers=workers)
         return ref
     if store is None and cache_root is None:
         with _MEMO_LOCK:
@@ -97,9 +112,53 @@ def resolve_model_ref(ref: str, *, store=None, cache_root: Optional[Path] = None
     return _resolve(ref, store, cache_root, workers)
 
 
+_HUB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*$")
+
+
+def _mirror_wanted(ref: Any) -> bool:
+    """MODEL_MIRROR is on and ``ref`` is a Hub id (not a local directory)."""
+    if not isinstance(ref, str) or not _HUB_ID_RE.match(ref):
+        return False
+    try:
+        from src.model_mirror import mirror_enabled
+        if not mirror_enabled():
+            return False
+    except Exception:
+        return False
+    from src.preflight_checks import is_local_model_path
+    return not is_local_model_path(ref)
+
+
+def _mirror_ref(ref: str) -> Optional[str]:
+    """The ``store:hf/...`` ref for a Hub id, mirroring it on first use; None
+    (load from the Hub as before) if mirroring isn't possible."""
+    key = f"mirror:{ref}"
+    with _MEMO_LOCK:
+        hit = _MEMO.get(key)
+    if hit and time.monotonic() - hit[1] < MEMO_TTL_S:
+        return hit[0]
+    try:
+        from src.model_mirror import ensure_model_mirror
+        import os
+        mirrored = ensure_model_mirror(ref, token=os.environ.get("HF_TOKEN"))
+    except Exception as e:
+        fallback = f"store:hf/{ref}"
+        if cached_ref_path(fallback):
+            logger.warning("MODEL_MIRROR: Hub and store unavailable for %s (%s); using the "
+                           "cached mirror", ref, e)
+            return fallback
+        logger.warning("MODEL_MIRROR: could not mirror %s (%s); loading it from the Hub", ref, e)
+        return None
+    with _MEMO_LOCK:
+        _MEMO[key] = (mirrored, time.monotonic())
+    return mirrored
+
+
 def _resolve(ref: str, store, cache_root, workers: int) -> str:
     name = store_name(ref)
     store_error = None
+    if store is None:
+        store = _DEFAULT_STORE
     if store is None:
         from src.remote.artifacts import model_store
         try:
@@ -150,6 +209,22 @@ def _resolve(ref: str, store, cache_root, workers: int) -> str:
                     logger.info("Removing superseded cached generation %s", old)
                     shutil.rmtree(old, ignore_errors=True)
     return str(target)
+
+
+def remote_store_description(ref: str) -> Optional[dict]:
+    """For a ``store:`` base on a remote run: the model store's description
+    for the worker payload, or None for any other ref. Raises when the store
+    is one a rented instance can't reach (the LAN-only internal tier)."""
+    if not is_store_ref(ref):
+        return None
+    store_name(ref)
+    from src.remote.artifacts import model_store
+    store = model_store()
+    if getattr(store, "tier", None) == "internal":
+        raise ModelRefError(
+            f"{ref} is in the internal (LAN) store, which rented instances can't reach. "
+            "Use ARTIFACT_STORE=external (R2) for remote runs.")
+    return store.describe()
 
 
 def cached_ref_path(ref: str, cache_root: Optional[Path] = None) -> Optional[str]:

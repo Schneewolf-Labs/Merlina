@@ -623,6 +623,8 @@ class ConfigManager {
             this.setInputValue('wandb-notes', config.wandb_notes || '');
         }
 
+        this.setCheckboxValue('publish-store', !!config.publish_to_store);
+
         // HF Hub settings
         if (config.push_to_hub) {
             this.setCheckboxValue('push-hub', true);
