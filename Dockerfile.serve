@@ -24,7 +24,7 @@ WORKDIR /app
 
 COPY version.py config.py ./
 COPY src/__init__.py src/constants.py src/exceptions.py src/job_manager.py \
-     src/websocket_manager.py src/
+     src/websocket_manager.py src/model_refs.py src/
 COPY src/remote/__init__.py src/remote/spec.py src/remote/worker_client.py \
      src/remote/worker_entry.py src/remote/serve_worker.py src/remote/artifacts.py \
      src/remote/s3_artifacts.py src/remote/artifact_capabilities.py src/remote/

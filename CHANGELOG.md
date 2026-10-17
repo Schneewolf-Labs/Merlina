@@ -38,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checks that the model exists, and VRAM estimates and remote sizing read
   `config.json` from the store. VLM key grafting now also works for local
   base models. ([docs](docs/user/store-models.md))
+- **Remote runs with `store:` base models.** Remote training, the remote
+  merge stage and remote LoRA serving pull a `store:` base from R2. The
+  worker payload names the model store, and workers register it because
+  they have no `ARTIFACT_STORE` of their own. Pre-flight refuses the LAN-only
+  internal tier. A local base path now gets a hint to push it and use
+  `store:<name>`. The serve image includes `src/model_refs.py`, and the
+  Docker workflow's PR path filter now covers the store modules.
 - **Pre-flight accepts a deleted or gated HF dataset when its mirror
   exists.** With mirroring on (`prefer_internal`), a missing or gated repo
   that has a copy in the internal store is now a warning. Before, it was a

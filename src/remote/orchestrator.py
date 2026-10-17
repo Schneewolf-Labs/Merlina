@@ -549,7 +549,7 @@ def _stage_payload(job_id: str, stage: StagePlan, config: Any, store: ArtifactSt
         config_dict["export_gguf"] = False
         if multi_gpu_strategy:
             config_dict["multi_gpu_strategy"] = multi_gpu_strategy
-    return {
+    payload = {
         "job_id": job_id,
         "stage": stage.name,
         "config": config_dict,
@@ -557,6 +557,13 @@ def _stage_payload(job_id: str, stage: StagePlan, config: Any, store: ArtifactSt
         "artifacts_in": stage.artifacts_in,
         "artifacts_out": stage.artifacts_out,
     }
+    # A store: base model is pulled by the worker from the model store (same
+    # bucket and credentials as the artifacts, under models/).
+    from src.model_refs import remote_store_description
+    model_store_desc = remote_store_description(config_dict.get("base_model"))
+    if model_store_desc:
+        payload["model_store"] = model_store_desc
+    return payload
 
 
 def _worker_env(payload: dict, token: str, config: Any) -> dict:
@@ -782,6 +789,8 @@ def _serve_instance_spec(session_id: str, request: Any, plan: Any, api_key: str,
         "artifacts_in": [plan.artifact] if plan.artifact else [],
         "artifacts_out": [],
     }
+    if getattr(plan, "model_store", None):
+        payload["model_store"] = plan.model_store
     env = {
         JOB_ENV_VAR: base64.b64encode(json.dumps(payload).encode()).decode(),
         TOKEN_ENV_VAR: secrets.token_urlsafe(32),

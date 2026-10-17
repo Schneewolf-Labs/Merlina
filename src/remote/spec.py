@@ -195,6 +195,7 @@ class ServePlan:
     vllm_args: List[str] = field(default_factory=list)
     vllm_command: List[str] = field(default_factory=list)   # display only; never holds the key
     warnings: List[str] = field(default_factory=list)
+    model_store: Optional[Dict[str, Any]] = None  # store: base of an adapter, pulled by the worker
 
     def to_dict(self) -> Dict[str, Any]:
         from dataclasses import asdict

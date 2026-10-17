@@ -57,6 +57,7 @@ MIN_USEFUL_SESSION_HOURS = 0.25
 SERVE_DISK_FLOOR_GB = 50
 
 from src.model_refs import _NAME_RE as _STORE_MODEL_RE  # noqa: E402  (names may nest: hf/<org>/<repo>)
+from src.model_refs import ModelRefError, is_store_ref, remote_store_description  # noqa: E402
 _HF_REPO_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)?$")
 
 
@@ -229,8 +230,9 @@ def resolve_model_source(request: RemoteInferenceRequest, *, job_manager=None,
     if not (cfg.get("remote") or {}).get("enabled"):
         raise RemotePlanError(
             f"Job {src.job_id} trained locally, so its output is on this machine rather than "
-            "in an artifact store a rented instance can reach. Push it to the HuggingFace Hub "
-            "and serve it with model.hf_repo instead.")
+            "in an artifact store a rented instance can reach. Push it with "
+            "`merlina models push ./models/<name> <name>` and serve it with "
+            "model.store_model (or publish it to the Hub and use model.hf_repo).")
     if job.status != "completed":
         raise RemotePlanError(f"Job {src.job_id} is {job.status!r}; only completed jobs can be served")
     store = (job.metrics or {}).get("artifact_store")
@@ -259,14 +261,22 @@ def resolve_model_source(request: RemoteInferenceRequest, *, job_manager=None,
                 f"The adapter fully retrains {cfg['modules_to_save']} (modules_to_save), which "
                 "vLLM LoRA serving does not apply — outputs would differ from the trained model. "
                 "Serve the 'merged' artifact for this job instead.")
+    model_store_desc = None
+    if lora and is_store_ref(base_model):
+        # The adapter's base lives in object storage: the worker pulls it too.
+        try:
+            model_store_desc = remote_store_description(base_model)
+        except ModelRefError as e:
+            raise RemotePlanError(str(e)) from e
     output_name = str(cfg.get("output_name") or src.job_id).rsplit("/", 1)[-1]
+
     served = request.served_model_name or output_name
     return {
         "source_kind": "artifact", "model_id": base_model, "revision": None,
         "artifact": src.artifact, "artifact_store": store, "lora": lora,
         "max_lora_rank": max_lora_rank, "served_model_name": served,
         "base_served_model_name": base_model if lora else None,
-        "job_config": cfg, "warnings": warnings,
+        "job_config": cfg, "warnings": warnings, "model_store": model_store_desc,
     }
 
 
@@ -382,6 +392,7 @@ def build_serve_plan(
         max_lora_rank=source["max_lora_rank"],
         artifact=source["artifact"],
         artifact_store=source["artifact_store"],
+        model_store=source.get("model_store"),
         model_specs=model_specs,
         sizing=decision,
         tensor_parallel_size=tp,

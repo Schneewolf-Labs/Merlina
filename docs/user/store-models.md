@@ -37,8 +37,14 @@ merlina models push /mnt/models/C0 C0             # -> <artifact bucket>/models/
 - **Names:** letters, digits, `.`, `_` and `-`, with up to three `/`
   separators (`hf/meta-llama/Llama-3.1-8B`).
 
-## What still needs the Hub
+## Remote runs
 
-Remote training can't use a `store:` base model yet; pre-flight says so.
-Train those locally. Remote *serving* of stored models already works
-(`model.store_model`, see [remote inference](remote-inference.md)).
+Remote training, remote merges and remote LoRA serving all accept a
+`store:` base model when the artifact store is the **external** tier (R2).
+The worker gets the model store's address in its job payload, uses the
+artifact credentials it already has, and pulls the model into its own
+cache. Pre-flight refuses the internal (MinIO) tier for remote runs,
+because a rented instance can't reach the LAN.
+
+A whole stored model can be served without training anything:
+`model.store_model` (see [remote inference](remote-inference.md)).

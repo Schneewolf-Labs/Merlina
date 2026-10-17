@@ -48,6 +48,17 @@ _MEMO_LOCK = threading.Lock()
 MEMO_TTL_S = 300.0
 
 
+# A store registered by a remote worker from its payload (it has no
+# ARTIFACT_STORE settings of its own); used instead of model_store().
+_DEFAULT_STORE = None
+
+
+def register_store(store) -> None:
+    """Use ``store`` for ``store:`` refs in this process (remote workers)."""
+    global _DEFAULT_STORE
+    _DEFAULT_STORE = store
+
+
 class ModelRefError(RuntimeError):
     """A ``store:`` reference could not be resolved."""
 
@@ -101,6 +112,8 @@ def _resolve(ref: str, store, cache_root, workers: int) -> str:
     name = store_name(ref)
     store_error = None
     if store is None:
+        store = _DEFAULT_STORE
+    if store is None:
         from src.remote.artifacts import model_store
         try:
             store = model_store()
@@ -150,6 +163,22 @@ def _resolve(ref: str, store, cache_root, workers: int) -> str:
                     logger.info("Removing superseded cached generation %s", old)
                     shutil.rmtree(old, ignore_errors=True)
     return str(target)
+
+
+def remote_store_description(ref: str) -> Optional[dict]:
+    """For a ``store:`` base on a remote run: the model store's description
+    for the worker payload, or None for any other ref. Raises when the store
+    is one a rented instance can't reach (the LAN-only internal tier)."""
+    if not is_store_ref(ref):
+        return None
+    store_name(ref)
+    from src.remote.artifacts import model_store
+    store = model_store()
+    if getattr(store, "tier", None) == "internal":
+        raise ModelRefError(
+            f"{ref} is in the internal (LAN) store, which rented instances can't reach. "
+            "Use ARTIFACT_STORE=external (R2) for remote runs.")
+    return store.describe()
 
 
 def cached_ref_path(ref: str, cache_root: Optional[Path] = None) -> Optional[str]:

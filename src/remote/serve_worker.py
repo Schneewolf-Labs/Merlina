@@ -345,6 +345,11 @@ def _resolve_model(payload: Dict[str, Any], serve: Dict[str, Any], work_dir: Pat
     """Return ``(model_ref, lora_path)``, pulling artifacts when needed."""
     if serve.get("source_kind") != "artifact":
         return serve["model_id"], None
+    base = serve["model_id"]
+    if serve.get("lora") and str(base).startswith("store:"):
+        # The adapter's base is in object storage (store registered from the payload).
+        from src.model_refs import resolve_model_ref
+        base = resolve_model_ref(base)
     from src.remote.worker_entry import _resolve_store
     store = _resolve_store(payload)
     artifact = serve["artifact"]
@@ -357,7 +362,7 @@ def _resolve_model(payload: Dict[str, Any], serve: Dict[str, Any], work_dir: Pat
     else:
         local = store.pull_dir(artifact, work_dir / artifact)
     if serve.get("lora"):
-        return serve["model_id"], str(local)
+        return base, str(local)
     return str(local), None
 
 

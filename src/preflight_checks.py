@@ -228,14 +228,16 @@ class PreflightValidator:
 
         if is_local_model_path(config.base_model):
             self.errors.append(
-                f"Base model '{config.base_model}' is a local path — remote workers "
-                "can only load models from the HuggingFace Hub."
+                f"Base model '{config.base_model}' is a local path, which remote workers "
+                "can't reach. Push it with `merlina models push <dir> <name>` and use "
+                "store:<name>, or use a HuggingFace Hub id."
             )
         if str(config.base_model).startswith("store:"):
-            self.errors.append(
-                f"Base model '{config.base_model}' is in object storage — remote training "
-                "from store: models isn't supported yet; train it locally."
-            )
+            from src.model_refs import remote_store_description
+            try:
+                remote_store_description(config.base_model)
+            except Exception as e:
+                self.errors.append(f"Base model '{config.base_model}': {e}")
 
         return details
 

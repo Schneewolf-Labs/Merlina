@@ -367,6 +367,10 @@ def main() -> None:
 
     logger.info("Remote worker starting stage %r for job %s", stage, job_id)
     try:
+        if payload.get("model_store"):
+            # store: base models resolve against the store the control plane named.
+            from src.model_refs import register_store
+            register_store(store_from_description(payload["model_store"]))
         runner(payload, job_manager, state)
         state.set_state(STATE_DONE)
         logger.info("Stage %r complete", stage)
