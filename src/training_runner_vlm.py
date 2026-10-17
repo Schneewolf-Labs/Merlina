@@ -119,7 +119,8 @@ def _load_image_caption_dataset(config: Any) -> Tuple[Dataset, Optional[Dataset]
     Dataset (image bytes stored once, PIL decode stays lazy at train time).
     """
     dataset_cfg = config.dataset
-    repo_id = getattr(dataset_cfg.source, "repo_id", None) or dataset_cfg.source.path
+    repo_id = (getattr(dataset_cfg.source, "repo_id", None) or getattr(dataset_cfg.source, "uri", None)
+               or dataset_cfg.source.path)
     split = getattr(dataset_cfg.source, "split", None) or "train"
     token = config.hf_token or os.environ.get("HF_TOKEN")
     max_samples = getattr(dataset_cfg, "max_samples", None)
@@ -132,7 +133,12 @@ def _load_image_caption_dataset(config: Any) -> Tuple[Dataset, Optional[Dataset]
         f"streaming={streaming} max_samples={max_samples}"
     )
 
-    if streaming and max_samples:
+    if str(repo_id).startswith("swl://"):
+        # Internal store: parquet keeps the Image feature, so rows decode to
+        # PIL lazily like a Hub dataset. Loaded whole, then capped.
+        from dataset_handlers.factory import load_swl_dataset
+        raw = load_swl_dataset(repo_id, max_samples=max_samples)
+    elif streaming and max_samples:
         # Stream the corpus, materialize first N samples to Arrow.
         # Only the shards that hold those N samples get downloaded.
         # JPEG bytes are stored once via the Image() feature so PIL
@@ -219,14 +225,18 @@ def _load_stage2_dataset(config: Any) -> Tuple[Dataset, Optional[Dataset]]:
     nullable `image`, plus `layer`/`source`/`reasoning` (ignored here).
     """
     dataset_cfg = config.dataset
-    repo_id = getattr(dataset_cfg.source, "repo_id", None) or dataset_cfg.source.path
+    repo_id = (getattr(dataset_cfg.source, "repo_id", None) or getattr(dataset_cfg.source, "uri", None)
+               or dataset_cfg.source.path)
     split = getattr(dataset_cfg.source, "split", None) or "train"
     token = config.hf_token or os.environ.get("HF_TOKEN")
     max_samples = getattr(dataset_cfg, "max_samples", None)
 
     logger.info(f"Loading Stage-2 (ArtemisMix) dataset: {repo_id} split={split}")
 
-    if os.path.isdir(repo_id) and os.path.exists(os.path.join(repo_id, "dataset_info.json")):
+    if str(repo_id).startswith("swl://"):
+        from dataset_handlers.factory import load_swl_dataset
+        raw = load_swl_dataset(repo_id)
+    elif os.path.isdir(repo_id) and os.path.exists(os.path.join(repo_id, "dataset_info.json")):
         from datasets import load_from_disk
         raw = load_from_disk(repo_id)
         if hasattr(raw, "keys"):             # DatasetDict -> pick split

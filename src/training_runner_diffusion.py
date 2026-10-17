@@ -272,7 +272,11 @@ def _materialize_image_dataset(config: Any, uploaded_datasets: dict, job_id: str
             if line:
                 rows.append(json.loads(line))
     elif getattr(config, "dataset_name", None):
-        ds = load_dataset(config.dataset_name, split=getattr(config, "dataset_split", "train") or "train")
+        if str(config.dataset_name).startswith("swl://"):
+            from dataset_handlers.factory import load_swl_dataset
+            ds = load_swl_dataset(config.dataset_name)
+        else:
+            ds = load_dataset(config.dataset_name, split=getattr(config, "dataset_split", "train") or "train")
         # Diffusion datasets on the hub usually have 'image' + 'prompt' or 'caption'
         if "chosen" not in ds.column_names:
             if "image" in ds.column_names:
