@@ -495,6 +495,42 @@ def export_gguf_artifacts(
 # Merge helper shared with the HuggingFace Hub upload path
 # ---------------------------------------------------------------------------
 
+
+def _merge_with_peft(base_model: str, adapter_dir: Path, output_dir: Path, model_type: str) -> None:
+    """Load the base in bf16 on CPU, merge the adapter with PEFT and save."""
+    import torch  # type: ignore
+    from peft import PeftModel  # type: ignore
+
+    from .training_runner import _get_auto_model_class  # circular-safe lazy import
+
+    reload_cls, _ = _get_auto_model_class(base_model, model_type)
+    logger.info("Reloading base model on CPU for merge: %s", base_model)
+    base_model_reload = reload_cls.from_pretrained(
+        base_model,
+        low_cpu_mem_usage=True,
+        dtype=torch.bfloat16,
+        device_map="cpu",
+        trust_remote_code=True,
+    )
+
+    merged = PeftModel.from_pretrained(
+        base_model_reload,
+        str(adapter_dir),
+        device_map="cpu",
+    ).merge_and_unload()
+
+    merged.save_pretrained(str(output_dir))
+
+    del merged, base_model_reload
+    try:
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+    except Exception:
+        pass
+
+
 def merge_lora_to_directory(
     base_model: str,
     adapter_dir: Path,
@@ -526,11 +562,7 @@ def merge_lora_to_directory(
     """
     # Imports are deferred so ``src.gguf_exporter`` stays importable in
     # CI / resolver tests that mock heavy ML deps.
-    import torch  # type: ignore
-    from peft import PeftModel  # type: ignore
     from transformers import AutoTokenizer  # type: ignore
-
-    from .training_runner import _get_auto_model_class  # circular-safe lazy import
 
     from .model_refs import resolve_model_ref
 
@@ -540,23 +572,13 @@ def merge_lora_to_directory(
     # swapped for its local cache directory.
     base_model = resolve_model_ref(base_model)
 
-    reload_cls, _ = _get_auto_model_class(base_model, model_type)
-    logger.info("Reloading base model on CPU for merge: %s", base_model)
-    base_model_reload = reload_cls.from_pretrained(
-        base_model,
-        low_cpu_mem_usage=True,
-        dtype=torch.bfloat16,
-        device_map="cpu",
-        trust_remote_code=True,
-    )
+    from .quantized_merge import is_native_quantized, merge_quantized
 
-    merged = PeftModel.from_pretrained(
-        base_model_reload,
-        str(adapter_dir),
-        device_map="cpu",
-    ).merge_and_unload()
-
-    merged.save_pretrained(str(output_dir))
+    if is_native_quantized(base_model):
+        # FP8/FP4 checkpoints: merge_and_unload would requantize the delta away (see quantized_merge)
+        merge_quantized(base_model, Path(adapter_dir), output_dir)
+    else:
+        _merge_with_peft(base_model, adapter_dir, output_dir, model_type)
 
     # --- Tokenizer (try adapter dir first, fall back to base model) ---
     try:
@@ -642,14 +664,5 @@ def merge_lora_to_directory(
                 logger.info("VLM state-dict issues fixed in merged dir")
         except Exception as exc:
             logger.warning("VLM state-dict fix-up failed in %s: %s", output_dir, exc)
-
-    del merged, base_model_reload
-    try:
-        import gc
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-    except Exception:
-        pass
 
     return output_dir
