@@ -36,6 +36,7 @@ import http.client
 import json
 import logging
 import os
+import re
 import shlex
 import signal
 import subprocess
@@ -57,6 +58,7 @@ OPENAI_BASE_PATH = "/v1"
 DEFAULT_VLLM_EXECUTABLE = ("vllm",)
 DEFAULT_STARTUP_TIMEOUT_MIN = 60.0
 LOG_TAIL_LINES = 60
+ROOT_CAUSE_CONTEXT_LINES = 30
 ERROR_TAIL_LINES = 15
 STOP_GRACE_SECONDS = 30.0
 UPSTREAM_TIMEOUT_S = 600.0
@@ -305,11 +307,28 @@ def read_log_tail(log_path: Path, lines: int = LOG_TAIL_LINES,
             text = f.read().decode("utf-8", errors="replace")
     except OSError:
         return []
-    tail = list(deque(text.splitlines(), maxlen=lines))
+    all_lines = text.splitlines()
+    tail = list(deque(all_lines, maxlen=lines))
+    # vLLM's engine processes log the real error first; the API server then prints a long generic
+    # traceback ("Engine core initialization failed. See root cause above") that fills the tail.
+    cause = _root_cause(all_lines[:len(all_lines) - len(tail)])
+    if cause:
+        tail = cause + ["..."] + tail
     for secret in secrets:
         if secret:
             tail = [line.replace(secret, "***") for line in tail]
     return tail
+
+
+_EXCEPTION_LINE = re.compile(r"\b\w*(?:Error|Exception)\b(?::|$)")
+
+
+def _root_cause(lines: List[str], context: int = ROOT_CAUSE_CONTEXT_LINES) -> List[str]:
+    """The first exception raised outside the API server process, with the lines leading up to it."""
+    for i, line in enumerate(lines):
+        if "(APIServer" not in line and _EXCEPTION_LINE.search(line) and "Traceback" not in line:
+            return lines[max(0, i - context):i + 1]
+    return []
 
 
 def vllm_healthy(port: int, host: str = "127.0.0.1", timeout: float = 5.0) -> bool:

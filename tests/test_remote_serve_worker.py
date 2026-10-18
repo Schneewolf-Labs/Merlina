@@ -289,3 +289,22 @@ class TestHelpers:
         tail = read_log_tail(log, 10, secrets=(API_KEY,))
         assert len(tail) == 10 and tail[-1] == "line 99 key=***"
         assert read_log_tail(tmp_path / "missing") == []
+
+    def test_log_tail_keeps_engine_root_cause(self, tmp_path):
+        log = tmp_path / "log"
+        lines = [f"(EngineCore_DP0 pid=7) INFO line {i}" for i in range(50)]
+        lines += ["(EngineCore_DP0 pid=7) Traceback (most recent call last):",
+                  "(EngineCore_DP0 pid=7)   File \"x.py\", line 1, in f",
+                  f"(EngineCore_DP0 pid=7) AttributeError: 'Linear' has no attribute 'weight_scale_inv' {API_KEY}"]
+        lines += ["(APIServer pid=1) Traceback (most recent call last):"]
+        lines += [f"(APIServer pid=1)   frame {i}" for i in range(80)]
+        lines += ["(APIServer pid=1) RuntimeError: Engine core initialization failed. See root cause above."]
+        log.write_text("\n".join(lines) + "\n")
+        tail = read_log_tail(log, 10, secrets=(API_KEY,))
+        cut = tail.index("...")
+        assert tail[cut - 1].endswith("AttributeError: 'Linear' has no attribute 'weight_scale_inv' ***")
+        assert tail[cut - 3].endswith("Traceback (most recent call last):")
+        assert tail[cut + 1:] == lines[-10:]
+        # no error before the tail: nothing extra
+        log.write_text("".join(f"line {i}\n" for i in range(100)))
+        assert "..." not in read_log_tail(log, 10)
