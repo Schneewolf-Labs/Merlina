@@ -275,6 +275,87 @@ class TestKeepEndTokenization:
         assert report["prompts_truncated"] == 1
 
 
+class TestTruncationModes:
+    """prompt_truncation: keep_end (default), keep_start, or drop the row."""
+
+    @pytest.fixture(autouse=True)
+    def _fallback(self, monkeypatch):
+        monkeypatch.setattr(pb, "GRIMOIRE_KEEPS_PROMPT_END", False)
+
+    def test_keep_start_keeps_the_beginning(self):
+        row = {"prompt": "ABCDEF", "chosen": "XY", BUDGET_COLUMN: 3}
+        out = tokenize_sft_row(row, CharTokenizer(bos_token_id=1), max_length=64,
+                               prompt_truncation="keep_start")
+        assert out["input_ids"] == [1, ord("A"), ord("B"), ord("X"), ord("Y")]
+
+    def test_keep_start_for_preference_and_kto(self):
+        row = {"prompt": "ABCDEFGH", "chosen": "c", "rejected": "r", BUDGET_COLUMN: 4}
+        out = tokenize_preference_row(row, CharTokenizer(), max_length=64,
+                                      prompt_truncation="keep_start")
+        assert _decode(out["chosen_input_ids"]) == "ABCDc"
+        assert _decode(out["rejected_input_ids"]) == "ABCDr"
+        kto = tokenize_kto_row({"prompt": "ABCDEF", "response": "ok", "label": 1, BUDGET_COLUMN: 2},
+                               CharTokenizer(), max_length=64, prompt_truncation="keep_start")
+        assert _decode(kto["input_ids"]) == "ABok"
+
+    def test_drop_removes_rows_that_do_not_fit_and_reports_them(self, caplog):
+        ds = Dataset.from_list([
+            {"prompt": "x" * 900, "chosen": "a"},
+            {"prompt": "short", "chosen": "b"},
+            {"prompt": "y" * 900, "chosen": "c"},
+        ])
+        with caplog.at_level("WARNING", logger="src.prompt_budget"):
+            out, report = apply_prompt_budgets(ds, CharTokenizer(), training_mode="sft",
+                                               max_length=512, max_prompt_length=256,
+                                               prompt_truncation="drop")
+        assert out["chosen"] == ["b"]
+        assert report["rows"] == 3
+        assert report["rows_dropped"] == report["prompts_truncated"] == 2
+        assert report["prompt_tokens_dropped"] == 0
+        assert report["truncation_side"] == "drop"
+        assert "dropped" not in report
+        assert "Prompts too long (rows dropped): 2/3" in caplog.text
+
+    def test_drop_still_obeys_the_tolerance(self):
+        ds = Dataset.from_list([{"prompt": "x" * 900, "chosen": "y"}] * 3 + [{"prompt": "p", "chosen": "y"}])
+        with pytest.raises(PromptTruncationError, match="would be dropped"):
+            apply_prompt_budgets(ds, CharTokenizer(), training_mode="sft", max_length=512,
+                                 max_prompt_length=256, tolerance=0.1, enforce=True,
+                                 prompt_truncation="drop")
+
+    def test_drop_refuses_to_leave_nothing(self):
+        ds = Dataset.from_list([{"prompt": "x" * 900, "chosen": "y"}] * 2)
+        with pytest.raises(PromptTruncationError, match="drop all 2"):
+            apply_prompt_budgets(ds, CharTokenizer(), training_mode="sft", max_length=512,
+                                 max_prompt_length=256, label="eval", prompt_truncation="drop")
+
+    def test_drop_tokenizes_survivors_like_keep_end(self):
+        row = {"prompt": "ABCDEF", "chosen": "X", BUDGET_COLUMN: 2}
+        out = tokenize_sft_row(row, CharTokenizer(), max_length=64, prompt_truncation="drop")
+        assert _decode(out["input_ids"]) == "EFX"
+
+    def test_budget_splits_reads_the_mode_from_config(self):
+        config = SimpleNamespace(max_length=512, max_prompt_length=256,
+                                 prompt_truncation_tolerance=1.0, prompt_truncation="drop")
+        train = Dataset.from_list([{"prompt": "p" * 900, "chosen": "c", "rejected": "r"},
+                                   {"prompt": "p", "chosen": "c", "rejected": "r"}])
+        evals = Dataset.from_list([{"prompt": "p" * 900, "chosen": "c", "rejected": "r"},
+                                   {"prompt": "q", "chosen": "c", "rejected": "r"}])
+        train, evals, reports = budget_splits(train, evals, CharTokenizer(), config, "dpo")
+        assert len(train) == len(evals) == 1
+        assert reports["train"]["rows_dropped"] == reports["eval"]["rows_dropped"] == 1
+
+    def test_error_message_offers_drop_when_truncating(self):
+        report = build_report([900] * 4, [1] * 4, 512, 256)
+        message = pb.truncation_error_message(report, 0.1)
+        assert "prompt_truncation=drop" in message
+        assert "keeps the end" in message
+
+    def test_unknown_truncation_mode_rejected(self):
+        with pytest.raises(ValueError, match="prompt_truncation"):
+            build_report([1], [1], 512, None, prompt_truncation="middle")
+
+
 class TestNativeGrimoirePath:
     """With a grimoire that supports prompt_truncation, Merlina delegates to it."""
 
@@ -298,6 +379,13 @@ class TestNativeGrimoirePath:
         tokenize_kto_row({"prompt": "p", "response": "c", "label": True, BUDGET_COLUMN: 5},
                          tok, max_length=128)
         assert fake.tokenize_kto.call_args.kwargs["prompt_truncation"] == "keep_end"
+
+        tokenize_sft_row({"prompt": "p", "chosen": "c"}, tok, max_length=128,
+                         prompt_truncation="keep_start")
+        assert fake.tokenize_sft.call_args.kwargs["prompt_truncation"] == "keep_start"
+        tokenize_sft_row({"prompt": "p", "chosen": "c"}, tok, max_length=128,
+                         prompt_truncation="drop")
+        assert fake.tokenize_sft.call_args.kwargs["prompt_truncation"] == "keep_end"
 
     def test_feature_detection_false_when_grimoire_unavailable(self):
         # grimoire is a MagicMock in the test session: no real signature to inspect

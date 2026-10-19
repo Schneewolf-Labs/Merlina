@@ -627,6 +627,7 @@ def run_worker(args):
                 lambda x: tokenize_sft_row(
                     x, tokenizer, max_length=config.max_length,
                     max_prompt_length=config.max_prompt_length,
+                    prompt_truncation=config.prompt_truncation,
                 ),
                 remove_columns=train_dataset.column_names,
             )
@@ -635,6 +636,7 @@ def run_worker(args):
                     lambda x: tokenize_sft_row(
                         x, tokenizer, max_length=config.max_length,
                         max_prompt_length=config.max_prompt_length,
+                        prompt_truncation=config.prompt_truncation,
                     ),
                     remove_columns=eval_dataset.column_names,
                 )
@@ -664,6 +666,7 @@ def run_worker(args):
                 lambda x: tokenize_kto_row(
                     x, tokenizer, max_length=config.max_length,
                     max_prompt_length=config.max_prompt_length,
+                    prompt_truncation=config.prompt_truncation,
                 ),
                 remove_columns=train_dataset.column_names,
             )
@@ -672,6 +675,7 @@ def run_worker(args):
                     lambda x: tokenize_kto_row(
                         x, tokenizer, max_length=config.max_length,
                         max_prompt_length=config.max_prompt_length,
+                        prompt_truncation=config.prompt_truncation,
                     ),
                     remove_columns=eval_dataset.column_names,
                 )
@@ -693,6 +697,7 @@ def run_worker(args):
                 lambda x: tokenize_preference_row(
                     x, tokenizer, max_length=config.max_length,
                     max_prompt_length=config.max_prompt_length,
+                    prompt_truncation=config.prompt_truncation,
                 ),
                 remove_columns=train_dataset.column_names,
             )
@@ -701,6 +706,7 @@ def run_worker(args):
                     lambda x: tokenize_preference_row(
                         x, tokenizer, max_length=config.max_length,
                         max_prompt_length=config.max_prompt_length,
+                        prompt_truncation=config.prompt_truncation,
                     ),
                     remove_columns=eval_dataset.column_names,
                 )
