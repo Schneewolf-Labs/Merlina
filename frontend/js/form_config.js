@@ -229,6 +229,7 @@ export function buildTrainingConfig({ gpuManager = null, includeSecrets = true }
         max_length: num('max-length', 2048, parseInt),
         // Blank = auto budget (server derives it from max_length per row)
         max_prompt_length: numOrNull('max-prompt-length', parseInt),
+        prompt_truncation: str('prompt-truncation', 'keep_end'),
         prompt_truncation_tolerance: num('prompt-truncation-tolerance', 0.1),
         beta: num('beta', 0.1),
         gamma: num('gamma', 0.5),

@@ -849,7 +849,16 @@
                                 <div class="form-group">
                                     <label for="max-prompt-length">Max Prompt Length</label>
                                     <input type="number" id="max-prompt-length" value="" placeholder="auto" min="256" max="131072" step="128" class="magic-input">
-                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Blank = auto (max length minus the response). Long prompts keep their end.</small>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Blank = auto (max length minus the response)</small>
+                                </div>
+                                <div class="form-group">
+                                    <label for="prompt-truncation">Over-long Prompts</label>
+                                    <select id="prompt-truncation" class="magic-select">
+                                        <option value="keep_end" selected>Keep the end (chat / agent data)</option>
+                                        <option value="keep_start">Keep the start (completion-style data)</option>
+                                        <option value="drop">Drop the row</option>
+                                    </select>
+                                    <small style="color: var(--text-muted); font-size: var(--font-size-sm);">Keeping the end keeps the latest turns and the reply header the response follows</small>
                                 </div>
                                 <div class="form-group">
                                     <label for="prompt-truncation-tolerance">Prompt Truncation Tolerance</label>

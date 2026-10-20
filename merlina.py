@@ -602,14 +602,22 @@ class TrainingConfig(BaseModel):
     max_length: int = Field(2048, ge=512, le=131072)
     # Unset (the default) means "auto": each row's prompt gets max_length minus that row's
     # response, with the response capped at half the window. A fixed 1024 default used to
-    # cut 6k-token agent transcripts down to their system prompt on every row. Whatever the
-    # budget, over-long prompts keep their END (latest turns + generation header).
+    # cut 6k-token agent transcripts down to their system prompt on every row. By default
+    # (prompt_truncation=keep_end) over-long prompts keep their END (latest turns + header).
     max_prompt_length: Optional[int] = Field(
         None, ge=256, le=131072,
         description=(
             "Prompt token budget. Leave unset for auto (max_length minus each row's response, "
-            "response capped at half). Over-long prompts are truncated from the start, keeping "
-            "the end of the conversation."
+            "response capped at half). What happens to over-long prompts is set by "
+            "prompt_truncation."
+        ),
+    )
+    prompt_truncation: Literal["keep_end", "keep_start", "drop"] = Field(
+        "keep_end",
+        description=(
+            "What happens to a prompt longer than its budget. keep_end (default) cuts from the "
+            "start and keeps the latest turns and the generation header the response follows; "
+            "keep_start keeps the beginning (completion-style data); drop removes the row."
         ),
     )
     prompt_truncation_tolerance: float = Field(

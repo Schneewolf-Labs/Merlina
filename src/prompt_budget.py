@@ -6,13 +6,17 @@ A 6k-token transcript cut to a fixed 1024-token cap keeping its *start* trains
 the model on a system prompt plus tool schemas, followed by a reply to a
 conversation it never saw. This module owns three things:
 
-1. **Direction.** Over-long prompts keep their END (the latest turns, tool
-   results and the assistant generation header the response follows), plus a
-   leading BOS. Cutting into the system prompt loses some instructions, while
-   cutting the tail loses the evidence the response is about. Newer grimoire
-   does this natively (``prompt_truncation="keep_end"``). On an older grimoire
-   we fall back to a local encoder with identical semantics, so the result does
-   not depend on which grimoire version is installed.
+1. **Direction** (``prompt_truncation``). By default over-long prompts keep
+   their END (``keep_end``: the latest turns, tool results and the assistant
+   generation header the response follows), plus a leading BOS. Cutting into
+   the system prompt loses some instructions, while cutting the tail loses the
+   evidence the response is about. ``keep_start`` keeps the beginning instead
+   (for completion-style data where the instruction comes first; on chat data
+   it cuts off the generation header). ``drop`` doesn't cut anything: rows whose
+   prompt doesn't fit are removed before training. Newer grimoire truncates
+   natively (``prompt_truncation=...``). On an older grimoire we fall back to a
+   local encoder with identical semantics, so the result does not depend on
+   which grimoire version is installed.
 
 2. **Budget.** ``max_prompt_length`` is optional. When it is unset ("auto"),
    each row's prompt gets ``max_length`` minus that row's response, but a
@@ -46,6 +50,24 @@ AUTO_MAX_RESPONSE_SHARE = 0.5
 
 #: Default fraction of training rows allowed to have their prompt cut.
 DEFAULT_TRUNCATION_TOLERANCE = 0.10
+
+#: What happens to a prompt longer than its budget: keep its end, keep its start,
+#: or drop the row.
+PROMPT_TRUNCATION_MODES = ("keep_end", "keep_start", "drop")
+DEFAULT_PROMPT_TRUNCATION = "keep_end"
+
+_MODE_PHRASE = {
+    "keep_end": "truncated (keeping the end)",
+    "keep_start": "truncated (keeping the start)",
+    "drop": "too long (rows dropped)",
+}
+
+
+def _check_mode(mode: Optional[str]) -> str:
+    mode = mode or DEFAULT_PROMPT_TRUNCATION
+    if mode not in PROMPT_TRUNCATION_MODES:
+        raise ValueError(f"prompt_truncation must be one of {PROMPT_TRUNCATION_MODES}, got {mode!r}")
+    return mode
 
 PREFERENCE_MODES = {"orpo", "dpo", "simpo", "cpo", "ipo"}
 
@@ -162,12 +184,16 @@ def _percentiles(values: Sequence[int]) -> Dict[str, int]:
 
 
 def build_report(prompt_tokens: Sequence[int], response_tokens: Sequence[int],
-                 max_length: int, max_prompt_length: Optional[int]) -> Dict[str, Any]:
+                 max_length: int, max_prompt_length: Optional[int],
+                 prompt_truncation: str = DEFAULT_PROMPT_TRUNCATION) -> Dict[str, Any]:
     """Summarize what fitting these rows into ``max_length`` will cut.
 
-    Returns a JSON-serializable dict that includes the per-row ``budgets``
-    (strip that key before persisting).
+    Returns a JSON-serializable dict that includes the per-row ``budgets`` and,
+    in ``drop`` mode, the ``dropped`` row indices (strip both before persisting).
+    In ``drop`` mode ``prompts_truncated`` counts the rows that will be dropped.
     """
+    mode = _check_mode(prompt_truncation)
+    dropped: List[int] = []
     budgets: List[int] = []
     prompt_cut = response_cut = response_lost = 0
     prompt_tokens_dropped = 0
@@ -177,6 +203,9 @@ def build_report(prompt_tokens: Sequence[int], response_tokens: Sequence[int],
         kept_prompt = min(p, budget)
         if p > budget:
             prompt_cut += 1
+            if mode == "drop":
+                dropped.append(len(budgets) - 1)
+                continue
             prompt_tokens_dropped += p - budget
         room = max_length - kept_prompt
         if r > room:
@@ -197,14 +226,16 @@ def build_report(prompt_tokens: Sequence[int], response_tokens: Sequence[int],
         "prompt_tokens_dropped": prompt_tokens_dropped,
         "responses_truncated": response_cut,
         "responses_with_no_tokens_left": response_lost,
-        "truncation_side": "keep_end",
+        "truncation_side": mode,
+        "rows_dropped": len(dropped),
         "budgets": budgets,
+        "dropped": dropped,
     }
 
 
 def public_report(report: Dict[str, Any]) -> Dict[str, Any]:
-    """The report without the per-row budgets (for logs and job storage)."""
-    return {k: v for k, v in report.items() if k != "budgets"}
+    """The report without the per-row lists (for logs and job storage)."""
+    return {k: v for k, v in report.items() if k not in ("budgets", "dropped")}
 
 
 def format_report(report: Dict[str, Any], label: str = "train") -> str:
@@ -216,7 +247,8 @@ def format_report(report: Dict[str, Any], label: str = "train") -> str:
         f"Prompt budget [{label}]: {report['rows']} rows, max_length={report['max_length']}, {budget}. "
         f"Prompt tokens p50/p90/p95/p99/max = {pt['p50']}/{pt['p90']}/{pt['p95']}/{pt['p99']}/{pt['max']}; "
         f"response tokens p50/p95/max = {rt['p50']}/{rt['p95']}/{rt['max']}. "
-        f"Prompts truncated (keeping the end): {report['prompts_truncated']}/{report['rows']} "
+        f"Prompts {_MODE_PHRASE[report.get('truncation_side', DEFAULT_PROMPT_TRUNCATION)]}: "
+        f"{report['prompts_truncated']}/{report['rows']} "
         f"({report['prompts_truncated_fraction']:.1%}), {report['prompt_tokens_dropped']} tokens dropped; "
         f"responses truncated: {report['responses_truncated']}"
         + (f", {report['responses_with_no_tokens_left']} with no response tokens left"
@@ -238,17 +270,23 @@ def truncation_error_message(report: Dict[str, Any], tolerance: float) -> str:
             f"raise max_length (prompt p99 is {pt['p99']}, max {pt['max']} tokens; "
             f"about {suggestion} fits nearly every row)",
         ]
-    fixes += [
-        "shorten the prompts",
-        "set prompt_truncation_tolerance=1.0 to train on the truncated rows anyway "
-        "(truncation keeps the end of each prompt)",
-    ]
+    mode = report.get("truncation_side", DEFAULT_PROMPT_TRUNCATION)
+    fixes += ["shorten the prompts"]
+    if mode == "drop":
+        fixes.append("set prompt_truncation_tolerance=1.0 to train without those rows anyway")
+    else:
+        fixes += [
+            f"set prompt_truncation_tolerance=1.0 to train on the truncated rows anyway "
+            f"(truncation keeps the {'end' if mode == 'keep_end' else 'start'} of each prompt)",
+            "set prompt_truncation=drop to skip the rows that don't fit",
+        ]
     limits = f"max_length={report['max_length']}"
     if report["max_prompt_length"]:
         limits += f" / max_prompt_length={report['max_prompt_length']}"
     return (
         f"{report['prompts_truncated']} of {report['rows']} training rows "
-        f"({report['prompts_truncated_fraction']:.0%}) would have their prompt truncated to fit "
+        f"({report['prompts_truncated_fraction']:.0%}) would "
+        f"{'be dropped because their prompt does not' if mode == 'drop' else 'have their prompt truncated to'} fit "
         f"{limits}, above the allowed {tolerance:.0%}. To fix: " + "; or ".join(fixes) + "."
     )
 
@@ -267,17 +305,20 @@ def check_truncation(report: Dict[str, Any], tolerance: Optional[float]) -> None
 
 def apply_prompt_budgets(dataset, tokenizer, *, training_mode: str, max_length: int,
                          max_prompt_length: Optional[int], label: str = "train",
-                         tolerance: Optional[float] = None, enforce: bool = False):
+                         tolerance: Optional[float] = None, enforce: bool = False,
+                         prompt_truncation: str = DEFAULT_PROMPT_TRUNCATION):
     """Measure ``dataset``, log the truncation report, and attach per-row budgets.
 
     Returns ``(dataset_with_budget_column, public_report)``. With
     ``enforce=True`` this raises :class:`PromptTruncationError` when the share
     of truncated prompts exceeds ``tolerance``. Runners enforce on the training
-    split only.
+    split only. In ``drop`` mode the rows that don't fit are removed from the
+    returned dataset, and an error is raised if none would be left.
     """
     fields = response_fields_for_mode(training_mode)
     prompt_tokens, response_tokens = measure_dataset(dataset, tokenizer, fields)
-    report = build_report(prompt_tokens, response_tokens, max_length, max_prompt_length)
+    report = build_report(prompt_tokens, response_tokens, max_length, max_prompt_length,
+                          prompt_truncation)
 
     message = format_report(report, label)
     if report["prompts_truncated"] or report["responses_with_no_tokens_left"]:
@@ -291,6 +332,14 @@ def apply_prompt_budgets(dataset, tokenizer, *, training_mode: str, max_length: 
     if BUDGET_COLUMN in dataset.column_names:
         dataset = dataset.remove_columns(BUDGET_COLUMN)
     dataset = dataset.add_column(BUDGET_COLUMN, report["budgets"])
+    if report["dropped"]:
+        if len(report["dropped"]) == report["rows"]:
+            raise PromptTruncationError(
+                f"prompt_truncation=drop would drop all {report['rows']} {label} rows: "
+                f"no prompt fits max_length={report['max_length']}."
+            )
+        gone = set(report["dropped"])
+        dataset = dataset.select([i for i in range(report["rows"]) if i not in gone])
     return dataset, public_report(report)
 
 
@@ -302,15 +351,17 @@ def budget_splits(train_dataset, eval_dataset, tokenizer, config, training_mode:
     """
     max_prompt_length = getattr(config, "max_prompt_length", None)
     tolerance = getattr(config, "prompt_truncation_tolerance", None)
+    mode = getattr(config, "prompt_truncation", None) or DEFAULT_PROMPT_TRUNCATION
     reports: Dict[str, Any] = {}
     train_dataset, reports["train"] = apply_prompt_budgets(
         train_dataset, tokenizer, training_mode=training_mode, max_length=config.max_length,
         max_prompt_length=max_prompt_length, label="train", tolerance=tolerance, enforce=True,
+        prompt_truncation=mode,
     )
     if eval_dataset is not None and len(eval_dataset):
         eval_dataset, reports["eval"] = apply_prompt_budgets(
             eval_dataset, tokenizer, training_mode=training_mode, max_length=config.max_length,
-            max_prompt_length=max_prompt_length, label="eval",
+            max_prompt_length=max_prompt_length, label="eval", prompt_truncation=mode,
         )
     return train_dataset, eval_dataset, reports
 
@@ -333,7 +384,7 @@ def record_reports(job_manager, job_id: str, reports: Dict[str, Any]) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Tokenization (keep_end on any grimoire version)
+# Tokenization (same truncation on any grimoire version)
 # --------------------------------------------------------------------------- #
 
 def _grimoire_supports_keep_end() -> bool:
@@ -347,10 +398,12 @@ def _grimoire_supports_keep_end() -> bool:
 GRIMOIRE_KEEPS_PROMPT_END = _grimoire_supports_keep_end()
 
 
-def _keep_end(prompt_ids: List[int], max_prompt_length: Optional[int],
-              bos_token_id: Optional[int]) -> List[int]:
+def _truncate(prompt_ids: List[int], max_prompt_length: Optional[int],
+              bos_token_id: Optional[int], mode: str = DEFAULT_PROMPT_TRUNCATION) -> List[int]:
     if not max_prompt_length or len(prompt_ids) <= max_prompt_length:
         return prompt_ids
+    if mode == "keep_start":
+        return prompt_ids[:max_prompt_length]
     head: List[int] = []
     if bos_token_id is not None and max_prompt_length > 1 and prompt_ids[0] == bos_token_id:
         head = prompt_ids[:1]
@@ -359,18 +412,20 @@ def _keep_end(prompt_ids: List[int], max_prompt_length: Optional[int],
 
 
 def encode_prompt_response_keep_end(tokenizer, prompt, response, max_length=None,
-                                    max_prompt_length=None, label_pad_token_id=-100):
-    """Local twin of grimoire's ``encode_prompt_response(prompt_truncation="keep_end")``.
+                                    max_prompt_length=None, label_pad_token_id=-100,
+                                    prompt_truncation=DEFAULT_PROMPT_TRUNCATION):
+    """Local twin of grimoire's ``encode_prompt_response(prompt_truncation=...)``.
 
     Used only when the installed grimoire predates that option, so that prompt
-    truncation never falls back to keeping the start.
+    truncation never silently falls back to keeping the start.
     """
     prompt_ids = list(tokenizer(prompt)["input_ids"])
     eos_id = getattr(tokenizer, "eos_token_id", None)
     if eos_id is not None and prompt_ids and prompt_ids[-1] == eos_id:
         prompt_ids = prompt_ids[:-1]
     response_ids = list(tokenizer(response, add_special_tokens=False)["input_ids"])
-    prompt_ids = _keep_end(prompt_ids, max_prompt_length, getattr(tokenizer, "bos_token_id", None))
+    prompt_ids = _truncate(prompt_ids, max_prompt_length, getattr(tokenizer, "bos_token_id", None),
+                           _grimoire_mode(prompt_truncation))
 
     input_ids = prompt_ids + response_ids
     if max_length:
@@ -380,34 +435,49 @@ def encode_prompt_response_keep_end(tokenizer, prompt, response, max_length=None
     return {"input_ids": input_ids, "attention_mask": [1] * len(input_ids), "labels": labels}
 
 
+def _grimoire_mode(prompt_truncation: Optional[str]) -> str:
+    """The truncation to tokenize with. ``drop`` rows were already removed by
+    :func:`apply_prompt_budgets`; anything still over budget (a row measured
+    differently, or a caller that skipped budgeting) keeps its end."""
+    mode = _check_mode(prompt_truncation)
+    return "keep_end" if mode == "drop" else mode
+
+
 def _row_budget(example, max_prompt_length):
     budget = example.get(BUDGET_COLUMN) if hasattr(example, "get") else None
     return budget if budget else max_prompt_length
 
 
-def tokenize_sft_row(example, tokenizer, max_length, max_prompt_length=None):
-    """SFT tokenization of a prompt/chosen row, keeping the end of long prompts."""
+def tokenize_sft_row(example, tokenizer, max_length, max_prompt_length=None,
+                     prompt_truncation=DEFAULT_PROMPT_TRUNCATION):
+    """SFT tokenization of a prompt/chosen row."""
     budget = _row_budget(example, max_prompt_length)
+    mode = _grimoire_mode(prompt_truncation)
     if GRIMOIRE_KEEPS_PROMPT_END:
         from grimoire.data import tokenize_sft
         return tokenize_sft(example, tokenizer, max_length=max_length, max_prompt_length=budget,
                             prompt_field="prompt", response_field="chosen",
-                            prompt_truncation="keep_end")
+                            prompt_truncation=mode)
     return encode_prompt_response_keep_end(tokenizer, example["prompt"], example["chosen"],
-                                           max_length=max_length, max_prompt_length=budget)
+                                           max_length=max_length, max_prompt_length=budget,
+                                           prompt_truncation=mode)
 
 
-def tokenize_preference_row(example, tokenizer, max_length, max_prompt_length=None):
+def tokenize_preference_row(example, tokenizer, max_length, max_prompt_length=None,
+                            prompt_truncation=DEFAULT_PROMPT_TRUNCATION):
     """Preference tokenization. Chosen and rejected share one prompt budget."""
     budget = _row_budget(example, max_prompt_length)
+    mode = _grimoire_mode(prompt_truncation)
     if GRIMOIRE_KEEPS_PROMPT_END:
         from grimoire.data import tokenize_preference
         return tokenize_preference(example, tokenizer, max_length=max_length,
-                                   max_prompt_length=budget, prompt_truncation="keep_end")
+                                   max_prompt_length=budget, prompt_truncation=mode)
     chosen = encode_prompt_response_keep_end(tokenizer, example["prompt"], example["chosen"],
-                                             max_length=max_length, max_prompt_length=budget)
+                                             max_length=max_length, max_prompt_length=budget,
+                                             prompt_truncation=mode)
     rejected = encode_prompt_response_keep_end(tokenizer, example["prompt"], example["rejected"],
-                                               max_length=max_length, max_prompt_length=budget)
+                                               max_length=max_length, max_prompt_length=budget,
+                                               prompt_truncation=mode)
     return {
         "chosen_input_ids": chosen["input_ids"],
         "chosen_attention_mask": chosen["attention_mask"],
@@ -418,16 +488,19 @@ def tokenize_preference_row(example, tokenizer, max_length, max_prompt_length=No
     }
 
 
-def tokenize_kto_row(example, tokenizer, max_length, max_prompt_length=None):
+def tokenize_kto_row(example, tokenizer, max_length, max_prompt_length=None,
+                     prompt_truncation=DEFAULT_PROMPT_TRUNCATION):
     """KTO tokenization of a prompt/response/label row."""
     budget = _row_budget(example, max_prompt_length)
+    mode = _grimoire_mode(prompt_truncation)
     if GRIMOIRE_KEEPS_PROMPT_END:
         from grimoire.data import tokenize_kto
         return tokenize_kto(example, tokenizer, max_length=max_length, max_prompt_length=budget,
                             prompt_field="prompt", response_field="response", label_field="label",
-                            prompt_truncation="keep_end")
+                            prompt_truncation=mode)
     encoded = encode_prompt_response_keep_end(tokenizer, example["prompt"], example["response"],
-                                              max_length=max_length, max_prompt_length=budget)
+                                              max_length=max_length, max_prompt_length=budget,
+                                              prompt_truncation=mode)
     encoded["kto_label"] = bool(example["label"])
     return encoded
 
