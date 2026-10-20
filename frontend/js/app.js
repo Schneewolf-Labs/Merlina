@@ -10,6 +10,7 @@ import { Validator, ValidationRules, debounce } from './validation.js';
 import { ThemeManager } from './theme.js';
 import { InferenceManager } from './inference.js';
 import { ExportManager } from './export.js';
+import { MergeManager } from './merge.js';
 import { DiskManager } from './disk.js';
 import { StorageManager } from './storage.js';
 import { RemoteManager } from './remote.js';
@@ -49,6 +50,7 @@ class MerlinaApp {
         this.modelManager = new ModelManager();
         this.inferenceManager = new InferenceManager();
         this.exportManager = new ExportManager();
+        this.mergeManager = new MergeManager(this);
         this.diskManager = new DiskManager();
         this.storageManager = new StorageManager();
         this.remoteManager = new RemoteManager();
@@ -64,6 +66,7 @@ class MerlinaApp {
         window.themeManager = this.themeManager;
         window.inferenceManager = this.inferenceManager;
         window.exportManager = this.exportManager;
+        window.mergeManager = this.mergeManager;
         window.diskManager = this.diskManager;
         window.storageManager = this.storageManager;
         window.remoteManager = this.remoteManager;
@@ -131,6 +134,7 @@ class MerlinaApp {
 
         // Initialize the Export section (GGUF / HF / Artifacts tabs)
         this.exportManager.init();
+        this.mergeManager.init();
 
         // Initialize the Cleanup section (disk analysis + checkpoint pruning)
         this.diskManager.init();
@@ -776,6 +780,9 @@ class MerlinaApp {
         if (updateHistory && window.location.hash !== `#${sectionId}`) {
             history.pushState(null, '', `#${sectionId}`);
         }
+
+        // Merge methods load once; the local-model suggestions refresh on every visit.
+        if (sectionId === 'merge-section') this.mergeManager?.refresh();
 
         // Lazy-load disk analysis the first time the Cleanup section opens.
         if (sectionId === 'cleanup-section' && this.diskManager && !this._cleanupLoaded) {

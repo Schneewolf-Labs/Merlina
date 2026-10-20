@@ -45,6 +45,11 @@
         <span class="nav-copy"><span class="nav-label">Training</span><span class="nav-description">Make it your own</span></span>
         <span class="nav-step">03</span>
     </button>
+<button type="button" class="section-nav-btn" data-section="merge-section" aria-controls="merge-section">
+        <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v6a6 6 0 0 0 6 6 6 6 0 0 0 6-6V3M12 15v6"/></svg>
+        <span class="nav-copy"><span class="nav-label">Merge</span><span class="nav-description">Blend models together</span></span>
+
+    </button>
 <p class="nav-group-label">EXPLORE</p>
 <button type="button" class="section-nav-btn" data-section="jobs-section" aria-controls="jobs-section">
         <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4v16h16M8 14l4-5 4 3 4-6"/></svg>
@@ -1234,6 +1239,83 @@
             </section>
 
             <!-- Active Jobs -->
+            <!-- Merge (Kessel) -->
+            <section id="merge-section" class="card nav-section" style="display: none;">
+                <div class="page-heading"><p class="eyebrow">CREATE / MERGE</p><h2 tabindex="-1">Blend your models</h2><p class="page-description">Combine models into a new one with Kessel. Recipes use mergekit's format, so you can paste one you already have.</p></div>
+
+                <div class="merge-recipe">
+                    <div class="export-tabs merge-tabs" role="tablist" aria-label="Recipe editor">
+                        <button type="button" class="export-tab-btn merge-mode-btn active" data-mode="form" role="tab" aria-selected="true" aria-controls="merge-panel-form">Form</button>
+                        <button type="button" class="export-tab-btn merge-mode-btn" data-mode="yaml" role="tab" aria-selected="false" aria-controls="merge-panel-yaml">YAML</button>
+                    </div>
+
+                    <div id="merge-panel-form" role="tabpanel">
+                        <div class="form-group">
+                            <label for="merge-method">Merge method</label>
+                            <select id="merge-method" class="magic-input"><option value="">Loading methods…</option></select>
+                            <small id="merge-method-hint" class="merge-hint"></small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="merge-base-model">Base model <span id="merge-base-required" class="merge-required" hidden>(required)</span></label>
+                            <input type="text" id="merge-base-model" class="magic-input" list="merge-local-models" placeholder="Qwen/Qwen3.5-9B, a local path, or model+lora" autocomplete="off">
+                        </div>
+
+                        <div class="form-group">
+                            <span class="merge-group-label">Models</span>
+                            <div id="merge-models" class="merge-models"></div>
+                            <button type="button" id="merge-add-model" class="action-button merge-add">+ Add model</button>
+                            <small class="merge-hint">Hub ids, local paths or your trained models. Append <code>+adapter</code> to merge a LoRA in first. Parameters accept a number or a gradient list like <code>[0, 0.5, 1]</code>.</small>
+                        </div>
+
+                        <div class="form-group">
+                            <span class="merge-group-label">Method parameters</span>
+                            <div id="merge-global-params" class="merge-params"></div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="merge-dtype">Compute dtype</label>
+                            <select id="merge-dtype" class="magic-input">
+                                <option value="bfloat16" selected>bfloat16</option>
+                                <option value="float16">float16</option>
+                                <option value="float32">float32</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div id="merge-panel-yaml" role="tabpanel" hidden>
+                        <div class="form-group">
+                            <label for="merge-yaml">Recipe (mergekit YAML)</label>
+                            <textarea id="merge-yaml" class="magic-input merge-yaml" rows="16" spellcheck="false"></textarea>
+                            <small class="merge-hint">Everything Kessel supports, including <code>slices</code> and per-layer parameter filters.</small>
+                        </div>
+                    </div>
+                </div>
+
+                <p id="merge-check" class="merge-check" role="status" aria-live="polite"></p>
+                <details class="merge-preview">
+                    <summary>Recipe as Kessel will run it</summary>
+                    <pre id="merge-yaml-preview"></pre>
+                </details>
+
+                <div class="merge-submit-row">
+                    <div class="form-group">
+                        <label for="merge-output-name">Output name</label>
+                        <input type="text" id="merge-output-name" class="magic-input" placeholder="my-merged-model" autocomplete="off" pattern="[A-Za-z0-9][A-Za-z0-9._\-]*" maxlength="128">
+                    </div>
+                    <div class="form-group">
+                        <label for="merge-device">Compute on</label>
+                        <select id="merge-device" class="magic-input">
+                            <option value="cpu" selected>CPU</option>
+                            <option value="cuda">GPU</option>
+                        </select>
+                    </div>
+                    <button type="button" id="merge-submit" class="action-button primary-button">Start merge <span aria-hidden="true">→</span></button>
+                </div>
+                <small class="merge-hint">The merge runs as a job and lands in your models, ready for the playground, GGUF export and upload.</small>
+                <datalist id="merge-local-models"></datalist>
+            </section>
+
             <section id="jobs-section" class="card nav-section" style="display: none;">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                     <div class="page-heading"><p class="eyebrow">EXPLORE / JOBS</p><h2 tabindex="-1">Magic in the making</h2><p class="page-description">Your training runs, from first step to finished model.</p></div>
