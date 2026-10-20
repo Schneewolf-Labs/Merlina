@@ -577,6 +577,18 @@ class MerlinaAPI {
         return this.fetch('/inference/models');
     }
 
+    static async getMergeMethods() {
+        return this.fetch('/merge/methods');
+    }
+
+    static async previewMerge(body) {
+        return this.fetch('/merge/preview', { method: 'POST', body: JSON.stringify(body) });
+    }
+
+    static async submitMerge(body) {
+        return this.fetch('/merge', { method: 'POST', body: JSON.stringify(body) });
+    }
+
     static async loadInferenceModel(config) {
         return this.fetch('/inference/load', {
             method: 'POST',

@@ -358,11 +358,13 @@ textarea.magic-input {
     font-size: 0.9em;
 }
 
-.status-training {
+.status-training,
+.status-merging {
     background: var(--warning);
     color: white;
 }
-.status-training::before { content: ""; }
+.status-training::before,
+.status-merging::before { content: ""; }
 
 .status-completed {
     background: var(--success);
@@ -1678,3 +1680,55 @@ textarea.magic-input {
 .remote-chat-user {
     border-left: 3px solid var(--primary-purple);
 }
+
+/* ===== Merge page ===== */
+.merge-tabs { margin: 0 0 15px 0; overflow-y: hidden; }
+.merge-hint {
+    display: block;
+    margin-top: 6px;
+    color: var(--text-muted);
+    font-size: var(--font-size-sm);
+}
+.merge-required { color: var(--text-muted); font-weight: normal; }
+.merge-group-label { display: block; font-weight: 600; margin-bottom: 8px; }
+.merge-models { display: flex; flex-direction: column; gap: 10px; }
+.merge-model-row {
+    padding: 10px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    background: var(--bg-secondary);
+}
+.merge-model-main { display: flex; gap: 8px; align-items: center; }
+.merge-model-main .magic-input { flex: 1; min-width: 0; }
+.merge-remove { flex: 0 0 auto; width: auto; padding: 6px 12px; }
+.merge-add { margin-top: 10px; width: auto; }
+.merge-params,
+.merge-model-params {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 8px 14px;
+    align-items: end;
+}
+.merge-model-params { margin-top: 8px; }
+.merge-param label { display: block; font-size: var(--font-size-sm); margin-bottom: 4px; }
+.merge-yaml { font-family: var(--font-mono); font-size: 0.9em; width: 100%; }
+.merge-check { min-height: 1.4em; margin: 12px 0 6px; font-size: var(--font-size-sm); }
+.merge-check-ok { color: var(--success); }
+.merge-check-error { color: var(--danger); }
+.merge-preview pre {
+    max-height: 320px;
+    overflow: auto;
+    padding: 10px;
+    border-radius: 8px;
+    background: var(--bg-secondary);
+    font-size: 0.85em;
+}
+.merge-submit-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: end;
+    margin-top: 16px;
+}
+.merge-submit-row .form-group { margin-bottom: 0; flex: 1 1 200px; }
+.merge-submit-row .primary-button { flex: 0 0 auto; width: auto; }

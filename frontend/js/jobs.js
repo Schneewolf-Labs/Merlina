@@ -198,12 +198,32 @@ class JobManager {
         }
     }
 
+    _isMerge(jobId) {
+        return typeof jobId === 'string' && jobId.startsWith('merge-');
+    }
+
+    _kind(jobId) {
+        return this._isMerge(jobId) ? 'Merge' : 'Training';
+    }
+
+    _stopLabel(jobId) {
+        return this._isMerge(jobId) ? '🛑 Stop merge' : '🛑 Stop Training';
+    }
+
     /**
      * Show job details modal with real-time monitoring
      */
     showJobDetails(jobId) {
         this.currentJobId = jobId;
         this.modal.show();
+
+        // Merge jobs (Merge page) share this modal: no loss curve, and their stop/retry/upload differ
+        const isMerge = this._isMerge(jobId);
+        document.getElementById('job-modal-title').textContent = isMerge ? 'Merge progress' : 'Training progress';
+        document.getElementById('loss-chart-section').hidden = isMerge;
+        document.getElementById('loss-value')?.closest('.metric-card')?.toggleAttribute('hidden', isMerge);
+        const stop = document.getElementById('stop-button');
+        if (stop && !stop.disabled) stop.textContent = this._stopLabel(jobId);
 
         // Reset chart for new job view
         this.lossChart.reset();
@@ -421,7 +441,7 @@ class JobManager {
         if (stopButton) {
             if (status.status === 'completed') {
                 stopButton.disabled = true;
-                this.toast.success('Training completed successfully!');
+                this.toast.success(`${this._kind(this.currentJobId)} completed successfully!`);
                 // Re-fetch the diffusion sample gallery — samples are
                 // emitted after training finishes, so the initial render
                 // on modal open may have missed them.
@@ -436,28 +456,30 @@ class JobManager {
                     .catch(() => {});
             } else if (status.status === 'failed') {
                 stopButton.disabled = true;
-                this.toast.error(`Training failed: ${status.error || 'Unknown error'}`);
+                this.toast.error(`${this._kind(this.currentJobId)} failed: ${status.error || 'Unknown error'}`);
             } else if (status.status === 'stopped') {
                 stopButton.disabled = true;
-                this.toast.warning(`Training stopped at step ${status.current_step || '?'}`);
+                this.toast.warning(`${this._kind(this.currentJobId)} stopped at step ${status.current_step || '?'}`);
             } else if (status.status === 'stopping') {
                 stopButton.disabled = true;
                 stopButton.textContent = '⏸️ Stopping...';
-            } else if (['training', 'initializing', 'loading_model', 'loading_dataset'].includes(status.status)) {
+            } else if (['training', 'merging', 'initializing', 'loading_model', 'loading_dataset'].includes(status.status)) {
                 stopButton.disabled = false;
-                stopButton.textContent = '🛑 Stop Training';
+                stopButton.textContent = this._stopLabel(this.currentJobId);
             }
         }
 
         // Show retry button for failed or stopped jobs
         if (retryButton) {
-            retryButton.style.display = ['failed', 'stopped'].includes(status.status) ? '' : 'none';
+            // A merge is resubmitted from the Merge page, not retried with a training config
+            retryButton.style.display = ['failed', 'stopped'].includes(status.status) && !this._isMerge(this.currentJobId) ? '' : 'none';
         }
 
         // Show upload button for completed or stopped jobs (not during active upload)
         const uploadHubButton = document.getElementById('upload-hub-button');
         if (uploadHubButton) {
-            uploadHubButton.style.display = ['completed', 'stopped'].includes(status.status) ? '' : 'none';
+            // Merged models upload from Export & publish, like any model in models/
+            uploadHubButton.style.display = ['completed', 'stopped'].includes(status.status) && !this._isMerge(this.currentJobId) ? '' : 'none';
         }
 
         // Show upload error warning if present
@@ -543,7 +565,7 @@ class JobManager {
         if (data.upload_error) {
             this.toast.warning(`Training completed, but upload failed: ${data.upload_error}`);
         } else {
-            this.toast.success('Training completed successfully!');
+            this.toast.success(`${this._kind(this.currentJobId)} completed successfully!`);
         }
         this.stopMonitoring();
         // Refresh job list once on completion to get final state

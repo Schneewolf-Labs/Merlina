@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Model merging.** A new Merge page (and `GET /merge/methods`, `POST /merge/preview`,
+  `POST /merge`) merges models with Kessel using mergekit-style recipes: pick a method, a base
+  model and models with their parameters in a form generated from Kessel's method list, or
+  paste mergekit YAML (slices and per-layer parameter filters included). Each recipe is
+  checked as you edit. The merge runs as a job with live progress and lands in `models/`,
+  ready for the playground, GGUF export and upload. Needs Kessel with progress callbacks
+  (Schneewolf-Labs/kessel#3).
+- `GET /jobs` includes each job's name, so job cards keep their names after a reload.
+
 - **DeepSeek-V4 training.** DeepSeek-V4 ships a Python reference encoder instead of a chat
   template; Merlina now renders with that encoder (format `tokenizer`), so training text
   matches vLLM's `deepseek_v4` tokenizer mode, tool calls included. Default LoRA targets

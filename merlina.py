@@ -11,6 +11,7 @@ import torch
 import wandb
 import logging
 import json
+import re
 import threading
 from datetime import datetime
 from typing import Literal, Optional, Dict, Any, List
@@ -114,6 +115,10 @@ openapi_tags = [
         "name": "Models",
         "description": "Local model discovery, tokenizer preloading, layer detection, "
                        "artifact management, HuggingFace Hub uploads, and GGUF exports.",
+    },
+    {
+        "name": "Merging",
+        "description": "Merge models with Kessel (mergekit-style recipes) into a new local model.",
     },
     {
         "name": "Inference",
@@ -2104,7 +2109,8 @@ async def list_jobs():
     return {
         job.job_id: {
             "status": job.status,
-            "progress": job.progress
+            "progress": job.progress,
+            "name": (job.config or {}).get("output_name") or None,
         }
         for job in jobs_list
     }
@@ -2190,6 +2196,9 @@ async def retry_job(job_id: str, priority: Optional[str] = "normal"):
             status_code=400,
             detail=f"Only failed or stopped jobs can be retried. Job is '{job.status}'."
         )
+
+    if (job.config or {}).get("type") == "merge":
+        raise HTTPException(status_code=400, detail="Merge jobs are resubmitted from the Merge page (POST /merge)")
 
     if not job.config:
         raise HTTPException(
@@ -5877,6 +5886,107 @@ async def export_gguf_for_existing_model(name: str, request: ModelGgufExportRequ
         "model_name": name,
         "started": True,
         "queue_position": position,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Model merging (Kessel)
+# ---------------------------------------------------------------------------
+
+_MERGE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+class MergeRecipeRequest(BaseModel):
+    recipe: Optional[Dict[str, Any]] = Field(
+        None, description="mergekit-style recipe as an object (models/slices, merge_method, base_model, parameters, dtype)"
+    )
+    yaml: Optional[str] = Field(None, description="The same recipe as mergekit YAML text (instead of `recipe`)")
+
+
+class MergeJobRequest(MergeRecipeRequest):
+    output_name: str = Field(..., description="Name of the merged model under models/")
+    device: Literal["cpu", "cuda"] = Field("cpu", description="Where Kessel computes each tensor")
+
+
+def _require_kessel():
+    from src.kessel_merge import kessel_available
+    if not kessel_available():
+        raise HTTPException(
+            status_code=501,
+            detail="Merging needs Kessel: pip install git+https://github.com/Schneewolf-Labs/kessel",
+        )
+
+
+def _normalize_recipe(request: MergeRecipeRequest):
+    from src.kessel_merge import MergeRecipeError, normalize
+    try:
+        return normalize(request.recipe, request.yaml)
+    except MergeRecipeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+
+@app.get("/merge/methods", tags=["Merging"], summary="List merge methods and their parameters")
+async def list_merge_methods():
+    """Kessel's merge methods: whether each needs a base model, and its global and per-model parameters."""
+    _require_kessel()
+    from src.kessel_merge import list_methods
+    return {"methods": list_methods()}
+
+
+@app.post("/merge/preview", tags=["Merging"], summary="Check a merge recipe and render it as YAML")
+async def preview_merge(request: MergeRecipeRequest):
+    """Parse a recipe (object or YAML) the way the merge will, and return it in both forms."""
+    _require_kessel()
+    recipe, text = _normalize_recipe(request)
+    return {"recipe": recipe, "yaml": text}
+
+
+@app.post("/merge", tags=["Merging"], summary="Submit a merge job")
+async def submit_merge(request: MergeJobRequest):
+    """Queue a Kessel merge. The result lands in models/<output_name> when it finishes."""
+    _require_kessel()
+    import uuid as _uuid
+
+    if not _MERGE_NAME_RE.match(request.output_name):
+        raise HTTPException(
+            status_code=400,
+            detail="output_name: letters, digits, '.', '_' and '-' only (max 128), starting with a letter or digit",
+        )
+    recipe, text = _normalize_recipe(request)
+    out_dir = _resolve_models_dir() / request.output_name
+    if out_dir.exists():
+        raise HTTPException(status_code=409, detail=f"A model named '{request.output_name}' already exists")
+    if request.device == "cuda" and not torch.cuda.is_available():
+        raise HTTPException(status_code=400, detail="device=cuda requested but CUDA is not available")
+
+    from src.kessel_merge import describe
+
+    job_id = f"merge-{_uuid.uuid4().hex[:8]}"
+    job_config = {
+        "type": "merge",
+        "training_mode": "merge",
+        "output_name": request.output_name,
+        "base_model": describe(recipe),
+        "merge_recipe": recipe,
+        "device": request.device,
+    }
+    await asyncio.to_thread(job_manager.create_job, job_id, job_config)
+
+    def _run(jid, _cfg):
+        from src.kessel_merge import run_merge
+        run_merge(jid, recipe, out_dir, job_manager, device=request.device, publish=websocket_manager.publish)
+
+    try:
+        position = job_queue.submit(job_id, job_config, _run)
+    except (ValueError, RuntimeError) as exc:
+        await asyncio.to_thread(job_manager.update_job, job_id, status="failed", error=str(exc))
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {
+        "job_id": job_id,
+        "status": "queued",
+        "output_name": request.output_name,
+        "queue_position": position,
+        "yaml": text,
     }
 
 
