@@ -66,6 +66,7 @@ from dataset_handlers import (
     create_loader_from_config
 )
 from src.job_manager import JobManager
+from src.config_manager import strip_secrets
 from src.trainer_metrics import extract_extra_metrics, finite_or_none
 from src.memory_guard import reclaim_cuda_cache
 from src.websocket_manager import websocket_manager
@@ -1051,9 +1052,11 @@ def run_training_distributed(
         # past NCCL timeouts.
         resolve_model_ref(config.base_model)   # no-op unless store: or MODEL_MIRROR
 
-        # Serialize config
+        # Serialize config without credentials: the file outlives the run.
+        # The worker gets them through its environment instead (see below),
+        # and its TrainingConfig validator reads them from there.
         with open(config_path, "w") as f:
-            json.dump(config.model_dump(), f)
+            json.dump(strip_secrets(config.model_dump()), f)
 
         # Serialize uploaded datasets to disk
         ds_dir = _serialize_uploaded_datasets(uploaded_datasets, tmp_dir)
@@ -1098,6 +1101,10 @@ def run_training_distributed(
         # stream to the captured pipe live, instead of arriving in one burst
         # when the block buffer flushes (the "1% ... then 100%" artifact).
         env["PYTHONUNBUFFERED"] = "1"
+        if config.hf_token:
+            env["HF_TOKEN"] = config.hf_token
+        if config.wandb_key:
+            env["WANDB_API_KEY"] = config.wandb_key
         if config.gpu_ids is not None:
             env["CUDA_VISIBLE_DEVICES"] = ",".join(str(g) for g in config.gpu_ids)
 
