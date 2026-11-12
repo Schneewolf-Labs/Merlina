@@ -29,7 +29,8 @@ jobs:
           tests/hosted/test_billing.py tests/test_worker_monitor.py
           tests/test_queue.py tests/test_api_comprehensive.py --timeout=30
   studio:
-    runs-on: ubuntu-latest
+    # Pinned: Playwright 1.56 cannot install Chromium on ubuntu-latest (26.04).
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
