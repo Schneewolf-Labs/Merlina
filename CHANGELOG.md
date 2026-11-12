@@ -28,6 +28,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Requires transformers 5.20.1 or later (the first release with DeepSeek-V4).
 
+### Security
+
+- Job configs no longer store `hf_token` or `wandb_key`. They were written in plain text to
+  `jobs.db` and `data/worker_runs/<job>/config.json`, filled in from `.env` even when the
+  request sent none. The server now strips them before storing, and removes any that older
+  versions stored the first time it opens the database. A token sent with a request reaches
+  the training worker through its environment. Retry fills credentials back in from `.env`;
+  a token sent only in the original request is not kept for retry. If your `jobs.db` was
+  shared or backed up, rotate the HF token and W&B key.
+
 ## [3.0.0] - 2026-10-17 "Wishcraft"
 
 ### Upgrading from 2.x

@@ -21,6 +21,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from src.config_manager import SECRET_FIELDS, strip_secrets
+
 logger = logging.getLogger(__name__)
 
 # Statuses that mean "this job should have a live worker or queue entry".
@@ -124,6 +126,23 @@ class JobManager:
         finally:
             conn.close()
 
+    @staticmethod
+    def _scrub_stored_secrets(conn) -> None:
+        """Remove credentials that older versions wrote into job configs."""
+        rows = conn.execute("SELECT job_id, config FROM jobs").fetchall()
+        scrubbed = 0
+        for job_id, raw in rows:
+            try:
+                cfg = json.loads(raw) if raw else None
+            except json.JSONDecodeError:
+                continue
+            if isinstance(cfg, dict) and any(k in cfg for k in SECRET_FIELDS):
+                conn.execute("UPDATE jobs SET config = ? WHERE job_id = ?",
+                             (json.dumps(strip_secrets(cfg)), job_id))
+                scrubbed += 1
+        if scrubbed:
+            logger.info(f"Removed stored credentials from {scrubbed} job config(s)")
+
     def _init_db(self) -> None:
         with self._connect() as conn:
             # WAL is persistent in the database file; setting it once here
@@ -165,6 +184,7 @@ class JobManager:
             if "extra" not in metric_columns:
                 conn.execute("ALTER TABLE training_metrics ADD COLUMN extra TEXT")
                 logger.info("Added extra column to training_metrics table")
+            self._scrub_stored_secrets(conn)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_job_status ON jobs(status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_job_created ON jobs(created_at DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_metrics_job ON training_metrics(job_id, step)")
@@ -176,6 +196,9 @@ class JobManager:
 
     def create_job(self, job_id: str, config: Dict[str, Any]) -> JobRecord:
         now = datetime.now().isoformat()
+        # Credentials are never stored: a job's config is re-validated before
+        # reuse (retry/resume), which fills them back in from the server .env.
+        config = strip_secrets(config) if isinstance(config, dict) else config
         job = JobRecord(
             job_id=job_id, status="started", progress=0.0,
             created_at=now, updated_at=now, config=config,

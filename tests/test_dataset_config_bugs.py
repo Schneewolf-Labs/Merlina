@@ -267,8 +267,16 @@ class TestJobConfigSecretRedaction:
         assert "hf_token" not in result["config"]
         assert "wandb_key" not in result["config"]
         assert result["config"]["output_name"] == "m"
-        # The stored config keeps the token so /jobs/{id}/retry still works.
-        assert jm.get_job("job_secret").config["hf_token"] == "hf_supersecret"
+        # Credentials are not stored at all; /jobs/{id}/retry re-validates the
+        # config, which fills them back in from the server .env.
+        stored = jm.get_job("job_secret").config
+        assert "hf_token" not in stored and "wandb_key" not in stored
+        with patch.dict("os.environ", {"HF_TOKEN": "hf_from_env"}), \
+                patch.object(merlina.settings, "hf_token", None):
+            from pydantic import TypeAdapter
+            cfg = TypeAdapter(merlina.TrainingConfig).validate_python(
+                {**stored, "base_model": "m", "dataset": {"source": {"source_type": "huggingface", "repo_id": "x/y"}}})
+        assert cfg.hf_token == "hf_from_env"
 
 
 # ============================================================================
