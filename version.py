@@ -7,7 +7,7 @@ MINOR version: Backwards-compatible functionality additions
 PATCH version: Backwards-compatible bug fixes
 """
 
-__version__ = "3.0.0"
+__version__ = "3.0.1"
 __version_info__ = tuple(int(i) for i in __version__.split("."))
 
 # Version metadata
@@ -17,7 +17,7 @@ VERSION_PATCH = __version_info__[2]
 
 # Release information
 RELEASE_NAME = "Wishcraft"  # Codename for this release
-RELEASE_DATE = "2026-10-17"
+RELEASE_DATE = "2026-11-12"
 
 def get_version() -> str:
     """Returns the current version string."""
