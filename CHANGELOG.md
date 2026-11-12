@@ -5,19 +5,9 @@ All notable changes to Merlina will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.0.1] - 2026-11-12
-
-### Security
-
-- Job configs no longer store `hf_token` or `wandb_key`. They were written in plain text to
-  `jobs.db` and `data/worker_runs/<job>/config.json`, filled in from `.env` even when the
-  request sent none. The server now strips them before storing, and removes any that older
-  versions stored the first time it opens the database. A token sent with a request reaches
-  the training worker through its environment. Retry fills credentials back in from `.env`;
-  a token sent only in the original request is not kept for retry. If your `jobs.db` was
-  shared or backed up, rotate the HF token and W&B key.
-
 ## [Unreleased]
+
+## [3.0.1] - 2026-11-12
 
 ### Added
 
@@ -39,6 +29,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Requires transformers 5.20.1 or later (the first release with DeepSeek-V4).
+
+### Security
+
+- Job configs no longer store `hf_token` or `wandb_key`. They were written in plain text to
+  `jobs.db` and `data/worker_runs/<job>/config.json`, filled in from `.env` even when the
+  request sent none. The server now strips them before storing, and removes any that older
+  versions stored the first time it opens the database. A token sent with a request reaches
+  the training worker through its environment. Retry fills credentials back in from `.env`;
+  a token sent only in the original request is not kept for retry. If your `jobs.db` was
+  shared or backed up, rotate the HF token and W&B key.
 
 ## [3.0.0] - 2026-10-17 "Wishcraft"
 
