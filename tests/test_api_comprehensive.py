@@ -104,11 +104,14 @@ from fastapi import UploadFile
 # ============================================================================
 
 @pytest.fixture(scope="function")
-def mock_job_manager():
+def mock_job_manager(tmp_path):
     """Mock JobManager for testing"""
     from src.job_manager import JobRecord
 
     mock = Mock()
+    # A real path: the app opens its remote-lifecycle database at job_manager.db_path, and with
+    # a bare Mock that became a file named "<Mock name='mock.db_path' ...>" in the working directory.
+    mock.db_path = str(tmp_path / "jobs.db")
 
     # Mock job record
     test_job = JobRecord(
