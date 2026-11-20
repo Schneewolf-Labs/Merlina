@@ -19,7 +19,9 @@ orchestrates.
 
 ## Setup
 
-1. Create a RunPod API key: https://www.runpod.io/console/user/settings
+1. Create a RunPod API key: https://www.runpod.io/console/user/settings.
+   Merlina uses RunPod's REST API v2, so a restricted key needs the
+   `pods:read`, `pods:write` and `catalog:read` scopes.
 2. Add it to your `.env`:
    ```bash
    RUNPOD_API_KEY=rpa_...

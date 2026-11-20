@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Remote mode moved to RunPod's REST API v2.** RunPod has retired REST v1 and is retiring
+  GraphQL, which together handled every pod call and the GPU catalog. Pods are now created,
+  polled, listed and terminated through `https://api.runpod.io/v2`, and GPU offers come from
+  `GET /v2/catalog/gpus`, with stock checked separately for secure and community clouds.
+  The inventory scan follows every page, so a pod left by an ambiguous failed create is still
+  found by name and torn down. A 5xx on create now always counts as ambiguous; only a 4xx
+  proves no pod was made. Restricted API keys need the `pods:read`, `pods:write` and
+  `catalog:read` scopes (#175).
+
 ## [3.0.1] - 2026-11-12
 
 ### Added
