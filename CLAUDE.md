@@ -603,8 +603,8 @@ no form UI yet — `form_config.js` emits `remote: null`).
   private repo per run; `LocalArtifactStore` for tests). Stages never copy
   files to each other directly, which is what lets them run on different
   machines/providers.
-- `providers/` — `ComputeProvider` ABC + `RunPodProvider` (REST v1,
-  defensive parsing). Termination is idempotent and always attempted in a
+- `providers/` — `ComputeProvider` ABC + `RunPodProvider` (REST API v2
+  for pods and the GPU catalog; v1 and GraphQL are retired; defensive parsing). Termination is idempotent and always attempted in a
   `finally` (opt-out: `remote.keep_instance_on_failure`).
 - `orchestrator.py` — `run_training_remote(...)`, the remote sibling of
   `run_training_sync` (dispatched in `_make_training_callback`). Polls the
